@@ -8,6 +8,8 @@ export interface SynthRequest {
   refAudio: string;
   refText: string;
   speed: number;
+  /** 辅助参考音频：与 `refAudio` 融合音色/语调(可选，api_v2 最多收 2 条)。 */
+  auxRefs?: string[];
 }
 
 export interface PcmChunk {
@@ -63,25 +65,33 @@ export async function* pcmChunks(body: AsyncIterable<Uint8Array>): AsyncGenerato
 /** api_v2 的流式档：3 首包最快。 */
 export const STREAMING_MODE = 3;
 
+/**
+ * `/tts` 的请求体。没有辅助参考时 `aux_ref_audio_paths` 传空数组，走服务端默认的单参考路径。
+ */
+export function ttsBody(req: SynthRequest): Record<string, unknown> {
+  return {
+    text: req.text,
+    text_lang: 'auto',
+    ref_audio_path: req.refAudio,
+    aux_ref_audio_paths: req.auxRefs ?? [],
+    prompt_text: req.refText,
+    prompt_lang: 'auto',
+    text_split_method: 'cut5',
+    batch_size: 1,
+    speed_factor: req.speed,
+    media_type: 'wav',
+    streaming_mode: STREAMING_MODE,
+    parallel_infer: false,
+  };
+}
+
 /** 发一句合成请求，按到达顺序吐出 PCM 块;HTTP 失败时抛出带服务端消息的错误。 */
 export async function* synthesize(baseUrl: string, req: SynthRequest, signal?: AbortSignal): AsyncGenerator<PcmChunk> {
   const res = await fetch(new URL('/tts', baseUrl), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     signal,
-    body: JSON.stringify({
-      text: req.text,
-      text_lang: 'auto',
-      ref_audio_path: req.refAudio,
-      prompt_text: req.refText,
-      prompt_lang: 'auto',
-      text_split_method: 'cut5',
-      batch_size: 1,
-      speed_factor: req.speed,
-      media_type: 'wav',
-      streaming_mode: STREAMING_MODE,
-      parallel_infer: false,
-    }),
+    body: JSON.stringify(ttsBody(req)),
   });
   if (!res.ok || !res.body) {
     let message = `HTTP ${res.status}`;

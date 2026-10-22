@@ -13,7 +13,7 @@
  */
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, extname, join } from 'node:path';
+import { basename, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Language } from 'cortico/core/language.ts';
 import type { Logger, ToolDef, ToolOutcome, World, WorldHost, WorldLamp, WorldWebUiDecl } from 'cortico/core/types.ts';
@@ -231,8 +231,14 @@ export class GptSovitsWorld implements World {
     }
   }
 
+  /** 主参考之外再挂一条辅助参考(音色融合);与主参考是同一个文件时不重复传。 */
   private request(text: string, voice: { audio: string; text: string }): SynthRequest {
-    return { text, refAudio: voice.audio, refText: voice.text, speed: this.cfg.speed };
+    const aux = this.cfg.voice.auxAudio.trim();
+    const useAux = aux && existsSync(aux) && resolve(aux) !== resolve(voice.audio);
+    return {
+      text, refAudio: voice.audio, refText: voice.text, speed: this.cfg.speed,
+      ...(useAux ? { auxRefs: [aux] } : {}),
+    };
   }
 
   async start(host: WorldHost): Promise<void> {

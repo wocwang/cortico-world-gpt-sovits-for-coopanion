@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { INLINE_TAG_MAX, speechText } from '../src/speech-text.ts';
-import { parseWavHeader, pcmChunks } from '../src/synth.ts';
+import { parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth.ts';
 import { applyGain, upmix } from '../src/player.ts';
 
 describe('speechText', () => {
@@ -28,6 +28,25 @@ async function* parts(buf: Buffer, sizes: number[]): AsyncGenerator<Uint8Array> 
   for (const n of sizes) { yield buf.subarray(at, at + n); at += n; }
   if (at < buf.length) yield buf.subarray(at);
 }
+
+describe('ttsBody', () => {
+  const base = { text: '你好。', refAudio: 'main.wav', refText: '你好', speed: 1 };
+
+  it('sends an empty aux list so api_v2 keeps the single-reference path', () => {
+    expect(ttsBody(base).aux_ref_audio_paths).toEqual([]);
+  });
+
+  it('passes the auxiliary reference through when one is set', () => {
+    expect(ttsBody({ ...base, auxRefs: ['aux.wav'] }).aux_ref_audio_paths).toEqual(['aux.wav']);
+  });
+
+  it('keeps the speed factor and the streaming tier', () => {
+    const body = ttsBody({ ...base, speed: 1.2 });
+    expect(body.speed_factor).toBe(1.2);
+    expect(body.streaming_mode).toBe(STREAMING_MODE);
+    expect(body.ref_audio_path).toBe('main.wav');
+  });
+});
 
 describe('pcmChunks', () => {
   it('keeps samples whole when the header and samples split at odd offsets', async () => {
