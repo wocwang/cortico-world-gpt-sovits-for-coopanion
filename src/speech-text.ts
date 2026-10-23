@@ -28,3 +28,20 @@ export function speechText(script: string): string {
   }
   return out.replace(/\*\*|__|`/g, '').replace(/\s+/g, ' ').trim();
 }
+
+/**
+ * 再去掉「符号」类字符(♡ ★ ♪、emoji、装饰符等)与不可见字符。
+ *
+ * GPT-SoVITS 的音素前端会把这些字符丢掉;当一句话里有一段只剩符号时，
+ * 服务端会拿空音素段去调 `torch.cat()` 并抛
+ * `torch.cat(): expected a non-empty list of Tensors`，整句合成直接失败。
+ * 在送进服务端之前先清掉，就不会踩到这个坑(保留字母、数字、标点与空格)。
+ */
+export function ttsSafe(text: string): string {
+  return text.replace(/[^\p{L}\p{N}\p{P}\p{Zs}]/gu, '').replace(/\s+/g, ' ').trim();
+}
+
+/** 兜底用：连标点一起去掉，只留字母、数字与空白。合成仍失败时拿它重试一次。 */
+export function ttsPlain(text: string): string {
+  return text.replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+}

@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-gpt-sovits-for-coopanion",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "description": "Cortico World for Coopanion: speaks the pet's lines aloud with GPT-SoVITS (V5 on NVIDIA GPUs, a CPU tier otherwise), installing a portable runtime and weights in one click",
   "author": "Phantivia",
@@ -55,7 +55,8 @@
   "scripts": {
     "build": "node scripts/build-webui.mjs",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test && npm run typecheck"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -24,6 +24,11 @@ export interface GptSovitsConfigSection {
   voice: { preset: string; audio: string; text: string; auxAudio: string };
   /** 语速倍率，对应 api_v2 的 `speed_factor`。 */
   speed: number;
+  /**
+   * 采样种子，对应 api_v2 的 `seed`。`-1` 每次重新采样（同一句每次都不一样），
+   * `0` 及以上固定种子（同一句、同一进程内逐字节可复现）。
+   */
+  seed: number;
   /** 输出音量，0–1。 */
   volume: number;
   /** 输出设备名;空为系统默认设备。 */
@@ -37,6 +42,9 @@ export const SPEED_MIN = .6, SPEED_MAX = 1.6;
 /** api_v2 只接受这个长度区间的参考音频,超出会直接回 400。 */
 export const REF_MIN_SECONDS = 3, REF_MAX_SECONDS = 10;
 
+/** `seed = -1` 表示每次重新采样(api_v2 的默认值);其余值固定种子。 */
+export const SEED_RANDOM = -1;
+
 export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   enabled: false,
   tier: 'auto',
@@ -45,6 +53,7 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   autoStart: true,
   voice: { preset: 'female', audio: '', text: '', auxAudio: '' },
   speed: 1,
+  seed: SEED_RANDOM,
   volume: 1,
   outputDevice: '',
   promptLanguage: 'zh',
@@ -67,6 +76,7 @@ const TEXT = {
     auxAudio: { title: '辅助参考音频', description: '可选。与上面的参考音频一起融合音色，语调起伏更丰富；仅 V1/V2 权重生效，V3/V4/V5（含默认底模）会被忽略。留空只用主参考。' },
     tier: { title: '推理档', auto: '自动', cuda: '显卡(NVIDIA)', cpu: 'CPU', description: '自动：检测到 NVIDIA 显卡用显卡档，否则用 CPU 档。修改后重启推理服务生效。' },
     speed: { title: '语速', description: '1 为原速。' },
+    seed: { title: '采样种子', description: '-1 每次重新采样（同一句每次听起来都不同）；填 0 或正整数可固定，同一句每次逐字节一致。' },
     volume: { title: '音量' },
     outputDevice: { title: '输出设备', description: '留空使用系统默认设备。', system: '系统默认' },
     autoStart: { title: '随 Cortico 启动推理服务' },
@@ -82,6 +92,7 @@ const TEXT = {
     auxAudio: { title: 'Auxiliary reference audio', description: 'Optional. Blended with the reference above for livelier intonation; only takes effect with V1/V2 weights and is ignored by V3/V4/V5 (including the default base model). Leave empty to use the main reference alone.' },
     tier: { title: 'Inference tier', auto: 'Auto', cuda: 'GPU (NVIDIA)', cpu: 'CPU', description: 'Auto uses the GPU tier when an NVIDIA GPU is found, the CPU tier otherwise. Takes effect when the inference server restarts.' },
     speed: { title: 'Speech rate', description: '1 is the original rate.' },
+    seed: { title: 'Sampling seed', description: '-1 resamples every time (the same line sounds different each run); 0 or a positive integer fixes it, making the same line byte-identical.' },
     volume: { title: 'Volume' },
     outputDevice: { title: 'Output device', description: 'Empty for the system default.', system: 'System default' },
     autoStart: { title: 'Start the inference server with Cortico' },
@@ -116,6 +127,7 @@ export function configGroups(language: Language): ConfigGroup[] {
         [`${K}.voice.auxAudio`]: { type: 'string', title: t.auxAudio.title, description: t.auxAudio.description, 'x-path': { kind: 'file', extensions: ['.wav'] }, 'x-hot': true },
         [`${K}.tier`]: { type: 'string', title: t.tier.title, description: t.tier.description, 'x-options': TIER_OPTIONS, 'x-hot': true },
         [`${K}.speed`]: { type: 'number', title: t.speed.title, description: t.speed.description, minimum: SPEED_MIN, maximum: SPEED_MAX, multipleOf: .05, 'x-hot': true },
+        [`${K}.seed`]: { type: 'number', title: t.seed.title, description: t.seed.description, minimum: SEED_RANDOM, multipleOf: 1, 'x-hot': true },
         [`${K}.volume`]: { type: 'number', title: t.volume.title, minimum: 0, maximum: 1, multipleOf: .05, 'x-hot': true },
         [`${K}.outputDevice`]: { type: 'string', title: t.outputDevice.title, description: t.outputDevice.description, 'x-options': DEVICE_OPTIONS, 'x-hot': true },
         [`${K}.autoStart`]: { type: 'boolean', title: t.autoStart.title, 'x-hot': true },

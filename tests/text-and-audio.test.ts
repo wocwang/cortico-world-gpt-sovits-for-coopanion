@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { INLINE_TAG_MAX, speechText } from '../src/speech-text.ts';
+import { INLINE_TAG_MAX, speechText, ttsPlain, ttsSafe } from '../src/speech-text.ts';
 import { parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth.ts';
 import { applyGain, upmix } from '../src/player.ts';
 
@@ -12,6 +12,32 @@ describe('speechText', () => {
     const long = `<${'字'.repeat(INLINE_TAG_MAX + 1)}>`;
     expect(speechText(`a ${long} b`)).toBe(`a ${long} b`);
     expect(speechText('1 < 2 and 3 > 2\n<x\ny>')).toContain('<x');
+  });
+});
+
+// 服务端音素前端会把符号类字符丢掉；某段只剩符号时会用空音素段调 torch.cat 而崩。
+describe('ttsSafe', () => {
+  it('drops decorative symbols and emoji that crash the phoneme frontend', () => {
+    expect(ttsSafe('主人晚安♡ 好梦哦★')).toBe('主人晚安 好梦哦');
+    expect(ttsSafe('咕噜咕噜🐟～')).toBe('咕噜咕噜');
+  });
+
+  it('keeps letters, numbers and normal punctuation', () => {
+    expect(ttsSafe('GPT-SoVITS 讲了 3 句话，对吧？')).toBe('GPT-SoVITS 讲了 3 句话，对吧？');
+    expect(ttsSafe('ティード パラパパパ、ニーノ！')).toBe('ティード パラパパパ、ニーノ！');
+  });
+
+  it('leaves nothing behind for a line that is only symbols', () => {
+    expect(ttsSafe('♡♡♡')).toBe('');
+    // 实际链路是先 speechText 去标记，再 ttsSafe 去符号
+    expect(ttsSafe(speechText('【挥手】♡'))).toBe('');
+  });
+});
+
+describe('ttsPlain', () => {
+  it('drops punctuation too, keeping words only', () => {
+    expect(ttsPlain('主人晚安♡ 好梦哦。')).toBe('主人晚安 好梦哦');
+    expect(ttsPlain('……——')).toBe('');
   });
 });
 
@@ -45,6 +71,13 @@ describe('ttsBody', () => {
     expect(body.speed_factor).toBe(1.2);
     expect(body.streaming_mode).toBe(STREAMING_MODE);
     expect(body.ref_audio_path).toBe('main.wav');
+  });
+
+  it('sends the seed only when it is fixed', () => {
+    expect(ttsBody(base)).not.toHaveProperty('seed');
+    expect(ttsBody({ ...base, seed: -1 })).not.toHaveProperty('seed');
+    expect(ttsBody({ ...base, seed: 42 }).seed).toBe(42);
+    expect(ttsBody({ ...base, seed: 0 }).seed).toBe(0);
   });
 });
 

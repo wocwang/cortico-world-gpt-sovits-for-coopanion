@@ -25,7 +25,7 @@ import { panelText, stateWords } from './i18n.ts';
 import { isRuntimeDir, RuntimeJob, WeightsJob, type JobState } from './install.ts';
 import { Player } from './player.ts';
 import { SovitsServer, type ServerState } from './server.ts';
-import { speechText } from './speech-text.ts';
+import { speechText, ttsPlain, ttsSafe } from './speech-text.ts';
 import { synthesize, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { DEFAULT_PRESET, isPreset, type VoicePreset } from './voices.ts';
@@ -96,6 +96,8 @@ export class GptSovitsWorld implements World {
   private announced: boolean | null = null;
   /** 自定义参考音频时长不合要求时的说明,由 `voice()` 写入。 */
   private voiceIssue: string | null = null;
+  /** 辅助参考在当前权重下无效的日志只报一次。 */
+  private auxWarned = false;
 
   constructor(private readonly opts: GptSovitsWorldOptions) {
     this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
@@ -172,7 +174,7 @@ export class GptSovitsWorld implements World {
 
   /** 排进队列，等这一句开始出声(或失败、被清空、超时)再返回。 */
   private async speak(script: string): Promise<ToolOutcome> {
-    const text = speechText(script);
+    const text = ttsSafe(speechText(script));
     if (!text) return { text: 'Nothing to say: the text has only markup.' };
     if (!this.voice()) return { text: `Voice unavailable: ${this.voiceIssue ?? 'no reference audio is set'}.`, failed: true };
     if (!this.url()) return { text: `Voice unavailable: ${this.stateFor(stateWords('en'))}.`, failed: true };
@@ -194,6 +196,24 @@ export class GptSovitsWorld implements World {
     this.player.cut();
   }
 
+  /**
+   * 合成一句话并写进播放器；返回首包时间。失败时抛出，由调用方决定要不要降级重试。
+   * `onFirst` 在第一次真正写进声卡时调用一次。
+   */
+  private async playLine(
+    url: string, voice: { audio: string; text: string }, text: string,
+    signal: AbortSignal, onFirst: () => void,
+  ): Promise<number> {
+    const gain = OUTPUT_GAIN[this.version()];
+    let first = 0;
+    for await (const c of synthesize(url, this.request(text, voice), signal)) {
+      await this.player.write(c.sampleRate, c.pcm, this.backend().kind === 'remote' ? 1 : gain);
+      if (!first) { first = Date.now(); onFirst(); }
+    }
+    this.player.flush();
+    return first;
+  }
+
   /** 逐句合成并写进播放器;一句合成完就开始下一句，播放器按顺序播。 */
   private async pump(): Promise<void> {
     if (this.pumping) return;
@@ -206,20 +226,35 @@ export class GptSovitsWorld implements World {
         if (!url || !voice) { started(); for (const item of this.queue.splice(0)) item.started(); break; }
         const abort = new AbortController();
         this.current = abort;
+        let heard = false;
+        const onFirst = (): void => { heard = true; started(); };
         try {
-          const gain = OUTPUT_GAIN[this.version()];
-          let first = 0;
-          for await (const c of synthesize(url, this.request(text, voice), abort.signal)) {
-            await this.player.write(c.sampleRate, c.pcm, this.backend().kind === 'remote' ? 1 : gain);
-            if (!first) { first = Date.now(); started(); }
-          }
-          this.player.flush();
+          const first = await this.playLine(url, voice, text, abort.signal, onFirst);
           this.log.info('GPT-SoVITS 一句合成完', { chars: [...text].length, waitMs: first - at, totalMs: Date.now() - at });
           this.lastError = null;
         } catch (err) {
-          if (!abort.signal.aborted) {
-            this.lastError = err instanceof Error ? err.message : String(err);
-            this.log.warn('GPT-SoVITS 合成失败', { err: this.lastError });
+          if (abort.signal.aborted) {
+            // 被 hush() 打断，不算失败。
+          } else {
+            // 服务端遇到「某一段只剩符号」的文本会在音素前端崩(空音素段 -> torch.cat 报错)。
+            // 已经出过声就不再重试(会把半句重复播一次)，没出声时去掉标点再试一次。
+            const plain = ttsPlain(text);
+            let ok = false;
+            if (!heard && plain && plain !== text) {
+              try {
+                await this.playLine(url, voice, plain, abort.signal, onFirst);
+                ok = true;
+              } catch {
+                ok = false;
+              }
+            }
+            if (ok) {
+              this.lastError = null;
+              this.log.info('GPT-SoVITS 去掉标点后合成成功', { chars: [...plain].length });
+            } else if (!abort.signal.aborted) {
+              this.lastError = err instanceof Error ? err.message : String(err);
+              this.log.warn('GPT-SoVITS 合成失败', { err: this.lastError });
+            }
           }
         } finally {
           started();
@@ -235,8 +270,14 @@ export class GptSovitsWorld implements World {
   private request(text: string, voice: { audio: string; text: string }): SynthRequest {
     const aux = this.cfg.voice.auxAudio.trim();
     const useAux = aux && existsSync(aux) && resolve(aux) !== resolve(voice.audio);
+    if (useAux && this.version() === 'v5turbo' && !this.auxWarned) {
+      // 多参考融合只在 V1/V2 的 decode() 里做；v5turbo 走 vocoder 路径，只取第一条参考。
+      // 填了不报错、也不生效，用户会以为坏了，这里至少留一条日志。
+      this.auxWarned = true;
+      this.log.warn('辅助参考音频在 v5turbo 权重下不生效，已按单参考合成', { aux });
+    }
     return {
-      text, refAudio: voice.audio, refText: voice.text, speed: this.cfg.speed,
+      text, refAudio: voice.audio, refText: voice.text, speed: this.cfg.speed, seed: this.cfg.seed,
       ...(useAux ? { auxRefs: [aux] } : {}),
     };
   }
