@@ -7,11 +7,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Phantivia/cortico-world-gpt-sovits-for-coopanion.git"
+    "url": "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion.git"
   },
-  "homepage": "https://github.com/Phantivia/cortico-world-gpt-sovits-for-coopanion#readme",
+  "homepage": "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion#readme",
   "bugs": {
-    "url": "https://github.com/Phantivia/cortico-world-gpt-sovits-for-coopanion/issues"
+    "url": "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion/issues"
   },
   "keywords": [
     "cortico-world",

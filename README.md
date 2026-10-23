@@ -2,6 +2,10 @@
 
 Owner: `src/world.ts`
 
+> 本仓库是 [Phantivia/cortico-world-gpt-sovits-for-coopanion](https://github.com/Phantivia/cortico-world-gpt-sovits-for-coopanion)
+> 的 fork（原作者同意后维护），在原版 0.1.2 之上补了参考音频时长校验、辅助参考音频、
+> 装饰符号导致合成崩溃的修复与采样种子选项，改动见 [CHANGELOG.md](CHANGELOG.md)。
+
 给 Coopanion 的桌宠配上声音：Coo 每次 `pet_say` 之前在同一次回复里先调用 `sovits_speak`,
 扩展用本机的 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 流式合成这句话，从声卡播出。
 `sovits_speak` 等第一块音频写进声卡才返回，主循环按顺序执行同一次回复里的工具调用，所以紧跟其后的
