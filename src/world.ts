@@ -13,7 +13,7 @@
  */
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, extname, join, resolve } from 'node:path';
+import { basename, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Language } from 'cortico/core/language.ts';
 import type { Logger, ToolDef, ToolOutcome, World, WorldHost, WorldLamp, WorldWebUiDecl } from 'cortico/core/types.ts';
@@ -96,8 +96,6 @@ export class GptSovitsWorld implements World {
   private announced: boolean | null = null;
   /** 自定义参考音频时长不合要求时的说明,由 `voice()` 写入。 */
   private voiceIssue: string | null = null;
-  /** 辅助参考在当前权重下无效的日志只报一次。 */
-  private auxWarned = false;
 
   constructor(private readonly opts: GptSovitsWorldOptions) {
     this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
@@ -266,20 +264,9 @@ export class GptSovitsWorld implements World {
     }
   }
 
-  /** 主参考之外再挂一条辅助参考(音色融合);与主参考是同一个文件时不重复传。 */
+  /** 合成一句要用的请求参数。 */
   private request(text: string, voice: { audio: string; text: string }): SynthRequest {
-    const aux = this.cfg.voice.auxAudio.trim();
-    const useAux = aux && existsSync(aux) && resolve(aux) !== resolve(voice.audio);
-    if (useAux && this.version() === 'v5turbo' && !this.auxWarned) {
-      // 多参考融合只在 V1/V2 的 decode() 里做；v5turbo 走 vocoder 路径，只取第一条参考。
-      // 填了不报错、也不生效，用户会以为坏了，这里至少留一条日志。
-      this.auxWarned = true;
-      this.log.warn('辅助参考音频在 v5turbo 权重下不生效，已按单参考合成', { aux });
-    }
-    return {
-      text, refAudio: voice.audio, refText: voice.text, speed: this.cfg.speed, seed: this.cfg.seed,
-      ...(useAux ? { auxRefs: [aux] } : {}),
-    };
+    return { text, refAudio: voice.audio, refText: voice.text, speed: this.cfg.speed, seed: this.cfg.seed };
   }
 
   async start(host: WorldHost): Promise<void> {

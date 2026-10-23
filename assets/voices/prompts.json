@@ -1,6 +1,11 @@
 {
   "model": "OpenMOSS-Team/MOSS-VoiceGenerator (Apache-2.0)",
   "voices": {
+    "dfy": {
+      "source": "随包自带（本仓默认音色），日语参考 5.16 秒，出自《人是猫》第 003 段",
+      "text": "ティード パラパパパ ニーノ ナラナナナ ピンドン",
+      "note": "不是 MOSS-VoiceGenerator 生成；音频与台本必须成对使用，差一个字音色就会漂"
+    },
     "female": {
       "instruction": "普通话，十六岁女高中生，录音棚音质。小迷糊，非常害羞。语速很快，没有停顿",
       "text": "啊，那个，我刚才是不是又说错了？没事没事，再来一遍！",

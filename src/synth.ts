@@ -10,8 +10,6 @@ export interface SynthRequest {
   speed: number;
   /** 采样种子；`-1`(或不填)每次重新采样，`>= 0` 固定。 */
   seed?: number;
-  /** 辅助参考音频：与 `refAudio` 融合音色/语调(可选，api_v2 最多收 2 条)。 */
-  auxRefs?: string[];
 }
 
 export interface PcmChunk {
@@ -68,15 +66,13 @@ export async function* pcmChunks(body: AsyncIterable<Uint8Array>): AsyncGenerato
 export const STREAMING_MODE = 3;
 
 /**
- * `/tts` 的请求体。没有辅助参考时 `aux_ref_audio_paths` 传空数组，走服务端默认的单参考路径。
- * `seed` 只在固定种子(>= 0)时才发，不填时由 api_v2 用它的默认值(-1，每次重新采样)。
+ * `/tts` 的请求体。`seed` 只在固定种子(>= 0)时才发，不填时由 api_v2 用它的默认值(-1，每次重新采样)。
  */
 export function ttsBody(req: SynthRequest): Record<string, unknown> {
   return {
     text: req.text,
     text_lang: 'auto',
     ref_audio_path: req.refAudio,
-    aux_ref_audio_paths: req.auxRefs ?? [],
     prompt_text: req.refText,
     prompt_lang: 'auto',
     text_split_method: 'cut5',

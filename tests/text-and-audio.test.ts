@@ -58,12 +58,9 @@ async function* parts(buf: Buffer, sizes: number[]): AsyncGenerator<Uint8Array> 
 describe('ttsBody', () => {
   const base = { text: '你好。', refAudio: 'main.wav', refText: '你好', speed: 1 };
 
-  it('sends an empty aux list so api_v2 keeps the single-reference path', () => {
-    expect(ttsBody(base).aux_ref_audio_paths).toEqual([]);
-  });
-
-  it('passes the auxiliary reference through when one is set', () => {
-    expect(ttsBody({ ...base, auxRefs: ['aux.wav'] }).aux_ref_audio_paths).toEqual(['aux.wav']);
+  it('keeps a single reference: no aux paths are sent', () => {
+    expect(ttsBody(base)).not.toHaveProperty('aux_ref_audio_paths');
+    expect(ttsBody(base).ref_audio_path).toBe('main.wav');
   });
 
   it('keeps the speed factor and the streaming tier', () => {
