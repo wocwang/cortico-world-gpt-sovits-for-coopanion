@@ -78,6 +78,88 @@ const voicePanel: WebUiPanel = {
       await call('setVoice', [f.name, btoa(bin), text.value]);
     }
 
+    // ---- 自定义音色
+    const custom = ui.section(t.customVoices, t.customVoicesHint);
+    const cvHint = ui.h('div', 'gsv-detail', t.requiredHint);
+    const cvList = ui.h('div');
+    const cvForm = ui.h('div');
+    cvForm.hidden = true;
+    const cvName = ui.input({ placeholder: t.voiceNamePh });
+    const cvAudio = ui.input({});
+    cvAudio.type = 'file';
+    cvAudio.accept = '.wav,audio/wav';
+    const cvText = ui.textarea({});
+    cvText.rows = 2;
+    const cvGpt = ui.input({ placeholder: t.gptWeightOpt });
+    const cvSovits = ui.input({ placeholder: t.sovitsWeightOpt });
+    const cvConfirm = ui.button(t.confirmAdd, { variant: 'primary', size: 'sm', onClick: () => void addCustomVoice() });
+    const cvCancel = ui.button(t.cancelAdd, { size: 'sm', onClick: () => showForm(false) });
+    const cvActs = ui.actions();
+    cvActs.append(cvConfirm, cvCancel);
+    const cvAddBtn = ui.button(t.addVoice, { variant: 'primary', size: 'sm', onClick: () => showForm(true) });
+    cvForm.append(
+      ui.field(t.voiceName, cvName), ui.field(t.voiceAudio, cvAudio), ui.field(t.voiceTextRequired, cvText),
+      ui.field(t.gptWeightOpt, cvGpt), ui.field(t.sovitsWeightOpt, cvSovits), cvActs,
+    );
+    custom.append(cvHint, cvList, cvAddBtn, cvForm);
+
+    const showForm = (on: boolean): void => {
+      cvForm.hidden = !on;
+      cvAddBtn.hidden = on;
+      if (on) msg.textContent = t.requiredHint;
+      else { msg.textContent = ''; cvName.value = ''; cvAudio.value = ''; cvText.value = ''; cvGpt.value = ''; cvSovits.value = ''; }
+    };
+
+    async function addCustomVoice(): Promise<void> {
+      const f = cvAudio.files?.[0];
+      // 必填项缺一不可：音频与台本；权重成对或都不填。缺了就地提示，不发请求。
+      const pairFilled = !!cvGpt.value.trim() === !!cvSovits.value.trim();
+      if (!f || !cvText.value.trim() || !pairFilled) {
+        msg.textContent = t.incomplete;
+        msg.classList.add('bad');
+        return;
+      }
+      const buf = new Uint8Array(await f.arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+      await call('addVoice', [cvName.value, f.name, btoa(bin), cvText.value, cvGpt.value.trim(), cvSovits.value.trim()]);
+      showForm(false);
+    }
+
+    function renderCustomList(s: PanelState): void {
+      cvList.textContent = '';
+      for (const v of s.voices ?? []) {
+        const line = ui.h('div', 'gsv-row');
+        const name = ui.h('span', 'gsv-name', v.name);
+        const pill = ui.h('span', 'gsv-pill');
+        const detail = ui.h('span', 'gsv-detail', `${baseName(v.audio)} · ${v.text.slice(0, 24)}${v.weights.gpt ? ' · 自备权重' : ''}`);
+        const acts = ui.h('span', 'gsv-acts');
+        line.append(name, pill, detail, acts);
+        cvList.append(line);
+        setPill(pill, v.selected ? t.using : '', v.selected ? 'on' : 'off');
+        if (!v.selected) acts.append(ui.button(t.use, { size: 'sm', onClick: () => void call('useVoice', [v.id]) }));
+        const del = ui.button(t.remove, { size: 'sm', onClick: () => void call('removeVoice', [v.id]) });
+        const rename = ui.button(t.rename, { size: 'sm', onClick: () => beginRename(v, name) });
+        acts.append(rename, del);
+      }
+    }
+
+    function beginRename(v: PanelState['voices'][number], cell: HTMLElement): void {
+      const input = ui.input({});
+      input.value = v.name;
+      input.placeholder = t.renamePh;
+      cell.replaceChildren(input);
+      input.focus();
+      input.select();
+      const commit = (): void => {
+        const next = input.value.trim();
+        if (next && next !== v.name) void call('renameVoice', [v.id, next]);
+        else cell.textContent = v.name;
+      };
+      input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') commit(); });
+      input.addEventListener('blur', commit);
+    }
+
     // ---- 试听
     const test = ui.section(t.test);
     const line = ui.input({});
@@ -90,7 +172,7 @@ const voicePanel: WebUiPanel = {
     const queue = ui.h('span', 'gsv-detail');
     test.append(line, testActs, queue);
 
-    ctx.root.append(status, voice, test, msg);
+    ctx.root.append(status, voice, custom, test, msg);
 
     const setPill = (el: HTMLElement, label: string, tone: 'on' | 'off' | 'warn' | 'bad') => {
       el.textContent = label;
@@ -139,12 +221,15 @@ const voicePanel: WebUiPanel = {
       output.textContent = sv.phase === 'error' || sv.phase === 'starting' ? s.output.join('\n') : '';
       output.hidden = !output.textContent;
       // 音色与队列
+      const cv = (s.voices ?? []).find((x) => x.id === s.voice?.preset);
       current.textContent = !s.voice ? t.noVoice
-        : s.voice.preset && isPreset(s.voice.preset) ? `${t.preset}:${presetLabel(s.voice.preset, ctx.language)}`
-          : `${s.voice.audio}${s.voice.text ? ` · ${s.voice.text}` : ''}`;
+        : cv ? `${t.customVoices}:${cv.name}`
+          : s.voice.preset && isPreset(s.voice.preset) ? `${t.preset}:${presetLabel(s.voice.preset, ctx.language)}`
+            : `${s.voice.audio}${s.voice.text ? ` · ${s.voice.text}` : ''}`;
       reset.hidden = !s.voice || !!s.voice.preset;
       if (document.activeElement !== text && s.voice && !s.voice.preset && !text.value) text.value = s.voice.text;
       queue.textContent = [s.queue ? t.queue(s.queue) : '', s.lastError ? `${t.lastError}:${s.lastError}` : ''].filter(Boolean).join(' · ');
+      renderCustomList(s);
     }
 
     function jobRow(r: ReturnType<typeof row>, job: PanelState['runtime'] | PanelState['weights'], note: string | null) {

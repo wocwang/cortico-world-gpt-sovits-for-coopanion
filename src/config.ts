@@ -1,5 +1,6 @@
 import type { ConfigGroup } from 'cortico/core/types.ts';
 import { pick, type Language } from 'cortico/core/language.ts';
+import type { CustomVoice } from './custom-voice.ts';
 import { DEFAULT_PRESET } from './voices.ts';
 
 export const GPT_SOVITS_ID = 'gpt-sovits';
@@ -19,9 +20,12 @@ export interface GptSovitsConfigSection {
   /** World 启动时一并启动本机推理服务。 */
   autoStart: boolean;
   /**
-   * 预设音色(见 voices.ts);`audio` 填了参考音频的绝对路径时用它与 `text`,语言按 `auto` 识别。
+   * 预设音色(见 voices.ts)或自定义音色的 id(`cv-…`,见 custom-voice.ts);
+   * `audio` 填了参考音频的绝对路径时用它与 `text`,语言按 `auto` 识别。
    */
   voice: { preset: string; audio: string; text: string };
+  /** 用户添加的自定义音色：名称 + 参考音频 + 台本（必填），权重可选（成对）。 */
+  voices: CustomVoice[];
   /**
    * 自备训练权重：自己用 GPT-SoVITS 训出来的 s1(`.ckpt`)与 s2(`.pth`)。
    * 两个都填才生效；留空用内置底模。底模仍要装着——v5turbo 的 s2 训练产物是 LoRA 增量，加载时要先读底模。
@@ -57,6 +61,7 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   serverUrl: '',
   autoStart: true,
   voice: { preset: DEFAULT_PRESET, audio: '', text: '' },
+  voices: [],
   weights: { gpt: '', sovits: '' },
   speed: 1,
   seed: SEED_RANDOM,
