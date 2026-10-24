@@ -114,7 +114,11 @@ export class GptSovitsWorld implements World {
     this.weights = new WeightsJob(opts.modelsRoot, () => this.version());
     this.server = new SovitsServer(this.log);
     this.player = new Player({ device: () => opts.cfg.outputDevice, volume: () => opts.cfg.volume, log: { warn: (msg, meta) => this.log.warn(msg, meta) } as Logger });
-    registerCustomVoiceOptions(() => (this.cfg.voices ?? []).map((v) => ({ value: v.id, label: v.name })));
+    registerCustomVoiceOptions(() => (this.cfg.voices ?? []).map((v) => {
+      // 选项名自带状态：配置页下拉每次点开都重新拉取，用户一眼看出这个音色配没配好。
+      const missing = [!v.audio ? '缺音频' : '', !v.text ? '缺台本' : ''].filter(Boolean);
+      return { value: v.id, label: `${v.name || UNNAMED_VOICE}${missing.length ? `（${missing.join('、')}）` : ' ✓'}` };
+    }));
   }
 
   private get cfg(): GptSovitsConfigSection {
@@ -226,6 +230,11 @@ export class GptSovitsWorld implements World {
       return;
     }
     if (p === NEW_VOICE_PRESET) {
+      if (switched) {
+        // 刚选「＋ 新建音色…」：清空名称/音频/台本，进入空白新建态（权重保留，作为新音色的默认）。
+        this.opts.persist({ voice: { preset: NEW_VOICE_PRESET, name: '', audio: '', text: '' } });
+        return;
+      }
       const audio = v.audio?.trim() ?? '';
       const text = v.text?.trim() ?? '';
       if (!audio || !text) return; // 还没填齐，等用户填
