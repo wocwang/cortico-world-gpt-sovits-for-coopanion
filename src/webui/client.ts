@@ -11,6 +11,7 @@ import './style.css';
 const MB = (n: number) => Math.round(n / 1048576);
 const pct = (done: number, total: number) => (total ? `${Math.round((done / total) * 100)}%` : `${MB(done)} MB`);
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
 
 const voicePanel: WebUiPanel = {
   mount(ctx: WebUiPanelContext) {
@@ -43,7 +44,7 @@ const voicePanel: WebUiPanel = {
       status.append(el);
       return { pill, detail, acts };
     };
-    const tierRow = row(t.tier), runtimeRow = row(t.runtime), weightsRow = row(t.weights), serverRow = row(t.server);
+    const tierRow = row(t.tier), runtimeRow = row(t.runtime), weightsRow = row(t.weights), trainedRow = row(t.trained), serverRow = row(t.server);
     const installBtn = ui.button(t.install, { variant: 'primary', size: 'sm', onClick: () => void call('install') });
     const cancelBtn = ui.button(t.cancel, { size: 'sm', onClick: () => void call('cancel') });
     runtimeRow.acts.append(installBtn, cancelBtn);
@@ -109,6 +110,17 @@ const voicePanel: WebUiPanel = {
       else jobRow(runtimeRow, s.runtime, s.runtime.published ? null : t.unpublished);
       weightsRow.pill.parentElement!.hidden = !managed;
       if (managed) jobRow(weightsRow, s.weights, null);
+      // 权重来源：自备 / 内置，填错了在这里能直接看到原因
+      if (s.trained.problem) {
+        setPill(trainedRow.pill, t.error, 'bad');
+        trainedRow.detail.textContent = s.trained.problem;
+      } else if (s.trained.weights) {
+        setPill(trainedRow.pill, t.trainedOwn, 'on');
+        trainedRow.detail.textContent = `${baseName(s.trained.weights.gpt)} + ${baseName(s.trained.weights.sovits)}`;
+      } else {
+        setPill(trainedRow.pill, t.trainedBuiltin, 'on');
+        trainedRow.detail.textContent = t.trainedHint;
+      }
       const toDownload = (s.runtime.phase === 'ready' ? 0 : s.runtime.bytes) + (s.weights.phase === 'ready' ? 0 : s.weights.bytes);
       installBtn.textContent = toDownload ? t.installSize(MB(toDownload)) : t.install;
       const busy = s.runtime.phase === 'working' || s.weights.phase === 'working';

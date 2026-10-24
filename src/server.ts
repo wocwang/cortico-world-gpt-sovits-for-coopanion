@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import type { Logger } from 'cortico/core/types.ts';
 import { weightPaths, type ModelVersion } from './catalog.ts';
 import type { Tier } from './config.ts';
+import type { TrainedWeights } from './weights.ts';
 
 export interface ServerState {
   phase: 'stopped' | 'starting' | 'ready' | 'error';
@@ -27,6 +28,8 @@ export interface LaunchSpec {
   weightsDir: string | null;
   tier: Tier;
   version: ModelVersion;
+  /** 自备的训练权重；填了就写进 yaml，替掉内置底模的两行路径。 */
+  trained: TrainedWeights | null;
   /** 生成的 api_v2 配置文件放在这里。 */
   dataDir: string;
 }
@@ -61,16 +64,25 @@ function isLink(path: string): boolean {
   try { return lstatSync(path).isSymbolicLink(); } catch { return false; }
 }
 
+/**
+ * YAML 标量：`api_v2` 用 PyYAML 解析，含反斜杠或空格的 Windows 路径必须加引号；
+ * 单引号里反斜杠不转义，正好放 `D:\weights\x.ckpt`。
+ */
+export function yamlScalar(value: string): string {
+  return /[\\'":#\s]/.test(value) ? `'${value.replace(/'/g, "''")}'` : value;
+}
+
 /** api_v2 读的配置：只用 `custom` 一节，路径相对运行时根。 */
-export function infererYaml(tier: Tier, version: ModelVersion): string {
-  const w = weightPaths(version);
+export function infererYaml(tier: Tier, version: ModelVersion, trained: TrainedWeights | null = null): string {
+  const base = weightPaths(version);
+  const w = trained ?? { gpt: base.t2s, sovits: base.vits };
   return [
     'custom:',
     `  device: ${tier === 'cuda' ? 'cuda' : 'cpu'}`,
     `  is_half: ${tier === 'cuda'}`,
     `  version: ${version}`,
-    `  t2s_weights_path: ${w.t2s}`,
-    `  vits_weights_path: ${w.vits}`,
+    `  t2s_weights_path: ${yamlScalar(w.gpt)}`,
+    `  vits_weights_path: ${yamlScalar(w.sovits)}`,
     '  bert_base_path: GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large',
     '  cnhuhbert_base_path: GPT_SoVITS/pretrained_models/chinese-hubert-base',
     '',
@@ -121,7 +133,7 @@ export class SovitsServer {
     if (spec.weightsDir) linkWeights(join(spec.runtimeDir, 'GPT_SoVITS', 'pretrained_models'), spec.weightsDir);
     mkdirSync(spec.dataDir, { recursive: true });
     const yaml = join(spec.dataDir, `tts_infer.${spec.tier}.yaml`);
-    writeFileSync(yaml, infererYaml(spec.tier, spec.version));
+    writeFileSync(yaml, infererYaml(spec.tier, spec.version, spec.trained));
     const port = await freePort();
     const url = `http://127.0.0.1:${port}`;
     const runtimeBin = join(spec.runtimeDir, 'runtime');

@@ -106,10 +106,22 @@ export const MODEL_FILES: Readonly<Record<ModelVersion, readonly PinnedFile[]>> 
   v2ProPlus: [...SHARED, upstream('v2Pro/s2Gv2ProPlus.pth', 200125741, 'd42a22bbbf65fb2bbdd45ad6a66841156977db45c7aabe0a6992ff378d9c7d3b'), upstream('sv/pretrained_eres2netv2w24s4ep4.ckpt', 107528697, '4f5a0bf73c61eb41b174e1bb54e7ee3c83233892be8e0af1f187024e8e581a35')],
 };
 
+/**
+ * 权重在 `pretrained_models` 目录里的相对路径。
+ * 托管安装把运行时的 `GPT_SoVITS/pretrained_models` 接成指向权重目录的目录联接，所以这里是自带的底模文件名。
+ */
+export function weightFiles(version: ModelVersion): { t2s: string; vits: string } {
+  return {
+    t2s: 's1v3.ckpt',
+    vits: version === 'v5turbo' ? 'gsv-v5-pretrained/s2Gv5turbo.pth' : 'v2Pro/s2Gv2ProPlus.pth',
+  };
+}
+
 /** api_v2 配置里的权重路径(相对运行时根)。 */
 export function weightPaths(version: ModelVersion): { t2s: string; vits: string } {
+  const f = weightFiles(version);
   return {
-    t2s: 'GPT_SoVITS/pretrained_models/s1v3.ckpt',
-    vits: version === 'v5turbo' ? 'GPT_SoVITS/pretrained_models/gsv-v5-pretrained/s2Gv5turbo.pth' : 'GPT_SoVITS/pretrained_models/v2Pro/s2Gv2ProPlus.pth',
+    t2s: `GPT_SoVITS/pretrained_models/${f.t2s}`,
+    vits: `GPT_SoVITS/pretrained_models/${f.vits}`,
   };
 }

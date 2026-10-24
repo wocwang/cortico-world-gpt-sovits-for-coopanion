@@ -3,8 +3,8 @@
 Owner: `src/world.ts`
 
 > 本仓库是 [Phantivia/cortico-world-gpt-sovits-for-coopanion](https://github.com/Phantivia/cortico-world-gpt-sovits-for-coopanion)
-> 的 fork（原作者同意后维护），在原版 0.1.2 之上补了参考音频时长校验、辅助参考音频、
-> 装饰符号导致合成崩溃的修复与采样种子选项，改动见 [CHANGELOG.md](CHANGELOG.md)。
+> 的 fork（原作者同意后维护），在原版 0.1.2 之上补了参考音频时长校验、装饰符号导致合成崩溃的修复、
+> 采样种子选项、自备训练权重入口与随包默认音色，改动见 [CHANGELOG.md](CHANGELOG.md)。
 
 给 Coopanion 的桌宠配上声音：Coo 每次 `pet_say` 之前在同一次回复里先调用 `sovits_speak`,
 扩展用本机的 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 流式合成这句话，从声卡播出。
@@ -55,6 +55,39 @@ Owner: `src/world.ts`
 
 本机服务以 `runtime/python.exe -I -X utf8 -u api_v2.py` 在运行时根下启动，监听 127.0.0.1 的空闲端口。
 
+## 自备训练权重
+
+默认只用扩展自己下载的底模（`s1v3.ckpt` + `s2Gv5turbo.pth` / `s2Gv2ProPlus.pth`）。
+用 GPT-SoVITS 自己训出来的模型，填进配置就换过来：
+
+| 键 | 文件 | 是什么 |
+|---|---|---|
+| `weights.gpt` | `.ckpt` | s1 / T2S，「文本 → 语义 token」那一半，训练产物形如 `我的模型-e12.ckpt` |
+| `weights.sovits` | `.pth` | s2 / VITS，音色与声学细节，LoRA 训练产物形如 `我的模型_e8_s672_l32.pth` |
+
+几条约定：
+
+- **两个一起填**。只换 s1 不换 s2 出来的音色不对，扩展当成配置错误报出来，不会静默只换一半。
+- **版本要和推理档对上**：显卡档 `v5turbo`，CPU 档 `v2ProPlus`。扩展读 `.pth` 头两个字节判版本
+  （`08` = v5turbo LoRA、`06` = v2ProPlus），对不上就拦下并说明原因，不等到加载底座时才崩。
+- **配对取同一轮**：`-e8.ckpt` 配 `_e8_*.pth`，跨 epoch 混搭音色容易飘。
+- **底模还得留着**：v5turbo 的 s2 训练产物是 LoRA 增量，加载时先读 `s2Gv5turbo.pth` 再合并，
+  所以自备权重不代替底模下载。
+- **生效方式**：托管与自备目录两种后端在启动时把这两条路径写进 `tts_infer.<档>.yaml`；
+  服务在跑时改这两项，扩展调 `/set_gpt_weights` 与 `/set_sovits_weights` 就地换，**不用重启**，
+  也不打断正在播的句子。清空这两项也走同一条路换回底模（只有连已有服务时不知道底模在哪，需要重启一次）。
+- **`serverUrl`（连已有服务）也能用**：那种后端不写 yaml，自备权重完全靠就地换这条路生效。
+
+`.pth` 头字节对照（同一张表在 `src/weights.ts`）：
+
+| 头 | 版本 | 本扩展可用 |
+|---|---|---|
+| `08` | v5turbo LoRA | ✅ 显卡档 |
+| `06` | v2ProPlus | ✅ CPU 档 |
+| `07` | v5 LoRA | ❌ 底座不同 |
+| `05` | v2Pro | ❌ |
+| `04` / `03` / `02` / `01` / `00` | v4 / v3 / v2 / v1 | ❌ |
+
 ## 工具与事件
 
 - `sovits_speak(text)`:去掉 `【…】` 与 `<…>` 标记后合成，排在没念完的句子后面。
@@ -68,6 +101,7 @@ Owner: `src/world.ts`
 | `tier` | `auto` | `auto` / `cuda` / `cpu`,重启推理服务生效 |
 | `voice.preset` | `female` | 预设音色:`female` / `male` |
 | `voice.audio`、`voice.text` | 空 | 自定义参考音频(3–10 秒 WAV)与它的台本;配置里可选本机文件，语音页可上传，填了就不用预设音色 |
+| `weights.gpt`、`weights.sovits` | 空 | 自备训练权重:自己训的 s1(`.ckpt`)与 s2(`.pth`)。两个都填才生效，留空用内置底模；版本要和推理档一致 |
 | `speed` | 1 | 语速，对应 api_v2 的 `speed_factor` |
 | `seed` | -1 | 采样种子，对应 api_v2 的 `seed`。`-1` 每次重新采样（同一句每次听起来都不同）；填 0 或正整数则固定，同一句逐字节一致 |
 | `volume` | 1 | 0–1 |

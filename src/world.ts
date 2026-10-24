@@ -19,16 +19,17 @@ import type { Language } from 'cortico/core/language.ts';
 import type { Logger, ToolDef, ToolOutcome, World, WorldHost, WorldLamp, WorldWebUiDecl } from 'cortico/core/types.ts';
 import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
-import { OUTPUT_GAIN, TIER_MODEL, type ModelVersion } from './catalog.ts';
+import { OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
 import { configGroups, GPT_SOVITS_ID, REF_MAX_SECONDS, REF_MIN_SECONDS, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { panelText, stateWords } from './i18n.ts';
 import { isRuntimeDir, RuntimeJob, WeightsJob, type JobState } from './install.ts';
 import { Player } from './player.ts';
 import { SovitsServer, type ServerState } from './server.ts';
 import { speechText, ttsPlain, ttsSafe } from './speech-text.ts';
-import { synthesize, type SynthRequest } from './synth.ts';
+import { synthesize, switchWeights, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { DEFAULT_PRESET, isPreset, type VoicePreset } from './voices.ts';
+import { installedBaseWeights, resolveTrained, type TrainedResult, type TrainedWeights } from './weights.ts';
 import { readSeconds } from './wav.ts';
 
 const ENV_PROMPT_FILES = {
@@ -50,6 +51,9 @@ const SPEAK_WAIT_MAX_MS = 3000;
 
 /** 参考音频上传的大小上限：10 秒 48 kHz 立体声 PCM16 不到 2 MB,留足余量。 */
 const VOICE_MAX_BYTES = 8 * 1024 * 1024;
+
+/** 换权重要读盘并搬上显存，大文件几十秒;超时按失败处理，声音仍用刚换上的上一组。 */
+const WEIGHT_SWITCH_TIMEOUT_MS = 180_000;
 
 /** 自定义参考音频时长不合 api_v2 要求时的说明;量不出时长就交给服务端判断。 */
 function referenceIssue(path: string): string | null {
@@ -96,6 +100,12 @@ export class GptSovitsWorld implements World {
   private announced: boolean | null = null;
   /** 自定义参考音频时长不合要求时的说明,由 `voice()` 写入。 */
   private voiceIssue: string | null = null;
+  /** 已经让服务加载的权重签名;配置变了就地换，不必重启。 */
+  private appliedWeights = '';
+  /** 服务此刻实际加载的权重(内置或自备)；换失败时用它退回去。 */
+  private appliedTarget: TrainedWeights | null = null;
+  /** 切换失败的签名，同一条配置不重复试。 */
+  private weightsFailed = '';
 
   constructor(private readonly opts: GptSovitsWorldOptions) {
     this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
@@ -116,6 +126,62 @@ export class GptSovitsWorld implements World {
 
   version(): ModelVersion {
     return TIER_MODEL[this.tier()];
+  }
+
+  /** 配置里的自备权重，校验过版本与文件；用不上时 `problem` 里是原因。 */
+  private trained(): TrainedResult {
+    return resolveTrained(this.cfg.weights, this.version());
+  }
+
+  /** 权重签名：变了说明配置里换了模型。 */
+  private weightsSignature(): string {
+    const t = this.trained().weights;
+    return t ? `${t.gpt}|${t.sovits}` : '';
+  }
+
+  /** 内置底模的绝对路径；连已有服务时无从得知它在哪，返回 null。 */
+  private baseTarget(): TrainedWeights | null {
+    const b = this.backend();
+    if (b.kind === 'remote') return null;
+    if (b.kind === 'managed') return installedBaseWeights(this.weights.dir(), this.version());
+    // 自备目录按运行时根拼：那里的 pretrained_models 就是真实目录，不是联接。
+    const w = weightPaths(this.version());
+    return { gpt: join(b.dir, w.t2s), sovits: join(b.dir, w.vits) };
+  }
+
+  /** 配置希望服务加载的权重；连已有服务又没填自备权重时为 null(不知道底模路径，只能不动)。 */
+  private wantedTarget(): TrainedWeights | null {
+    return this.trained().weights ?? this.baseTarget();
+  }
+
+  /**
+   * 让服务加载当前配置指向的权重。启动时这份路径已经写进 yaml,这里管的是「服务在跑时改了配置」:
+   * 走 `/set_gpt_weights` 与 `/set_sovits_weights` 就地换，不重启进程，也不打断正在播的句子。
+   * 换失败只警告，并尽量退回上一组权重;同一条配置不重复试。
+   */
+  private async applyWeights(url: string): Promise<void> {
+    const sig = this.weightsSignature();
+    if (sig === this.appliedWeights || sig === this.weightsFailed) return;
+    const target = this.wantedTarget();
+    const previous = this.appliedTarget;
+    if (!target) { this.appliedWeights = sig; return; }
+    try {
+      await switchWeights(url, target, AbortSignal.timeout(WEIGHT_SWITCH_TIMEOUT_MS));
+      this.appliedWeights = sig;
+      this.appliedTarget = target;
+      this.log.info('推理服务已换用这组权重', { gpt: target.gpt, sovits: target.sovits });
+    } catch (err) {
+      this.weightsFailed = sig;
+      this.lastError = err instanceof Error ? err.message : String(err);
+      this.log.warn('换权重失败，继续用原来的权重', { err: this.lastError, target });
+      if (previous) {
+        try {
+          await switchWeights(url, previous, AbortSignal.timeout(WEIGHT_SWITCH_TIMEOUT_MS));
+        } catch (back) {
+          this.log.warn('退回上一组权重也失败', { err: String(back) });
+        }
+      }
+    }
   }
 
   private backend(): Backend {
@@ -227,6 +293,7 @@ export class GptSovitsWorld implements World {
         let heard = false;
         const onFirst = (): void => { heard = true; started(); };
         try {
+          await this.applyWeights(url);
           const first = await this.playLine(url, voice, text, abort.signal, onFirst);
           this.log.info('GPT-SoVITS 一句合成完', { chars: [...text].length, waitMs: first - at, totalMs: Date.now() - at });
           this.lastError = null;
@@ -275,6 +342,9 @@ export class GptSovitsWorld implements World {
     this.server = new SovitsServer(this.log, (detail) => this.announce(false, detail));
     this.stopped = false;
     this.announced = null;
+    this.appliedWeights = '';
+    this.appliedTarget = null;
+    this.weightsFailed = '';
     this.launching = this.cfg.autoStart && this.backend().kind !== 'remote';
     this.cuda = await detectCuda();
     if (this.launching && this.canStart()) void this.startServer().finally(() => { this.launching = false; });
@@ -317,13 +387,19 @@ export class GptSovitsWorld implements World {
     const b = this.backend();
     if (b.kind === 'remote' || this.stopped) return;
     this.warmed = false;
+    const trained = this.trained().weights;
     await this.server.start({
       runtimeDir: b.dir,
       weightsDir: b.kind === 'managed' ? this.weights.dir() : null,
       tier: this.tier(),
       version: this.version(),
+      trained,
       dataDir: this.opts.dataDir,
     });
+    // yaml 里已经是这组权重，启动即加载，不必再调一遍换权重的接口。
+    this.appliedWeights = this.weightsSignature();
+    this.appliedTarget = trained ?? this.baseTarget();
+    this.weightsFailed = '';
     await this.warmUp();
   }
 
@@ -432,6 +508,7 @@ export class GptSovitsWorld implements World {
       version: this.version(),
       runtime: { ...this.runtime.status(), dir: b.kind === 'remote' ? b.url : b.dir, published: this.runtime.published(), bytes: this.runtime.bytes(), own: b.kind === 'own' && isRuntimeDir(b.dir) },
       weights: { ...this.weights.status(), dir: this.weights.dir(), bytes: this.weights.bytes() },
+      trained: this.trained(),
       server: { ...this.server.state(), warming: this.warming, warmed: this.warmed },
       voice: voice ? { audio: voice.audio, text: voice.text, preset: voice.preset } : null,
       queue: this.queue.length + (this.current ? 1 : 0),
@@ -450,6 +527,8 @@ export interface PanelState {
   version: ModelVersion;
   runtime: JobState & { dir: string; published: boolean; bytes: number; own: boolean };
   weights: JobState & { dir: string; bytes: number };
+  /** 自备训练权重；`problem` 非空表示填了但用不上。 */
+  trained: TrainedResult;
   server: ServerState & { warming: boolean; warmed: boolean };
   voice: { audio: string; text: string; preset: string | null } | null;
   queue: number;

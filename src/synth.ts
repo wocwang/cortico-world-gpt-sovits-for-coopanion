@@ -66,6 +66,30 @@ export async function* pcmChunks(body: AsyncIterable<Uint8Array>): AsyncGenerato
 export const STREAMING_MODE = 3;
 
 /**
+ * 让正在跑的服务换成另一组权重：`/set_gpt_weights` 与 `/set_sovits_weights` 都是 GET 加
+ * `weights_path` 查询参数，成功回 `{"message":"success"}`。换权重不必重启进程，也不影响已建立的连接。
+ *
+ * 两个接口分别加载 s1 与 s2：任一个失败都抛出(失败的那个带服务端 `Exception`)，由调用方决定回滚。
+ */
+export async function switchWeights(baseUrl: string, target: { gpt: string; sovits: string }, signal?: AbortSignal): Promise<void> {
+  for (const [endpoint, path] of [['set_gpt_weights', target.gpt], ['set_sovits_weights', target.sovits]] as const) {
+    const url = new URL(`/${endpoint}`, baseUrl);
+    url.searchParams.set('weights_path', path);
+    const res = await fetch(url, { method: 'GET', signal });
+    let detail = '';
+    try { detail = (await res.text()).slice(0, 300); } catch { /* 没有回应体就算了 */ }
+    if (!res.ok) {
+      let said = '';
+      try {
+        const j = JSON.parse(detail) as { message?: string; Exception?: string };
+        said = [j.message, j.Exception].filter(Boolean).join(': ');
+      } catch { /* 不是 JSON 就带原文 */ }
+      throw new Error(`${endpoint} 失败：${said || detail || `HTTP ${res.status}`}`);
+    }
+  }
+}
+
+/**
  * `/tts` 的请求体。`seed` 只在固定种子(>= 0)时才发，不填时由 api_v2 用它的默认值(-1，每次重新采样)。
  */
 export function ttsBody(req: SynthRequest): Record<string, unknown> {
