@@ -118,9 +118,11 @@ export class GptSovitsWorld implements World {
     this.server = new SovitsServer(this.log);
     this.player = new Player({ device: () => opts.cfg.outputDevice, volume: () => opts.cfg.volume, log: { warn: (msg, meta) => this.log.warn(msg, meta) } as Logger });
     registerCustomVoiceOptions(() => (this.cfg.voices ?? []).map((v) => {
-      // 选项名自带状态：配置页下拉每次点开都重新拉取，用户一眼看出这个音色配没配好。
+      // 选项名自带状态与音频文件名：配置页下拉每次点开都重新拉取，不用看下面字段也能确认用的是什么。
       const missing = [!v.audio ? '缺音频' : '', !v.text ? '缺台本' : ''].filter(Boolean);
-      return { value: v.id, label: `${v.name || UNNAMED_VOICE}${missing.length ? `（${missing.join('、')}）` : ' ✓'}` };
+      const mark = missing.length ? `（${missing.join('、')}）` : ' ✓';
+      const file = v.audio ? ` · ${v.audio.split(/[\\/]/).pop()}` : '';
+      return { value: v.id, label: `${v.name || UNNAMED_VOICE}${mark}${file}` };
     }));
   }
 

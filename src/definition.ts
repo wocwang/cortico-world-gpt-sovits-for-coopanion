@@ -35,7 +35,7 @@ export const GPT_SOVITS: WorldDefinition<GptSovitsConfigSection> = {
     if (kind === TIER_OPTIONS) return tierOptions(language);
     if (kind === PROMPT_LANGUAGE_OPTIONS) return promptLanguageOptions();
     if (kind === VOICE_OPTIONS) {
-      const presets = VOICE_PRESETS.map((id) => ({ value: id, label: presetLabel(id, language) }));
+      const presets = VOICE_PRESETS.map((id) => ({ value: id, label: `${presetLabel(id, language)} · ${id}.wav` }));
       const add = language === 'zh' || language === 'zh-Hant' ? '＋ 新建音色…' : '＋ New voice…';
       return [...presets, ...customVoiceOptions(), { value: NEW_VOICE_PRESET, label: add }];
     }
