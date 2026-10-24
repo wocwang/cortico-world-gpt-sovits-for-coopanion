@@ -1,7 +1,7 @@
 /**
  * 「语音」面板：推理档、运行时、权重、推理服务四行状态与操作，以及试听。
- * 音色的添加/改名/切换都在配置页（配置字段就是音色参数），这里不再放音色控件。
- * 数据经 `ctx.invoke` 走 World 的 `invoke('voice', …)`,每秒轮询一次状态。
+ * 「音色」面板（第二个）：自定义音色的新建/编辑/删除/切换，保存立即生效。
+ * 数据经 `ctx.invoke` 走 World 的 `invoke(<panel>, …)`,每秒轮询一次状态。
  */
 import type { WebUiClientBundle, WebUiPanel, WebUiPanelContext } from 'cortico/web/shared/client-panel.ts';
 import { panelText } from '../i18n.ts';
@@ -135,5 +135,140 @@ const voicePanel: WebUiPanel = {
   },
 };
 
-const bundle: WebUiClientBundle = { panels: { voice: voicePanel } };
+/**
+ * 「音色」面板：自定义音色的新建、编辑、删除与切换。保存/删除立即生效并刷新列表，
+ * 不依赖配置表单（配置页只负责选，字段不随切换刷新）。
+ */
+const voicesPanel: WebUiPanel = {
+  mount(ctx: WebUiPanelContext) {
+    const { ui } = ctx;
+    const t = panelText(ctx.language);
+    const msg = ui.msgline();
+    let state: PanelState | null = null;
+    let editingId: string | null = null;
+
+    const call = async (method: string, args: unknown[] = []) => {
+      msg.textContent = '';
+      msg.classList.remove('bad');
+      try {
+        const next = await ctx.invoke<PanelState>(method, args);
+        if (next && 'backend' in next) render(next);
+      } catch (err) {
+        msg.textContent = errText(err);
+        msg.classList.add('bad');
+      }
+    };
+
+    const sec = ui.section(t.customVoices, t.customVoicesHint);
+    const list = ui.h('div');
+    const addBtn = ui.button(t.addVoice, { variant: 'primary', size: 'sm', onClick: () => openForm(null) });
+    const form = ui.h('div');
+    form.hidden = true;
+    const fName = ui.input({ placeholder: t.voiceNamePh });
+    const fAudio = ui.input({});
+    fAudio.type = 'file';
+    fAudio.accept = '.wav,audio/wav';
+    const fText = ui.textarea({});
+    fText.rows = 2;
+    const fGpt = ui.input({ placeholder: t.gptWeightOpt });
+    const fSov = ui.input({ placeholder: t.sovitsWeightOpt });
+    const saveBtn = ui.button(t.saveVoice, { variant: 'primary', size: 'sm', onClick: () => void save() });
+    const cancelBtn = ui.button(t.cancelAdd, { size: 'sm', onClick: () => closeForm() });
+    const formActs = ui.actions();
+    formActs.append(saveBtn, cancelBtn);
+    form.append(
+      ui.h('div', 'gsv-detail', t.requiredHint),
+      ui.field(t.voiceName, fName),
+      ui.field(t.voiceAudio, fAudio),
+      ui.field(t.voiceTextRequired, fText),
+      ui.field(t.gptWeightOpt, fGpt),
+      ui.field(t.sovitsWeightOpt, fSov),
+      formActs,
+    );
+    sec.append(list, addBtn, form);
+
+    function openForm(v: PanelState['voices'][number] | null): void {
+      editingId = v?.id ?? null;
+      fName.value = v?.name ?? '';
+      fAudio.value = '';
+      fText.value = v?.text ?? '';
+      fGpt.value = v?.weights.gpt ?? '';
+      fSov.value = v?.weights.sovits ?? '';
+      saveBtn.textContent = v ? t.saveVoice : t.confirmAdd;
+      form.hidden = false;
+      addBtn.hidden = true;
+      msg.textContent = t.requiredHint;
+      msg.classList.remove('bad');
+    }
+
+    function closeForm(): void {
+      editingId = null;
+      form.hidden = true;
+      addBtn.hidden = false;
+      fAudio.value = '';
+      msg.textContent = '';
+    }
+
+    async function save(): Promise<void> {
+      const f = fAudio.files?.[0];
+      const pairOk = !!fGpt.value.trim() === !!fSov.value.trim();
+      // 参考音频与台本必填，权重成对或都不填；缺了就地提示，不发请求。
+      if ((!f && !editingId) || !fText.value.trim() || !pairOk) {
+        msg.textContent = t.incomplete;
+        msg.classList.add('bad');
+        return;
+      }
+      let b64 = '';
+      if (f) {
+        const buf = new Uint8Array(await f.arrayBuffer());
+        let bin = '';
+        for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+        b64 = btoa(bin);
+      }
+      if (editingId) await call('update', [editingId, fName.value, b64, fText.value, fGpt.value.trim(), fSov.value.trim()]);
+      else await call('add', [fName.value, f!.name, b64, fText.value, fGpt.value.trim(), fSov.value.trim()]);
+      closeForm();
+    }
+
+    const setPill = (el: HTMLElement, label: string, tone: 'on' | 'off' | 'bad'): void => {
+      el.textContent = label;
+      el.dataset.tone = tone;
+    };
+
+    function renderList(s: PanelState): void {
+      list.textContent = '';
+      if (!s.voices.length) { list.append(ui.h('div', 'gsv-detail', t.noVoice)); return; }
+      for (const v of s.voices) {
+        const line = ui.h('div', 'gsv-row');
+        const name = ui.h('span', 'gsv-name', v.name);
+        const pill = ui.h('span', 'gsv-pill');
+        const detail = ui.h('span', 'gsv-detail', `${v.audio ? baseName(v.audio) : t.noVoice} · ${v.text.slice(0, 24) || t.voiceText}${v.weights.gpt ? ` · ${t.trainedOwn}` : ''}`);
+        const acts = ui.h('span', 'gsv-acts');
+        line.append(name, pill, detail, acts);
+        list.append(line);
+        setPill(pill, v.selected ? t.using : '', v.selected ? 'on' : 'off');
+        if (!v.selected) acts.append(ui.button(t.use, { size: 'sm', onClick: () => void call('use', [v.id]) }));
+        acts.append(
+          ui.button(t.edit, { size: 'sm', onClick: () => openForm(v) }),
+          ui.button(t.remove, { size: 'sm', onClick: () => void call('remove', [v.id]) }),
+        );
+      }
+    }
+
+    function render(s: PanelState): void {
+      state = s;
+      renderList(s);
+    }
+
+    const refresh = async () => {
+      try { render(await ctx.invoke<PanelState>('state')); } catch (err) { if (!state) msg.textContent = errText(err); }
+    };
+    void refresh();
+    ctx.interval(() => void refresh(), 1000);
+
+    ctx.root.append(sec, msg);
+  },
+};
+
+const bundle: WebUiClientBundle = { panels: { voice: voicePanel, voices: voicesPanel } };
 export default bundle;

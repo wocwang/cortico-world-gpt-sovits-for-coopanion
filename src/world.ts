@@ -675,7 +675,10 @@ export class GptSovitsWorld implements World {
     return {
       label: t.label,
       lamps: [lamp],
-      panels: [{ id: 'voice', title: t.panel, description: t.panelHint, getMethods: ['state'] }],
+      panels: [
+        { id: 'voice', title: t.panel, description: t.panelHint, getMethods: ['state'] },
+        { id: 'voices', title: t.voicesPanel, description: t.voicesPanelHint, getMethods: ['state'] },
+      ],
       invoke: (panel, method, args) => this.invoke(panel, method, args),
       config: configGroups(language),
       promptDocs: [{
@@ -691,6 +694,30 @@ export class GptSovitsWorld implements World {
 
   /** 面板数据面。 */
   async invoke(panel: string, method: string, args: unknown[]): Promise<unknown> {
+    if (panel === 'voices') {
+      switch (method) {
+        case 'state': return this.panelState();
+        case 'add': return this.addCustomVoice(args);
+        case 'update': return this.updateCustomVoice(args);
+        case 'remove': this.removeCustomVoice(String(args[0] ?? '')); return this.panelState();
+        case 'rename': {
+          const [id, name] = [String(args[0] ?? ''), String(args[1] ?? '')];
+          if (!name.trim()) throw new Error('音色名称不能为空。');
+          const voices = this.cfg.voices ?? [];
+          if (!voices.some((v) => v.id === id)) throw new Error('找不到这个自定义音色。');
+          this.opts.persist({ voices: voices.map((v) => (v.id === id ? { ...v, name: name.trim() } : v)) });
+          return this.panelState();
+        }
+        case 'use': {
+          const id = String(args[0] ?? '');
+          const cv = selectedCustomVoice(this.cfg.voices ?? [], id);
+          if (id && !cv) throw new Error('找不到这个自定义音色。');
+          this.opts.persist({ voice: { preset: id || DEFAULT_PRESET, name: cv?.name ?? '', audio: cv?.audio ?? '', text: cv?.text ?? '' } });
+          return this.panelState();
+        }
+        default: throw new Error(`未知方法 ${method}`);
+      }
+    }
     if (panel !== 'voice') throw new Error(`未知面板 ${panel}`);
     switch (method) {
       case 'state': return this.panelState();

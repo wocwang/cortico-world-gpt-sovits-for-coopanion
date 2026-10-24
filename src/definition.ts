@@ -10,7 +10,6 @@ import {
 import { listOutputDevices } from './player.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { VOICE_PRESETS, presetLabel } from './voices.ts';
-import { NEW_VOICE_PRESET } from './custom-voice.ts';
 import { customVoiceOptions } from './voice-options.ts';
 import { GptSovitsWorld, STATE_EVENT } from './world.ts';
 
@@ -49,8 +48,7 @@ export const GPT_SOVITS: WorldDefinition<GptSovitsConfigSection> = {
     if (kind === PROMPT_LANGUAGE_OPTIONS) return promptLanguageOptions();
     if (kind === VOICE_OPTIONS) {
       const presets = VOICE_PRESETS.map((id) => ({ value: id, label: `${presetLabel(id, language)} · ${id}.wav${presetSnippet(id)}` }));
-      const add = language === 'zh' || language === 'zh-Hant' ? '＋ 新建音色…' : '＋ New voice…';
-      return [...presets, ...customVoiceOptions(), { value: NEW_VOICE_PRESET, label: add }];
+      return [...presets, ...customVoiceOptions()];
     }
     if (kind === DEVICE_OPTIONS) {
       let devices: Array<{ value: string; label: string }> = [];
