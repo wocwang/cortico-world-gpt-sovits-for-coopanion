@@ -45,3 +45,22 @@ export function readSeconds(path: string): number | null {
     if (fd !== undefined) closeSync(fd);
   }
 }
+
+/** 把单声道 PCM16 数据包成标准 44 字节头的 WAV，用来把合成结果落盘。 */
+export function wavBytes(pcm: Buffer, sampleRate: number): Buffer {
+  const head = Buffer.alloc(44);
+  head.write('RIFF', 0);
+  head.writeUInt32LE(36 + pcm.length, 4);
+  head.write('WAVE', 8);
+  head.write('fmt ', 12);
+  head.writeUInt32LE(16, 16);
+  head.writeUInt16LE(1, 20);
+  head.writeUInt16LE(1, 22);
+  head.writeUInt32LE(sampleRate, 24);
+  head.writeUInt32LE(sampleRate * 2, 28);
+  head.writeUInt16LE(2, 32);
+  head.writeUInt16LE(16, 34);
+  head.write('data', 36);
+  head.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([head, pcm]);
+}

@@ -1,6 +1,7 @@
 import type { ConfigGroup } from 'cortico/core/types.ts';
 import { pick, type Language } from 'cortico/core/language.ts';
 import type { CustomVoice } from './custom-voice.ts';
+import type { SpeechLang } from './synth.ts';
 import { DEFAULT_PRESET } from './voices.ts';
 
 export const GPT_SOVITS_ID = 'gpt-sovits';
@@ -34,6 +35,15 @@ export interface GptSovitsConfigSection {
   /** 语速倍率，对应 api_v2 的 `speed_factor`。 */
   speed: number;
   /**
+   * 合成语言，对应 api_v2 的 `text_lang`。`zh` 中文优先（英文段照读），
+   * `auto` 逐段识别——短句容易被认成日语，输出会中日混杂。
+   */
+  textLang: SpeechLang;
+  /** 每句合成完另存一个 WAV，供其他程序（如 QQ 机器人）取用。 */
+  saveAudio: boolean;
+  /** 语音保存目录；空为 `<data>/gpt-sovits/out`。 */
+  saveDir: string;
+  /**
    * 采样种子，对应 api_v2 的 `seed`。`-1` 每次重新采样（同一句每次都不一样），
    * `0` 及以上固定种子（同一句、同一进程内逐字节可复现）。
    */
@@ -64,6 +74,9 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   voices: [],
   weights: { gpt: '', sovits: '' },
   speed: 1,
+  textLang: 'zh',
+  saveAudio: false,
+  saveDir: '',
   seed: SEED_RANDOM,
   volume: 1,
   outputDevice: '',
@@ -76,6 +89,7 @@ const K = `worlds.${GPT_SOVITS_ID}`;
 export const TIER_OPTIONS = `${GPT_SOVITS_ID}:tier`;
 export const DEVICE_OPTIONS = `${GPT_SOVITS_ID}:output-device`;
 export const PROMPT_LANGUAGE_OPTIONS = `${GPT_SOVITS_ID}:prompt-language`;
+export const TEXT_LANGUAGE_OPTIONS = `${GPT_SOVITS_ID}:text-language`;
 export const VOICE_OPTIONS = `${GPT_SOVITS_ID}:voice`;
 
 const TEXT = {
@@ -88,6 +102,13 @@ const TEXT = {
     sovitsWeights: { title: '自备 SoVITS 权重', description: '自己训的 s2 权重(.pth)，版本要和推理档一致(显卡档 v5turbo / CPU 档 v2ProPlus)。服务在跑时改这两项会就地换权重，不用重启。' },
     tier: { title: '推理档', auto: '自动', cuda: '显卡(NVIDIA)', cpu: 'CPU', description: '自动：检测到 NVIDIA 显卡用显卡档，否则用 CPU 档。修改后重启推理服务生效。' },
     speed: { title: '语速', description: '1 为原速。' },
+    textLang: {
+      title: '语音语言',
+      description: '合成用的语言，与界面语言无关。「中文优先」时英文仍按英文读；「自动识别」逐段判断，短句容易把中文认成日语。',
+      auto: '自动识别（可能误判日语）', zh: '中文优先（英文照读）', en: 'English', ja: '日本語',
+    },
+    saveAudio: { title: '把语音保存成文件', description: '每句合成完另存一个 WAV，方便交给其他程序（如 QQ 机器人）发送。' },
+    saveDir: { title: '语音保存目录', description: '留空为插件数据目录下的 gpt-sovits\\out。' },
     seed: { title: '采样种子', description: '-1 每次重新采样（同一句每次听起来都不同）；填 0 或正整数可固定，同一句每次逐字节一致。' },
     volume: { title: '音量' },
     outputDevice: { title: '输出设备', description: '留空使用系统默认设备。', system: '系统默认' },
@@ -105,6 +126,13 @@ const TEXT = {
     sovitsWeights: { title: 'Own SoVITS weights', description: 'Your own trained s2 weights (.pth). Its version must match the tier (v5turbo on GPU, v2ProPlus on CPU). Editing either field switches the running server in place, no restart.' },
     tier: { title: 'Inference tier', auto: 'Auto', cuda: 'GPU (NVIDIA)', cpu: 'CPU', description: 'Auto uses the GPU tier when an NVIDIA GPU is found, the CPU tier otherwise. Takes effect when the inference server restarts.' },
     speed: { title: 'Speech rate', description: '1 is the original rate.' },
+    textLang: {
+      title: 'Speech language',
+      description: 'The language used for synthesis, independent of the UI language. "Chinese first" still reads English segments as English; "Auto" detects every segment and often mistakes short Chinese phrases for Japanese.',
+      auto: 'Auto (may misread Chinese as Japanese)', zh: 'Chinese first (English still read)', en: 'English', ja: '日本語',
+    },
+    saveAudio: { title: 'Save the speech to files', description: 'Also writes every synthesized line to a WAV file, so other programs (a QQ bot, for example) can send it.' },
+    saveDir: { title: 'Speech folder', description: 'Empty uses gpt-sovits\\out under the plugin data folder.' },
     seed: { title: 'Sampling seed', description: '-1 resamples every time (the same line sounds different each run); 0 or a positive integer fixes it, making the same line byte-identical.' },
     volume: { title: 'Volume' },
     outputDevice: { title: 'Output device', description: 'Empty for the system default.', system: 'System default' },
@@ -122,6 +150,11 @@ export function tierOptions(language: Language): Array<{ value: string; label: s
 
 export const promptLanguageOptions = (): Array<{ value: string; label: string }> =>
   [{ value: 'zh', label: '中文' }, { value: 'en', label: 'English' }];
+
+export function textLanguageOptions(language: Language): Array<{ value: string; label: string }> {
+  const t = pick(language, TEXT).textLang;
+  return [{ value: 'auto', label: t.auto }, { value: 'zh', label: t.zh }, { value: 'en', label: t.en }, { value: 'ja', label: t.ja }];
+}
 
 export const systemDeviceLabel = (language: Language): string => pick(language, TEXT).outputDevice.system;
 
@@ -141,6 +174,9 @@ export function configGroups(language: Language): ConfigGroup[] {
         [`${K}.weights.sovits`]: { type: 'string', title: t.sovitsWeights.title, description: t.sovitsWeights.description, 'x-path': { kind: 'file', extensions: ['.pth'] }, 'x-hot': true },
         [`${K}.tier`]: { type: 'string', title: t.tier.title, description: t.tier.description, 'x-options': TIER_OPTIONS, 'x-hot': true },
         [`${K}.speed`]: { type: 'number', title: t.speed.title, description: t.speed.description, minimum: SPEED_MIN, maximum: SPEED_MAX, multipleOf: .05, 'x-hot': true },
+        [`${K}.textLang`]: { type: 'string', title: t.textLang.title, description: t.textLang.description, 'x-options': TEXT_LANGUAGE_OPTIONS, 'x-hot': true },
+        [`${K}.saveAudio`]: { type: 'boolean', title: t.saveAudio.title, description: t.saveAudio.description, 'x-hot': true },
+        [`${K}.saveDir`]: { type: 'string', title: t.saveDir.title, description: t.saveDir.description, 'x-path': { kind: 'directory' }, 'x-hot': true },
         [`${K}.seed`]: { type: 'number', title: t.seed.title, description: t.seed.description, minimum: SEED_RANDOM, multipleOf: 1, 'x-hot': true },
         [`${K}.volume`]: { type: 'number', title: t.volume.title, minimum: 0, maximum: 1, multipleOf: .05, 'x-hot': true },
         [`${K}.outputDevice`]: { type: 'string', title: t.outputDevice.title, description: t.outputDevice.description, 'x-options': DEVICE_OPTIONS, 'x-hot': true },

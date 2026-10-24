@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { secondsOf } from '../src/wav.ts';
+import { secondsOf, wavBytes } from '../src/wav.ts';
 
 /** 一份 PCM16 WAV；`declared` 可以覆盖 `data` 长度字段(流式写的文件是 0)。 */
 function wav(rate: number, channels: number, seconds: number, declared?: number): Buffer {
@@ -40,5 +40,19 @@ describe('secondsOf', () => {
     const buf = wav(16000, 1, 3);
     buf.write('junk', 12); // 顶掉 fmt 块
     expect(secondsOf(buf, buf.length)).toBeNull();
+  });
+});
+
+describe('wavBytes', () => {
+  it('wraps mono PCM16 into a WAV the same reader understands', () => {
+    const pcm = Buffer.from(Int16Array.from([1, -2, 3]).buffer);
+    const out = wavBytes(pcm, 32000);
+    expect(out.length).toBe(44 + pcm.length);
+    expect(out.toString('ascii', 0, 4)).toBe('RIFF');
+    expect(out.toString('ascii', 8, 12)).toBe('WAVE');
+    expect(out.readUInt16LE(22)).toBe(1);
+    expect(out.readUInt32LE(24)).toBe(32000);
+    expect(out.readUInt32LE(40)).toBe(pcm.length);
+    expect(secondsOf(out, out.length)).toBeCloseTo(pcm.length / 64000, 5);
   });
 });

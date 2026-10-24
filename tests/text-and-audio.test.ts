@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { INLINE_TAG_MAX, speechText, ttsPlain, ttsSafe } from '../src/speech-text.ts';
+import { INLINE_TAG_MAX, promptLanguageOf, speechText, ttsPlain, ttsSafe } from '../src/speech-text.ts';
 import { parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth.ts';
 import { applyGain, upmix } from '../src/player.ts';
+import { wavBytes } from '../src/wav.ts';
 
 describe('speechText', () => {
   it('drops the bubble markup the pet parses as actions', () => {
@@ -41,6 +42,21 @@ describe('ttsPlain', () => {
   });
 });
 
+// api_v2 的 auto 用 fast_langdetect 逐段识别，"主人，" 会被认成日语，参考端音素跟着错。
+describe('promptLanguageOf', () => {
+  it('keeps short Chinese phrases Chinese', () => {
+    expect(promptLanguageOf('主人，我想你了。')).toBe('zh');
+    expect(promptLanguageOf('我不知道你在说什么。')).toBe('zh');
+  });
+
+  it('recognises Japanese kana and Latin/English references', () => {
+    expect(promptLanguageOf('ティード パラパパパ ニーノ')).toBe('ja');
+    expect(promptLanguageOf('こんにちは、いい天気ですね。')).toBe('ja');
+    expect(promptLanguageOf('Hello there.')).toBe('en');
+    expect(promptLanguageOf('你好 world')).toBe('zh');
+  });
+});
+
 /** 44 字节的单声道 PCM16 头，数据长度字段写 0(流式回应就是这样)。 */
 function header(rate: number): Buffer {
   const h = Buffer.alloc(44);
@@ -75,6 +91,11 @@ describe('ttsBody', () => {
     expect(ttsBody({ ...base, seed: -1 })).not.toHaveProperty('seed');
     expect(ttsBody({ ...base, seed: 42 }).seed).toBe(42);
     expect(ttsBody({ ...base, seed: 0 }).seed).toBe(0);
+  });
+
+  it('sends the configured text and prompt language', () => {
+    expect(ttsBody(base)).toMatchObject({ text_lang: 'auto', prompt_lang: 'auto' });
+    expect(ttsBody({ ...base, textLang: 'zh', promptLang: 'ja' })).toMatchObject({ text_lang: 'zh', prompt_lang: 'ja' });
   });
 });
 

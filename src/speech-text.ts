@@ -45,3 +45,14 @@ export function ttsSafe(text: string): string {
 export function ttsPlain(text: string): string {
   return text.replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
 }
+
+/**
+ * 参考音频台本的语言。api_v2 的 `auto` 用 fast_langdetect 逐段识别，短句（如「主人，」）
+ * 常被认成日语，参考端的音素就跟着变成日语；这里按字符集直接判断，避免这个误判。
+ */
+export function promptLanguageOf(text: string): 'zh' | 'en' | 'ja' | 'ko' {
+  if (/[\u3041-\u3096\u3099\u309a\u30a1-\u30fa\u30fc]/.test(text)) return 'ja';
+  if (/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/.test(text)) return 'ko';
+  if (/[\u3400-\u4dbf\u4e00-\u9fff]/.test(text)) return 'zh';
+  return /[a-z]/i.test(text) ? 'en' : 'zh';
+}

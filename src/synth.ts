@@ -3,6 +3,12 @@
  * 这里只读头里的采样率，按到达顺序吐出偶数字节对齐的 PCM 块。
  */
 
+/** api_v2 支持的合成语言；`auto` 逐段识别，短句容易把中文认成日语。 */
+export type SpeechLang = 'auto' | 'zh' | 'en' | 'ja' | 'ko';
+
+/** 参考音频台本的语言（不支持 `auto`，由调用方先判断好）。 */
+export type PromptLang = Exclude<SpeechLang, 'auto'>;
+
 export interface SynthRequest {
   text: string;
   refAudio: string;
@@ -10,6 +16,10 @@ export interface SynthRequest {
   speed: number;
   /** 采样种子；`-1`(或不填)每次重新采样，`>= 0` 固定。 */
   seed?: number;
+  /** 合成文本的语言，默认 `auto`。 */
+  textLang?: SpeechLang;
+  /** 参考台本的语言，默认 `auto`。 */
+  promptLang?: PromptLang;
 }
 
 export interface PcmChunk {
@@ -91,14 +101,15 @@ export async function switchWeights(baseUrl: string, target: { gpt: string; sovi
 
 /**
  * `/tts` 的请求体。`seed` 只在固定种子(>= 0)时才发，不填时由 api_v2 用它的默认值(-1，每次重新采样)。
+ * `text_lang` 决定合成语言：`auto` 逐段识别，`zh` 则非英文段一律按中文读。
  */
 export function ttsBody(req: SynthRequest): Record<string, unknown> {
   return {
     text: req.text,
-    text_lang: 'auto',
+    text_lang: req.textLang ?? 'auto',
     ref_audio_path: req.refAudio,
     prompt_text: req.refText,
-    prompt_lang: 'auto',
+    prompt_lang: req.promptLang ?? 'auto',
     text_split_method: 'cut5',
     batch_size: 1,
     speed_factor: req.speed,

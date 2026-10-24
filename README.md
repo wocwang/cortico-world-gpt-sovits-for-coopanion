@@ -55,6 +55,9 @@
 | `voice.audio`、`voice.text` | 空 | 自定义参考音频（3–10 秒 WAV）与它的台本；填了就优先于预设音色 |
 | `weights.gpt`、`weights.sovits` | 空 | 自备训练权重：自己训的 s1（`.ckpt`）与 s2（`.pth`），两个都填才生效 |
 | `speed` | 1 | 语速 |
+| `textLang` | `zh` | 合成语言，与界面语言无关：`zh` 中文优先（英文照读）/ `auto` 逐段识别（短句易误判日语）/ `en` / `ja` |
+| `saveAudio` | false | 每句合成完另存一个 WAV，方便交给其他程序（如 QQ 机器人）发送 |
+| `saveDir` | 空 | 语音保存目录，空为插件数据目录下的 `gpt-sovits\out` |
 | `seed` | -1 | 采样种子：`-1` 每次随机（同一句每次听起来都不同）；填 0 或正整数则固定，同一句逐字节一致 |
 | `volume` | 1 | 音量 0–1 |
 | `outputDevice` | 空 | 输出设备名，空为系统默认 |

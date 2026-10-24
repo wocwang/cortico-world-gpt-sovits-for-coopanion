@@ -24,15 +24,15 @@ import { configGroups, GPT_SOVITS_ID, REF_MAX_SECONDS, REF_MIN_SECONDS, type Gpt
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
 import { panelText, stateWords } from './i18n.ts';
 import { isRuntimeDir, RuntimeJob, WeightsJob, type JobState } from './install.ts';
-import { Player } from './player.ts';
+import { Player, applyGain } from './player.ts';
 import { SovitsServer, type ServerState } from './server.ts';
 import { registerCustomVoiceOptions } from './voice-options.ts';
-import { speechText, ttsPlain, ttsSafe } from './speech-text.ts';
-import { synthesize, switchWeights, type SynthRequest } from './synth.ts';
+import { promptLanguageOf, speechText, ttsPlain, ttsSafe } from './speech-text.ts';
+import { synthesize, switchWeights, type SpeechLang, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { DEFAULT_PRESET, isPreset, type VoicePreset } from './voices.ts';
 import { installedBaseWeights, resolveTrained, type TrainedResult, type TrainedWeights } from './weights.ts';
-import { readSeconds } from './wav.ts';
+import { readSeconds, wavBytes } from './wav.ts';
 
 const ENV_PROMPT_FILES = {
   zh: fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url)),
@@ -48,8 +48,12 @@ const presetFiles = (id: VoicePreset): { audio: string; text: string } => ({
   text: fileURLToPath(new URL(`../assets/voices/${id}.txt`, import.meta.url)),
 });
 
-/** 预热的三句：中、英、日的文本前端各在首次使用时加载。 */
-const WARMUP = ['你好。', 'Hello.', 'こんにちは。'];
+/** 预热的三句：中、英、日的文本前端各在首次使用时加载。语言写死，不跟着用户的「语音语言」走。 */
+const WARMUP: Array<{ text: string; lang: Exclude<SpeechLang, 'auto'> }> = [
+  { text: '你好。', lang: 'zh' },
+  { text: 'Hello.', lang: 'en' },
+  { text: 'こんにちは。', lang: 'ja' },
+];
 
 /** `sovits_speak` 等第一块音频的上限;超时照常返回，声音晚到。 */
 const SPEAK_WAIT_MAX_MS = 3000;
@@ -390,14 +394,34 @@ export class GptSovitsWorld implements World {
     url: string, voice: { audio: string; text: string }, text: string,
     signal: AbortSignal, onFirst: () => void,
   ): Promise<number> {
-    const gain = OUTPUT_GAIN[this.version()];
+    const gain = this.backend().kind === 'remote' ? 1 : OUTPUT_GAIN[this.version()];
+    // 落盘的内容与听到的一致（同一增益）；关掉保存时不占内存。
+    const archive = this.cfg.saveAudio ? { rate: 0, chunks: [] as Buffer[] } : null;
     let first = 0;
     for await (const c of synthesize(url, this.request(text, voice), signal)) {
-      await this.player.write(c.sampleRate, c.pcm, this.backend().kind === 'remote' ? 1 : gain);
+      if (archive) { archive.rate = c.sampleRate; archive.chunks.push(applyGain(c.pcm, gain)); }
+      await this.player.write(c.sampleRate, c.pcm, gain);
       if (!first) { first = Date.now(); onFirst(); }
     }
     this.player.flush();
+    if (archive?.chunks.length) this.saveLine(Buffer.concat(archive.chunks), archive.rate);
     return first;
+  }
+
+  /** 把这一句的 PCM 另存为 WAV；保存失败只记日志，不影响播放。 */
+  private saveLine(pcm: Buffer, sampleRate: number): void {
+    try {
+      const dir = this.cfg.saveDir.trim() || join(this.opts.dataDir, 'out');
+      mkdirSync(dir, { recursive: true });
+      const d = new Date();
+      const pad = (n: number, width = 2): string => String(n).padStart(width, '0');
+      const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}-${pad(d.getMilliseconds(), 3)}`;
+      const file = join(dir, `line-${stamp}.wav`);
+      writeFileSync(file, wavBytes(pcm, sampleRate));
+      this.log.info('GPT-SoVITS 语音已保存', { file });
+    } catch (err) {
+      this.log.warn('GPT-SoVITS 语音保存失败', { err: String(err) });
+    }
   }
 
   /** 逐句合成并写进播放器;一句合成完就开始下一句，播放器按顺序播。 */
@@ -453,9 +477,12 @@ export class GptSovitsWorld implements World {
     }
   }
 
-  /** 合成一句要用的请求参数。 */
-  private request(text: string, voice: { audio: string; text: string }): SynthRequest {
-    return { text, refAudio: voice.audio, refText: voice.text, speed: this.cfg.speed, seed: this.cfg.seed };
+  /** 合成一句要用的请求参数；预热时可指定语言。 */
+  private request(text: string, voice: { audio: string; text: string }, textLang: SpeechLang = this.cfg.textLang): SynthRequest {
+    return {
+      text, refAudio: voice.audio, refText: voice.text, speed: this.cfg.speed, seed: this.cfg.seed,
+      textLang, promptLang: promptLanguageOf(voice.text),
+    };
   }
 
   async start(host: WorldHost): Promise<void> {
@@ -534,8 +561,8 @@ export class GptSovitsWorld implements World {
     if (!voice) { this.warmed = true; return; }
     this.warming = true;
     try {
-      for (const text of WARMUP) {
-        for await (const _ of synthesize(st.url, this.request(text, voice))) { /* 只为加载，丢掉音频 */ }
+      for (const item of WARMUP) {
+        for await (const _ of synthesize(st.url, this.request(item.text, voice, item.lang))) { /* 只为加载，丢掉音频 */ }
       }
     } catch (err) {
       this.log.warn('GPT-SoVITS 预热失败', { err: String(err) });
