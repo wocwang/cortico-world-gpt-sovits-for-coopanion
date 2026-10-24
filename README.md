@@ -83,6 +83,15 @@
 > 采样种子选项、自备训练权重入口与随包默认音色，改动见 [CHANGELOG.md](CHANGELOG.md)。
 > 原包名仍由原作者在 npm 上维护，本 fork 发布为 `@wocwang/cortico-world-gpt-sovits-for-coopanion`。
 
+### 检测运行中的参考切换
+
+```powershell
+pnpm check:refs           # 查当前语音语言、参考音频、台本与时长是否对得上
+pnpm check:refs -- --tts  # 再向正在跑的 api_v2 发一句测试（只写临时 WAV，不播放）
+```
+
+默认读 `D:\Program Files\Coopanion\data\home\companion\config.json`；换部署时加 `--config <路径>`。
+
 Owner: `src/world.ts`
 
 ### 两档

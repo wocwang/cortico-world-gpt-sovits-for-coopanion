@@ -70,6 +70,7 @@
   ],
   "scripts": {
     "build": "node scripts/build-webui.mjs",
+    "check:refs": "node --import tsx scripts/check-live-refs.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build && npm test && npm run typecheck"
