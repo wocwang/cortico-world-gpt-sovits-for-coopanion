@@ -273,10 +273,10 @@ export class GptSovitsWorld implements World {
       }
       return;
     }
-    // 选着自定义音色且字段被改过：写回该音色。
+    // 选着自定义音色且字段被改过：写回该音色（名称只在「音色」面板里改，这里忽略 voice.name）。
     const gpt = this.cfg.weights.gpt.trim(), sovits = this.cfg.weights.sovits.trim();
     const weights = gpt && sovits ? { gpt, sovits } : emptyWeights();
-    const name = (v.name ?? '').trim() || UNNAMED_VOICE;
+    const name = custom.name;
     const audio = v.audio?.trim() ?? custom.audio;
     const text = v.text?.trim() ?? custom.text;
     const changed = name !== custom.name || audio !== custom.audio || text !== custom.text

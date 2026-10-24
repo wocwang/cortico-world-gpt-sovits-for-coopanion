@@ -82,7 +82,6 @@ const TEXT = {
   zh: {
     title: 'GPTSovits 语音',
     preset: { title: '音色', description: '预设或已保存的音色（音色名后 ✓ 表示已配置完整）。添加、改名、换音频/权重都在「音色」页里做。' },
-    name: { title: '音色名称', description: '仅自定义音色使用；改名在「音色」页里做。' },
     audio: { title: '参考音频', description: '3–10 秒的 WAV。这里是当前音色的参考音频，与「音色」页同步。' },
     text: { title: '参考音频的台本', description: '参考音频里说的话，要逐字一致。' },
     gptWeights: { title: '自备 GPT 权重', description: '自己训的 s1 权重(.ckpt)。与下面的 SoVITS 权重一起填才生效；都留空就用内置底模。选自定义音色时，这里改的是该音色自带的权重。' },
@@ -100,7 +99,6 @@ const TEXT = {
   en: {
     title: 'GPTSovits Voice',
     preset: { title: 'Voice', description: 'A preset or a saved voice (a ✓ after the name means fully configured). Add, rename and edit voices on the "Voices" page.' },
-    name: { title: 'Voice name', description: 'Custom voices only; rename it on the "Voices" page.' },
     audio: { title: 'Reference audio', description: 'A 3–10 second WAV. The reference audio of the current voice, kept in sync with the "Voices" page.' },
     text: { title: 'Reference transcript', description: 'The exact words spoken in the reference audio.' },
     gptWeights: { title: 'Own GPT weights', description: 'Your own trained s1 weights (.ckpt). Takes effect together with the SoVITS weights below; leave both empty to use the bundled base model. For a custom voice these are the voice’s own weights.' },
@@ -137,7 +135,6 @@ export function configGroups(language: Language): ConfigGroup[] {
       title: t.title,
       properties: {
         [`${K}.voice.preset`]: { type: 'string', title: t.preset.title, description: t.preset.description, 'x-options': VOICE_OPTIONS, 'x-hot': true },
-        [`${K}.voice.name`]: { type: 'string', title: t.name.title, description: t.name.description, 'x-hot': true },
         [`${K}.voice.audio`]: { type: 'string', title: t.audio.title, description: t.audio.description, 'x-path': { kind: 'file', extensions: ['.wav'] }, 'x-hot': true },
         [`${K}.voice.text`]: { type: 'string', title: t.text.title, description: t.text.description, 'x-hot': true },
         [`${K}.weights.gpt`]: { type: 'string', title: t.gptWeights.title, description: t.gptWeights.description, 'x-path': { kind: 'file', extensions: ['.ckpt'] }, 'x-hot': true },
