@@ -32,7 +32,7 @@ Owner: `src/world.ts`
 
 | id | 名称 | 来源 |
 |---|---|---|
-| `dfy` | 大肥鱼(日语) | **默认**。5.16 秒日语参考，参考文字 `ティード パラパパパ ニーノ ナラナナナ ピンドン`，随包在 `assets/voices/dfy.wav` / `dfy.txt`。该参考只做了滤波：高通 80 Hz + 工频陷波，未做谱减（保留气声，不发闷） |
+| `dfy` | 大肥鱼(日语) | **默认**。5.16 秒日语参考（AI 合成人声，非真人录音，来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)），参考文字 `ティード パラパパパ ニーノ ナラナナナ ピンドン`，随包在 `assets/voices/dfy.wav` / `dfy.txt`。该参考只做了滤波：高通 80 Hz + 工频陷波，未做谱减（保留气声，不发闷） |
 | `female` | 女声 | [MOSS-VoiceGenerator](https://huggingface.co/OpenMOSS-Team/MOSS-VoiceGenerator) 按文字描述生成 |
 | `male` | 男声 | 同上 |
 
