@@ -40,6 +40,9 @@ const ENV_PROMPT_FILES = {
 };
 
 
+/** 包内预设参考音频的路径特征：`assets/voices/<id>.wav`。 */
+const PRESET_PATH = /[\\/]assets[\\/]voices[\\/][a-z]+\.wav$/i;
+
 const presetFiles = (id: VoicePreset): { audio: string; text: string } => ({
   audio: fileURLToPath(new URL(`../assets/voices/${id}.wav`, import.meta.url)),
   text: fileURLToPath(new URL(`../assets/voices/${id}.txt`, import.meta.url)),
@@ -255,9 +258,14 @@ export class GptSovitsWorld implements World {
       return;
     }
     if (!custom) {
-      // 切回预设：只有镜像过来的音频才清（属于某个音色的），用户手填的不动。
-      if (isPreset(p) && switched && v.audio && voices.some((x) => x.audio === v.audio)) {
-        this.opts.persist({ voice: { preset: p, name: '', audio: '', text: '' } });
+      if (!isPreset(p)) return;
+      // 预设音色：把包内的参考音频与台本镜像进字段，用户看得见当前用的是什么文件。
+      const f = presetFiles(p);
+      if (!existsSync(f.audio) || !existsSync(f.text)) return;
+      const text = readText(f.text);
+      const mirrored = !v.audio || PRESET_PATH.test(v.audio) || voices.some((x) => x.audio === v.audio);
+      if ((switched || mirrored) && (v.audio !== f.audio || v.text !== text)) {
+        this.opts.persist({ voice: { preset: p, name: '', audio: f.audio, text } });
       }
       return;
     }
@@ -309,8 +317,8 @@ export class GptSovitsWorld implements World {
       this.voiceIssue = '新建音色还差参数：在配置里选参考音频、填台本（名称可留空），填齐就自动保存。';
       return null;
     }
-    if (v.audio && existsSync(v.audio)) {
-      // 手填的参考音频（不属于任何音色）也照旧生效，兼容老配置。
+    if (v.audio && existsSync(v.audio) && !PRESET_PATH.test(v.audio)) {
+      // 手填的参考音频（不属于任何音色、也不是预设镜像）也照旧生效，兼容老配置。
       this.voiceIssue = referenceIssue(v.audio);
       return this.voiceIssue ? null : { audio: v.audio, text: v.text, preset: null };
     }
@@ -457,6 +465,8 @@ export class GptSovitsWorld implements World {
     this.weightsFailed = '';
     this.launching = this.cfg.autoStart && this.backend().kind !== 'remote';
     this.cuda = await detectCuda();
+    // 启动即把当前音色的音频/台本镜像进配置字段：配置页一打开就能看到实际用的文件。
+    this.settlePreset();
     if (this.launching && this.canStart()) void this.startServer().finally(() => { this.launching = false; });
     else this.launching = false;
   }
