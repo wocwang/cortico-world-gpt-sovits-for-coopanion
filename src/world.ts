@@ -21,7 +21,7 @@ import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
 import { OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
 import { configGroups, GPT_SOVITS_ID, REF_MAX_SECONDS, REF_MIN_SECONDS, type GptSovitsConfigSection, type Tier } from './config.ts';
-import { effectiveWeights, emptyWeights, newCustomVoiceId, selectedCustomVoice, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
+import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
 import { panelText, stateWords } from './i18n.ts';
 import { isRuntimeDir, RuntimeJob, WeightsJob, type JobState } from './install.ts';
 import { Player } from './player.ts';
@@ -204,24 +204,57 @@ export class GptSovitsWorld implements World {
   }
 
   /**
+   * 配置页下拉里选中「＋ 新建音色…」（哨兵值）时建一个未命名音色并切过去;
+   * 选中自定义音色时把它的音频与台本镜像进 `voice.audio/text`,让配置页那几个字段直接显示出路径;
+   * 从自定义音色切回预设时，把镜像值清掉（用户手填的路径不动）。
+   * 在 `voice()` 与 `panelState()` 开头调用，两种入口（配置页下拉 / 语音页）都会收敛到一致状态。
+   */
+  private settlePreset(): void {
+    const p = this.cfg.voice.preset;
+    const voices = this.cfg.voices ?? [];
+    if (p === NEW_VOICE_PRESET) {
+      const voice: CustomVoice = { id: newCustomVoiceId(), name: UNNAMED_VOICE, audio: '', text: '', weights: emptyWeights() };
+      this.log.info('从下拉新建了一个未命名音色', { id: voice.id });
+      this.opts.persist({ voices: [...voices, voice], voice: { preset: voice.id, audio: '', text: '' } });
+      return;
+    }
+    const custom = selectedCustomVoice(voices, p);
+    if (custom) {
+      if (this.cfg.voice.audio !== custom.audio || this.cfg.voice.text !== custom.text) {
+        this.opts.persist({ voice: { preset: custom.id, audio: custom.audio, text: custom.text } });
+      }
+      return;
+    }
+    if (isPreset(p) && this.cfg.voice.audio && voices.some((v) => v.audio === this.cfg.voice.audio)) {
+      this.opts.persist({ voice: { preset: p, audio: '', text: '' } });
+    }
+  }
+
+  /**
    * 自定义参考音频优先，其次是选中的音色（自定义音色或预设）。
    * 音频先量时长：超出 3–10 秒时 api_v2 只回 400、不说原因，这里替它说明。
    */
   private voice(): { audio: string; text: string; preset: string | null } | null {
+    this.settlePreset();
     const v = this.cfg.voice;
     if (v.audio && existsSync(v.audio)) {
       this.voiceIssue = referenceIssue(v.audio);
-      return this.voiceIssue ? null : { audio: v.audio, text: v.text, preset: null };
+      return this.voiceIssue ? null : { audio: v.audio, text: v.text, preset: selectedCustomVoice(this.cfg.voices ?? [], v.preset)?.id ?? null };
     }
     this.voiceIssue = null;
-    // 选中的是自定义音色：音频与台本必须都在（添加时已保证;文件被手删时回落预设）。
     const custom = selectedCustomVoice(this.cfg.voices ?? [], v.preset);
     if (custom) {
-      if (existsSync(custom.audio)) {
-        this.voiceIssue = referenceIssue(custom.audio);
-        return this.voiceIssue ? null : { audio: custom.audio, text: custom.text, preset: custom.id };
+      // 新建的音色还没配参考音频：明确说原因，不回落到预设（否则用户以为新音色生效了）。
+      if (!custom.audio) {
+        this.voiceIssue = '这个自定义音色还没有参考音频，在语音页的「自定义音色」里点编辑补上';
+        return null;
       }
-      this.log.warn('自定义音色的参考音频不见了，回落到默认音色', { id: custom.id, audio: custom.audio });
+      if (!existsSync(custom.audio)) {
+        this.voiceIssue = `这个自定义音色的参考音频不见了：${custom.audio}`;
+        return null;
+      }
+      this.voiceIssue = referenceIssue(custom.audio);
+      return this.voiceIssue ? null : { audio: custom.audio, text: custom.text, preset: custom.id };
     }
     const id = isPreset(v.preset) ? v.preset : DEFAULT_PRESET;
     const f = presetFiles(id);
@@ -497,11 +530,53 @@ export class GptSovitsWorld implements World {
       const file = join(this.opts.dataDir, 'voices', `${id}.wav`);
       writeFileSync(file, bytes);
       const voice: CustomVoice = { id, name: name.trim(), audio: file, text: text.trim(), weights: weights.gpt ? weights : emptyWeights() };
-      this.opts.persist({ voices: [...(this.cfg.voices ?? []), voice], voice: { preset: id, audio: '', text: '' } });
+      this.opts.persist({ voices: [...(this.cfg.voices ?? []), voice], voice: { preset: id, audio: file, text: voice.text } });
       this.log.info('已添加自定义音色', { id, name: voice.name, withWeights: !!weights.gpt });
       return this.panelState();
     } finally {
       if (bytes.length) rmSync(tmp, { force: true });
+    }
+  }
+
+  /**
+   * 编辑已有音色：名称、台本、权重可以直接改，参考音频不选就保留原来的;
+   * 原本没有参考音频（从下拉新建的未命名音色）时必须补上。
+   */
+  private updateCustomVoice(args: unknown[]): PanelState {
+    const [id, name, audioB64, text, gpt, sovits] = args.map((a) => String(a ?? ''));
+    const voices = this.cfg.voices ?? [];
+    const target = voices.find((v) => v.id === id);
+    if (!target) throw new Error('找不到这个自定义音色。');
+    const bytes = Buffer.from(audioB64, 'base64');
+    if (bytes.length > VOICE_MAX_BYTES) throw new Error(`参考音频超过 ${VOICE_MAX_BYTES / 1048576} MB`);
+    if (bytes.length && (bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.toString('ascii', 8, 12) !== 'WAVE')) {
+      throw new Error('参考音频要是 WAV 文件。');
+    }
+    const probe = join(this.opts.dataDir, 'voices', `~probe-${process.pid}.wav`);
+    mkdirSync(join(this.opts.dataDir, 'voices'), { recursive: true });
+    if (bytes.length) writeFileSync(probe, bytes);
+    try {
+      const seconds = bytes.length ? readSeconds(probe) : target.audio ? readSeconds(target.audio) : null;
+      const problems = validateCustomVoice({ name: name || target.name, text, gpt, sovits, seconds });
+      if (!bytes.length && !target.audio) problems.unshift('请选择参考音频文件（3–10 秒的 WAV）。');
+      if (problems.length) throw new Error(problems.join(' '));
+      const weights = { gpt: gpt.trim(), sovits: sovits.trim() };
+      if (weights.gpt) {
+        const result = resolveTrained(weights, this.version());
+        if (result.problem || !result.weights) throw new Error(`权重用不上：${result.problem}`);
+      }
+      const audio = bytes.length ? (writeFileSync(join(this.opts.dataDir, 'voices', `${id}.wav`), bytes), join(this.opts.dataDir, 'voices', `${id}.wav`)) : target.audio;
+      const updated: CustomVoice = { id, name: (name || target.name).trim(), audio, text: text.trim(), weights: weights.gpt ? weights : emptyWeights() };
+      const next = voices.map((v) => (v.id === id ? updated : v));
+      const selected = this.cfg.voice.preset === id;
+      this.opts.persist({
+        voices: next,
+        ...(selected ? { voice: { preset: id, audio: updated.audio, text: updated.text } } : {}),
+      });
+      this.log.info('已更新自定义音色', { id, name: updated.name, newAudio: !!bytes.length, withWeights: !!weights.gpt });
+      return this.panelState();
+    } finally {
+      if (bytes.length) rmSync(probe, { force: true });
     }
   }
 
@@ -510,9 +585,8 @@ export class GptSovitsWorld implements World {
     const target = voices.find((v) => v.id === id);
     if (!target) return;
     this.opts.persist({ voices: voices.filter((v) => v.id !== id), ...(this.cfg.voice.preset === id ? { voice: { preset: DEFAULT_PRESET, audio: '', text: '' } } : {}) });
-    rmSync(target.audio, { force: true });
+    if (target.audio) rmSync(target.audio, { force: true });
   }
-
   // ---------------------------------------------------------------- WebUI
 
   webUi(language: Language = 'zh'): WorldWebUiDecl {
@@ -558,6 +632,7 @@ export class GptSovitsWorld implements World {
       case 'setVoice': this.saveVoice(String(args[0] ?? ''), String(args[1] ?? ''), String(args[2] ?? '')); return this.panelState();
       case 'resetVoice': this.opts.persist({ voice: { preset: DEFAULT_PRESET, audio: '', text: '' } }); return this.panelState();
       case 'addVoice': return this.addCustomVoice(args);
+      case 'updateVoice': return this.updateCustomVoice(args);
       case 'renameVoice': {
         const [id, name] = [String(args[0] ?? ''), String(args[1] ?? '')];
         if (!name.trim()) throw new Error('音色名称不能为空。');
@@ -571,7 +646,8 @@ export class GptSovitsWorld implements World {
       case 'useVoice': {
         const id = String(args[0] ?? '');
         if (id && !selectedCustomVoice(this.cfg.voices ?? [], id)) throw new Error('找不到这个自定义音色。');
-        this.opts.persist({ voice: { preset: id || DEFAULT_PRESET, audio: '', text: '' } });
+        const cv = id ? selectedCustomVoice(this.cfg.voices ?? [], id) : null;
+        this.opts.persist({ voice: { preset: id || DEFAULT_PRESET, audio: cv?.audio ?? '', text: cv?.text ?? '' } });
         return this.panelState();
       }
       default: throw new Error(`未知方法 ${method}`);
@@ -579,6 +655,7 @@ export class GptSovitsWorld implements World {
   }
 
   panelState(): PanelState {
+    this.settlePreset();
     const b = this.backend();
     const voice = this.voice();
     return {

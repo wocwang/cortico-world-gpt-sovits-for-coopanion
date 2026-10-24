@@ -1,6 +1,6 @@
 {
   "name": "@wocwang/cortico-world-gpt-sovits-for-coopanion",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "description": "Cortico World for Coopanion: speaks the pet's lines aloud with GPT-SoVITS (V5 on NVIDIA GPUs, a CPU tier otherwise), installing a portable runtime and weights in one click",
   "author": "wocwang",
@@ -38,6 +38,16 @@
     "kind": "world",
     "api": 6,
     "displayName": "更好的GPTSovits 语音—大肥鱼来咯",
+    "locales": {
+      "zh": {
+        "displayName": "更好的GPTSovits 语音—大肥鱼来咯",
+        "description": "给桌宠配上真实的 GPT-SoVITS 语音：全程在本机合成，从声卡出声，不上传任何录音。一键安装运行时与模型，装好即用；支持预设音色、自定义音色（参考音频+台本+可选自备权重）。"
+      },
+      "en": {
+        "displayName": "Better GPTSovits Voice — Fatfish",
+        "description": "Gives the desktop pet a real GPT-SoVITS voice: synthesized on your own machine, nothing uploaded. One-click runtime and weights, works out of the box; presets plus custom voices (reference audio + transcript + optional own weights)."
+      }
+    },
     "tags": [
       "voice",
       "local",

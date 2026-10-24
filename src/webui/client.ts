@@ -103,26 +103,46 @@ const voicePanel: WebUiPanel = {
     );
     custom.append(cvHint, cvList, cvAddBtn, cvForm);
 
-    const showForm = (on: boolean): void => {
+    const showForm = (on: boolean, editing: PanelState['voices'][number] | null = null): void => {
       cvForm.hidden = !on;
       cvAddBtn.hidden = on;
-      if (on) msg.textContent = t.requiredHint;
-      else { msg.textContent = ''; cvName.value = ''; cvAudio.value = ''; cvText.value = ''; cvGpt.value = ''; cvSovits.value = ''; }
+      if (on) {
+        editingId = editing?.id ?? null;
+        cvName.value = editing?.name ?? '';
+        cvAudio.value = '';
+        cvText.value = editing?.text ?? '';
+        cvGpt.value = editing?.weights.gpt ?? '';
+        cvSovits.value = editing?.weights.sovits ?? '';
+        cvConfirm.textContent = editing ? t.saveVoice : t.confirmAdd;
+        msg.textContent = editing && !editing.audio ? t.requiredHint : t.requiredHint;
+      } else {
+        editingId = null;
+        msg.textContent = '';
+        cvName.value = ''; cvAudio.value = ''; cvText.value = ''; cvGpt.value = ''; cvSovits.value = '';
+      }
     };
+    let editingId: string | null = null;
 
     async function addCustomVoice(): Promise<void> {
       const f = cvAudio.files?.[0];
+      const editing = !!editingId;
       // 必填项缺一不可：音频与台本；权重成对或都不填。缺了就地提示，不发请求。
+      // 编辑已有音色时音频可以不重选（保留原来的）。
       const pairFilled = !!cvGpt.value.trim() === !!cvSovits.value.trim();
-      if (!f || !cvText.value.trim() || !pairFilled) {
+      if ((!f && !editing) || !cvText.value.trim() || !pairFilled) {
         msg.textContent = t.incomplete;
         msg.classList.add('bad');
         return;
       }
-      const buf = new Uint8Array(await f.arrayBuffer());
-      let bin = '';
-      for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-      await call('addVoice', [cvName.value, f.name, btoa(bin), cvText.value, cvGpt.value.trim(), cvSovits.value.trim()]);
+      let b64 = '';
+      if (f) {
+        const buf = new Uint8Array(await f.arrayBuffer());
+        let bin = '';
+        for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+        b64 = btoa(bin);
+      }
+      if (editing) await call('updateVoice', [editingId, cvName.value, b64, cvText.value, cvGpt.value.trim(), cvSovits.value.trim()]);
+      else await call('addVoice', [cvName.value, f!.name, b64, cvText.value, cvGpt.value.trim(), cvSovits.value.trim()]);
       showForm(false);
     }
 
@@ -132,15 +152,17 @@ const voicePanel: WebUiPanel = {
         const line = ui.h('div', 'gsv-row');
         const name = ui.h('span', 'gsv-name', v.name);
         const pill = ui.h('span', 'gsv-pill');
-        const detail = ui.h('span', 'gsv-detail', `${baseName(v.audio)} · ${v.text.slice(0, 24)}${v.weights.gpt ? ' · 自备权重' : ''}`);
+        const detail = ui.h('span', 'gsv-detail', `${v.audio ? baseName(v.audio) : t.noVoice} · ${v.text.slice(0, 24) || t.voiceText}${v.weights.gpt ? ' · 自备权重' : ''}`);
         const acts = ui.h('span', 'gsv-acts');
         line.append(name, pill, detail, acts);
         cvList.append(line);
         setPill(pill, v.selected ? t.using : '', v.selected ? 'on' : 'off');
         if (!v.selected) acts.append(ui.button(t.use, { size: 'sm', onClick: () => void call('useVoice', [v.id]) }));
-        const del = ui.button(t.remove, { size: 'sm', onClick: () => void call('removeVoice', [v.id]) });
-        const rename = ui.button(t.rename, { size: 'sm', onClick: () => beginRename(v, name) });
-        acts.append(rename, del);
+        acts.append(
+          ui.button(t.rename, { size: 'sm', onClick: () => beginRename(v, name) }),
+          ui.button(t.edit, { size: 'sm', onClick: () => showForm(true, v) }),
+          ui.button(t.remove, { size: 'sm', onClick: () => void call('removeVoice', [v.id]) }),
+        );
       }
     }
 

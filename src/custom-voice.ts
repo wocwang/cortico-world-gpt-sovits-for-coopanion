@@ -15,6 +15,12 @@ export interface CustomVoice {
 
 export const emptyWeights = (): CustomVoice['weights'] => ({ gpt: '', sovits: '' });
 
+/** 音色下拉里的「＋ 新建音色…」哨兵值;选中它就建一个未命名音色并切过去。 */
+export const NEW_VOICE_PRESET = '__new__';
+
+/** 新建出来的音色默认名，用户可在语音页改名。 */
+export const UNNAMED_VOICE = '未命名音色';
+
 export const newCustomVoiceId = (): string => `cv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
 /** 添加时的校验;返回中文错误列表,空数组 = 通过。`seconds` 量不出时长时为 null(交给服务端判断)。 */
