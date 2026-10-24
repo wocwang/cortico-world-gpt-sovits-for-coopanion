@@ -1,10 +1,10 @@
 /**
- * 「语音」面板：推理档、运行时、权重、推理服务四行状态与操作，音色(参考音频与文字)，试听。
+ * 「语音」面板：推理档、运行时、权重、推理服务四行状态与操作，以及试听。
+ * 音色的添加/改名/切换都在配置页（配置字段就是音色参数），这里不再放音色控件。
  * 数据经 `ctx.invoke` 走 World 的 `invoke('voice', …)`,每秒轮询一次状态。
  */
 import type { WebUiClientBundle, WebUiPanel, WebUiPanelContext } from 'cortico/web/shared/client-panel.ts';
 import { panelText } from '../i18n.ts';
-import { isPreset, presetLabel } from '../voices.ts';
 import type { PanelState } from '../world.ts';
 import './style.css';
 
@@ -55,133 +55,6 @@ const voicePanel: WebUiPanel = {
     const output = ui.h('pre', 'gsv-output');
     status.append(output);
 
-    // ---- 音色
-    const voice = ui.section(t.voice, t.voiceHint);
-    const current = ui.h('div', 'gsv-voice-current');
-    const file = ui.input({});
-    file.type = 'file';
-    file.accept = '.wav,audio/wav';
-    const text = ui.textarea({});
-    text.rows = 2;
-    const save = ui.button(t.saveVoice, { size: 'sm', onClick: () => void saveVoice() });
-    const reset = ui.button(t.usePreset, { size: 'sm', onClick: () => void call('resetVoice') });
-    const voiceActs = ui.actions();
-    voiceActs.append(save, reset);
-    voice.append(current, ui.field(t.pickVoice, file), ui.field(t.voiceText, text), voiceActs);
-
-    async function saveVoice() {
-      const f = file.files?.[0];
-      if (!f) { msg.textContent = t.pickVoice; return; }
-      const buf = new Uint8Array(await f.arrayBuffer());
-      let bin = '';
-      for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-      await call('setVoice', [f.name, btoa(bin), text.value]);
-    }
-
-    // ---- 自定义音色
-    const custom = ui.section(t.customVoices, t.customVoicesHint);
-    const cvHint = ui.h('div', 'gsv-detail', t.requiredHint);
-    const cvList = ui.h('div');
-    const cvForm = ui.h('div');
-    cvForm.hidden = true;
-    const cvName = ui.input({ placeholder: t.voiceNamePh });
-    const cvAudio = ui.input({});
-    cvAudio.type = 'file';
-    cvAudio.accept = '.wav,audio/wav';
-    const cvText = ui.textarea({});
-    cvText.rows = 2;
-    const cvGpt = ui.input({ placeholder: t.gptWeightOpt });
-    const cvSovits = ui.input({ placeholder: t.sovitsWeightOpt });
-    const cvConfirm = ui.button(t.confirmAdd, { variant: 'primary', size: 'sm', onClick: () => void addCustomVoice() });
-    const cvCancel = ui.button(t.cancelAdd, { size: 'sm', onClick: () => showForm(false) });
-    const cvActs = ui.actions();
-    cvActs.append(cvConfirm, cvCancel);
-    const cvAddBtn = ui.button(t.addVoice, { variant: 'primary', size: 'sm', onClick: () => showForm(true) });
-    cvForm.append(
-      ui.field(t.voiceName, cvName), ui.field(t.voiceAudio, cvAudio), ui.field(t.voiceTextRequired, cvText),
-      ui.field(t.gptWeightOpt, cvGpt), ui.field(t.sovitsWeightOpt, cvSovits), cvActs,
-    );
-    custom.append(cvHint, cvList, cvAddBtn, cvForm);
-
-    const showForm = (on: boolean, editing: PanelState['voices'][number] | null = null): void => {
-      cvForm.hidden = !on;
-      cvAddBtn.hidden = on;
-      if (on) {
-        editingId = editing?.id ?? null;
-        cvName.value = editing?.name ?? '';
-        cvAudio.value = '';
-        cvText.value = editing?.text ?? '';
-        cvGpt.value = editing?.weights.gpt ?? '';
-        cvSovits.value = editing?.weights.sovits ?? '';
-        cvConfirm.textContent = editing ? t.saveVoice : t.confirmAdd;
-        msg.textContent = editing && !editing.audio ? t.requiredHint : t.requiredHint;
-      } else {
-        editingId = null;
-        msg.textContent = '';
-        cvName.value = ''; cvAudio.value = ''; cvText.value = ''; cvGpt.value = ''; cvSovits.value = '';
-      }
-    };
-    let editingId: string | null = null;
-
-    async function addCustomVoice(): Promise<void> {
-      const f = cvAudio.files?.[0];
-      const editing = !!editingId;
-      // 必填项缺一不可：音频与台本；权重成对或都不填。缺了就地提示，不发请求。
-      // 编辑已有音色时音频可以不重选（保留原来的）。
-      const pairFilled = !!cvGpt.value.trim() === !!cvSovits.value.trim();
-      if ((!f && !editing) || !cvText.value.trim() || !pairFilled) {
-        msg.textContent = t.incomplete;
-        msg.classList.add('bad');
-        return;
-      }
-      let b64 = '';
-      if (f) {
-        const buf = new Uint8Array(await f.arrayBuffer());
-        let bin = '';
-        for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-        b64 = btoa(bin);
-      }
-      if (editing) await call('updateVoice', [editingId, cvName.value, b64, cvText.value, cvGpt.value.trim(), cvSovits.value.trim()]);
-      else await call('addVoice', [cvName.value, f!.name, b64, cvText.value, cvGpt.value.trim(), cvSovits.value.trim()]);
-      showForm(false);
-    }
-
-    function renderCustomList(s: PanelState): void {
-      cvList.textContent = '';
-      for (const v of s.voices ?? []) {
-        const line = ui.h('div', 'gsv-row');
-        const name = ui.h('span', 'gsv-name', v.name);
-        const pill = ui.h('span', 'gsv-pill');
-        const detail = ui.h('span', 'gsv-detail', `${v.audio ? baseName(v.audio) : t.noVoice} · ${v.text.slice(0, 24) || t.voiceText}${v.weights.gpt ? ' · 自备权重' : ''}`);
-        const acts = ui.h('span', 'gsv-acts');
-        line.append(name, pill, detail, acts);
-        cvList.append(line);
-        setPill(pill, v.selected ? t.using : '', v.selected ? 'on' : 'off');
-        if (!v.selected) acts.append(ui.button(t.use, { size: 'sm', onClick: () => void call('useVoice', [v.id]) }));
-        acts.append(
-          ui.button(t.rename, { size: 'sm', onClick: () => beginRename(v, name) }),
-          ui.button(t.edit, { size: 'sm', onClick: () => showForm(true, v) }),
-          ui.button(t.remove, { size: 'sm', onClick: () => void call('removeVoice', [v.id]) }),
-        );
-      }
-    }
-
-    function beginRename(v: PanelState['voices'][number], cell: HTMLElement): void {
-      const input = ui.input({});
-      input.value = v.name;
-      input.placeholder = t.renamePh;
-      cell.replaceChildren(input);
-      input.focus();
-      input.select();
-      const commit = (): void => {
-        const next = input.value.trim();
-        if (next && next !== v.name) void call('renameVoice', [v.id, next]);
-        else cell.textContent = v.name;
-      };
-      input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') commit(); });
-      input.addEventListener('blur', commit);
-    }
-
     // ---- 试听
     const test = ui.section(t.test);
     const line = ui.input({});
@@ -194,7 +67,7 @@ const voicePanel: WebUiPanel = {
     const queue = ui.h('span', 'gsv-detail');
     test.append(line, testActs, queue);
 
-    ctx.root.append(status, voice, custom, test, msg);
+    ctx.root.append(status, test, msg);
 
     const setPill = (el: HTMLElement, label: string, tone: 'on' | 'off' | 'warn' | 'bad') => {
       el.textContent = label;
@@ -242,16 +115,8 @@ const voicePanel: WebUiPanel = {
       restartBtn.hidden = stopBtn.hidden = sv.phase === 'stopped';
       output.textContent = sv.phase === 'error' || sv.phase === 'starting' ? s.output.join('\n') : '';
       output.hidden = !output.textContent;
-      // 音色与队列
-      const cv = (s.voices ?? []).find((x) => x.id === s.voice?.preset);
-      current.textContent = !s.voice ? t.noVoice
-        : cv ? `${t.customVoices}:${cv.name}`
-          : s.voice.preset && isPreset(s.voice.preset) ? `${t.preset}:${presetLabel(s.voice.preset, ctx.language)}`
-            : `${s.voice.audio}${s.voice.text ? ` · ${s.voice.text}` : ''}`;
-      reset.hidden = !s.voice || !!s.voice.preset;
-      if (document.activeElement !== text && s.voice && !s.voice.preset && !text.value) text.value = s.voice.text;
+      // 队列与上次错误（音色在配置页管理，这里只显示状态）
       queue.textContent = [s.queue ? t.queue(s.queue) : '', s.lastError ? `${t.lastError}:${s.lastError}` : ''].filter(Boolean).join(' · ');
-      renderCustomList(s);
     }
 
     function jobRow(r: ReturnType<typeof row>, job: PanelState['runtime'] | PanelState['weights'], note: string | null) {

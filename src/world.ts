@@ -203,31 +203,76 @@ export class GptSovitsWorld implements World {
     return st.phase === 'ready' && this.warmed ? st.url : null;
   }
 
+  /** 上次见到的音色选择;变化时把该音色的参数镜像到配置字段（含权重），避免上个音色的值残留。 */
+  private seenPreset = '';
+
   /**
-   * 配置页下拉里选中「＋ 新建音色…」（哨兵值）时建一个未命名音色并切过去;
-   * 选中自定义音色时把它的音频与台本镜像进 `voice.audio/text`,让配置页那几个字段直接显示出路径;
-   * 从自定义音色切回预设时，把镜像值清掉（用户手填的路径不动）。
-   * 在 `voice()` 与 `panelState()` 开头调用，两种入口（配置页下拉 / 语音页）都会收敛到一致状态。
+   * 配置页就是自定义音色的管理界面：`voice.name/audio/text` 是「当前音色」的参数。
+   * - 选中某个音色：把它的参数镜像到字段（含权重），用户随后改字段就等于改这个音色；
+   * - 选「＋ 新建音色…」：名称、音频、台本都填齐就自动存成新音色并切过去（权重可选，成对）；
+   * - 切回预设：清掉镜像过来的音频/台本（手填的路径不动），权重留作用户全局设置。
+   * 在 `voice()` 与 `panelState()` 开头调用，配置页与面板两种入口都会收敛到一致状态。
    */
   private settlePreset(): void {
     const p = this.cfg.voice.preset;
+    const v = this.cfg.voice;
     const voices = this.cfg.voices ?? [];
-    if (p === NEW_VOICE_PRESET) {
-      const voice: CustomVoice = { id: newCustomVoiceId(), name: UNNAMED_VOICE, audio: '', text: '', weights: emptyWeights() };
-      this.log.info('从下拉新建了一个未命名音色', { id: voice.id });
-      this.opts.persist({ voices: [...voices, voice], voice: { preset: voice.id, audio: '', text: '' } });
+    const switched = p !== this.seenPreset;
+    this.seenPreset = p;
+    const custom = selectedCustomVoice(voices, p);
+    if (custom && switched) {
+      // 刚切到这个音色：镜像它的全部参数，之后字段的改动即为对该音色的编辑。
+      this.opts.persist({ voice: { preset: custom.id, name: custom.name, audio: custom.audio, text: custom.text }, weights: custom.weights });
       return;
     }
-    const custom = selectedCustomVoice(voices, p);
-    if (custom) {
-      if (this.cfg.voice.audio !== custom.audio || this.cfg.voice.text !== custom.text) {
-        this.opts.persist({ voice: { preset: custom.id, audio: custom.audio, text: custom.text } });
+    if (p === NEW_VOICE_PRESET) {
+      const audio = v.audio?.trim() ?? '';
+      const text = v.text?.trim() ?? '';
+      if (!audio || !text) return; // 还没填齐，等用户填
+      const seconds = existsSync(audio) ? readSeconds(audio) : null;
+      const gpt = this.cfg.weights.gpt.trim(), sovits = this.cfg.weights.sovits.trim();
+      const problems = validateCustomVoice({ name: v.name ?? '', text, gpt, sovits, seconds });
+      if (!existsSync(audio)) problems.unshift(`参考音频不存在：${audio}`);
+      if (problems.length) { this.voiceIssue = problems.join(' '); return; }
+      const weights = gpt && sovits ? { gpt, sovits } : emptyWeights();
+      const voice: CustomVoice = {
+        id: newCustomVoiceId(),
+        name: (v.name ?? '').trim() || UNNAMED_VOICE,
+        audio, text, weights,
+      };
+      this.log.info('从配置页新建了音色', { id: voice.id, name: voice.name, withWeights: !!weights.gpt });
+      this.opts.persist({ voices: [...voices, voice], voice: { preset: voice.id, name: voice.name, audio: voice.audio, text: voice.text } });
+      this.seenPreset = voice.id;
+      return;
+    }
+    if (!custom) {
+      // 切回预设：只有镜像过来的音频才清（属于某个音色的），用户手填的不动。
+      if (isPreset(p) && switched && v.audio && voices.some((x) => x.audio === v.audio)) {
+        this.opts.persist({ voice: { preset: p, name: '', audio: '', text: '' } });
       }
       return;
     }
-    if (isPreset(p) && this.cfg.voice.audio && voices.some((v) => v.audio === this.cfg.voice.audio)) {
-      this.opts.persist({ voice: { preset: p, audio: '', text: '' } });
+    // 选着自定义音色且字段被改过：写回该音色。
+    const gpt = this.cfg.weights.gpt.trim(), sovits = this.cfg.weights.sovits.trim();
+    const weights = gpt && sovits ? { gpt, sovits } : emptyWeights();
+    const name = (v.name ?? '').trim() || UNNAMED_VOICE;
+    const audio = v.audio?.trim() ?? custom.audio;
+    const text = v.text?.trim() ?? custom.text;
+    const changed = name !== custom.name || audio !== custom.audio || text !== custom.text
+      || weights.gpt !== custom.weights.gpt || weights.sovits !== custom.weights.sovits;
+    if (!changed) return;
+    if (audio !== custom.audio) {
+      const seconds = existsSync(audio) ? readSeconds(audio) : null;
+      const problems = validateCustomVoice({ name, text, gpt, sovits, seconds });
+      if (!existsSync(audio)) problems.unshift(`参考音频不存在：${audio}`);
+      if (problems.length) { this.voiceIssue = problems.join(' '); return; }
     }
+    const updated: CustomVoice = { id: custom.id, name, audio, text, weights };
+    this.log.info('配置页更新了音色', { id: custom.id, name });
+    this.opts.persist({
+      voices: voices.map((x) => (x.id === custom.id ? updated : x)),
+      voice: { preset: custom.id, name: updated.name, audio: updated.audio, text: updated.text },
+    });
   }
 
   /**
@@ -236,25 +281,29 @@ export class GptSovitsWorld implements World {
    */
   private voice(): { audio: string; text: string; preset: string | null } | null {
     this.settlePreset();
-    const v = this.cfg.voice;
-    if (v.audio && existsSync(v.audio)) {
-      this.voiceIssue = referenceIssue(v.audio);
-      return this.voiceIssue ? null : { audio: v.audio, text: v.text, preset: selectedCustomVoice(this.cfg.voices ?? [], v.preset)?.id ?? null };
-    }
     this.voiceIssue = null;
+    const v = this.cfg.voice;
     const custom = selectedCustomVoice(this.cfg.voices ?? [], v.preset);
     if (custom) {
-      // 新建的音色还没配参考音频：明确说原因，不回落到预设（否则用户以为新音色生效了）。
       if (!custom.audio) {
-        this.voiceIssue = '这个自定义音色还没有参考音频，在语音页的「自定义音色」里点编辑补上';
+        this.voiceIssue = '这个音色还没有参考音频：在配置里选一段 3–10 秒的 WAV。';
         return null;
       }
       if (!existsSync(custom.audio)) {
-        this.voiceIssue = `这个自定义音色的参考音频不见了：${custom.audio}`;
+        this.voiceIssue = `这个音色的参考音频不见了：${custom.audio}`;
         return null;
       }
       this.voiceIssue = referenceIssue(custom.audio);
       return this.voiceIssue ? null : { audio: custom.audio, text: custom.text, preset: custom.id };
+    }
+    if (v.preset === NEW_VOICE_PRESET) {
+      this.voiceIssue = '新建音色还差参数：在配置里选参考音频、填台本（名称可留空），填齐就自动保存。';
+      return null;
+    }
+    if (v.audio && existsSync(v.audio)) {
+      // 手填的参考音频（不属于任何音色）也照旧生效，兼容老配置。
+      this.voiceIssue = referenceIssue(v.audio);
+      return this.voiceIssue ? null : { audio: v.audio, text: v.text, preset: null };
     }
     const id = isPreset(v.preset) ? v.preset : DEFAULT_PRESET;
     const f = presetFiles(id);
