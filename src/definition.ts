@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { modelsRoot, runtimesRoot } from 'cortico/paths.ts';
 import { describeTools, type WorldDefinition, type WorldDescribe } from 'cortico/world.ts';
 import {
@@ -27,6 +29,17 @@ const DESCRIBE: WorldDescribe = {
 /**
  * 自定义音色由 voice-options.ts 提供动态选项（world 启动时注册），这里合并进音色下拉。
  */
+/** 预设的参考文字片段，拼进下拉选项里（读包内 `.txt`，读不到就只显示文件名）。 */
+const presetSnippet = (id: string): string => {
+  try {
+    const text = readFileSync(fileURLToPath(new URL(`../assets/voices/${id}.txt`, import.meta.url)), 'utf8').trim();
+    const chars = [...text];
+    return chars.length ? ` · ${chars.slice(0, 12).join('')}${chars.length > 12 ? '…' : ''}` : '';
+  } catch {
+    return '';
+  }
+};
+
 export const GPT_SOVITS: WorldDefinition<GptSovitsConfigSection> = {
   id: GPT_SOVITS_ID,
   label: 'GPTSovits 语音',
@@ -35,7 +48,7 @@ export const GPT_SOVITS: WorldDefinition<GptSovitsConfigSection> = {
     if (kind === TIER_OPTIONS) return tierOptions(language);
     if (kind === PROMPT_LANGUAGE_OPTIONS) return promptLanguageOptions();
     if (kind === VOICE_OPTIONS) {
-      const presets = VOICE_PRESETS.map((id) => ({ value: id, label: `${presetLabel(id, language)} · ${id}.wav` }));
+      const presets = VOICE_PRESETS.map((id) => ({ value: id, label: `${presetLabel(id, language)} · ${id}.wav${presetSnippet(id)}` }));
       const add = language === 'zh' || language === 'zh-Hant' ? '＋ 新建音色…' : '＋ New voice…';
       return [...presets, ...customVoiceOptions(), { value: NEW_VOICE_PRESET, label: add }];
     }
