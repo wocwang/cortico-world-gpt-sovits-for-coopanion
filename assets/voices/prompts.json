@@ -5,7 +5,21 @@
       "source": "随包自带（本仓默认音色），5.16 秒日语参考，取自《人是猫》(BV1freb6iErC) 的 AI 合成人声第 003 段，非真人录音",
       "text": "ティード パラパパパ ニーノ ナラナナナ ピンドン",
       "note": "不是 MOSS-VoiceGenerator 生成；音频与台本必须成对使用，差一个字音色就会漂",
-      "processed": "仅滤波：高通 80 Hz + 50/100/150/200 Hz 工频陷波，未做谱减，峰值归一到 0.9（保留气声与呼吸）"
+      "processed": "仅滤波：高通 80 Hz + 50/100/150/200 Hz 工频陷波，未做谱减，峰值归一到 0.9（保留气声与呼吸）",
+      "languages": {
+        "zh": {
+          "file": "dfy.zh.wav",
+          "text": "今天天气不错，我们出去走走吧。顺便买点水果回来，晚上一起吃。",
+          "seed": 20261024,
+          "source": "用上面的日语参考 + 本机 GPT-SoVITS v5turbo 合成（text_lang=zh, prompt_lang=ja），再裁掉首尾静音、峰值归一到 0.9"
+        },
+        "en": {
+          "file": "dfy.en.wav",
+          "text": "The weather is lovely today. Let me tell you a little story about a fish who lives by the sea.",
+          "seed": 20261024,
+          "source": "用上面的日语参考 + 本机 GPT-SoVITS v5turbo 合成（text_lang=en, prompt_lang=ja），再裁掉首尾静音、峰值归一到 0.9"
+        }
+      }
     },
     "female": {
       "instruction": "普通话，十六岁女高中生，录音棚音质。小迷糊，非常害羞。语速很快，没有停顿",

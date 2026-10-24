@@ -4,6 +4,7 @@ import { parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth
 import { applyGain, upmix } from '../src/player.ts';
 import { wavBytes } from '../src/wav.ts';
 import { languageWords } from '../src/i18n.ts';
+import { presetRefId } from '../src/voices.ts';
 
 describe('speechText', () => {
   it('drops the bubble markup the pet parses as actions', () => {
@@ -72,6 +73,22 @@ describe('languageWords', () => {
     expect(languageWords('zh', 'en').rule).toContain('英语翻译');
     expect(languageWords('en', 'ja').rule).toContain('Japanese translation');
     expect(languageWords('en', 'en').name).toBe('English');
+  });
+});
+
+// 预设音色按语音语言换同音色的参考；没有对应语言的参考就回退默认。
+describe('presetRefId', () => {
+  it('picks the same voice reference for the speech language', () => {
+    expect(presetRefId('dfy', 'zh')).toBe('dfy.zh');
+    expect(presetRefId('dfy', 'en')).toBe('dfy.en');
+    expect(presetRefId('dfy', 'ja')).toBe('dfy');
+    expect(presetRefId('dfy', 'auto')).toBe('dfy');
+  });
+
+  it('falls back when a preset has no reference in that language', () => {
+    expect(presetRefId('female', 'zh')).toBe('female');
+    expect(presetRefId('female', 'ja')).toBe('female');
+    expect(presetRefId('male', 'en')).toBe('male');
   });
 });
 

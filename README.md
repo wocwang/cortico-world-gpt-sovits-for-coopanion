@@ -103,9 +103,11 @@ Owner: `src/world.ts`
 
 | id | 名称 | 来源 |
 |---|---|---|
-| `dfy` | 大肥鱼(日语) | **默认**。5.16 秒日语参考（AI 合成人声，非真人录音，来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)），参考文字 `ティード パラパパパ ニーノ ナラナナナ ピンドン`。该参考只做了滤波：高通 80 Hz + 工频陷波，未做谱减（保留气声，不发闷） |
+| `dfy` | 大肥鱼(日中英) | **默认**。日语参考 5.16 秒（AI 合成人声，非真人录音，来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)），参考文字 `ティード パラパパパ ニーノ ナラナナナ ピンドン`；另带中文/英文同音色参考 `dfy.zh.wav` / `dfy.en.wav`，选中文或英文语音时自动换用。原参考只做了滤波：高通 80 Hz + 工频陷波，未做谱减（保留气声，不发闷） |
 | `female` | 女声 | [MOSS-VoiceGenerator](https://huggingface.co/OpenMOSS-Team/MOSS-VoiceGenerator) 按文字描述生成 |
 | `male` | 男声 | 同上 |
+
+选了「语音语言」里的中文/英语/日语时，预设音色会自动换用对应语言的参考音频与台本（`dfy.zh.wav` / `dfy.en.wav` / `dfy.wav`）。参考音频是每次合成请求自带的，**换参考不需要重启服务，也不需要换权重**；没有对应语言参考的预设（`female` / `male` 的日语、英语）回退到它的默认中文参考。
 
 面板上传了自定义参考音频时用自定义的，「改回预设音色」清掉它、回到选中的预设。
 

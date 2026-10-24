@@ -1,11 +1,13 @@
 # Third-party notices
 
-`assets/voices/` 有三段预设参考音频：
+`assets/voices/` 有五段预设参考音频：
 
 - `female.wav`、`male.wav` 由 [OpenMOSS-Team/MOSS-VoiceGenerator](https://huggingface.co/OpenMOSS-Team/MOSS-VoiceGenerator)(Apache-2.0)按文字描述生成，不是任何真人的录音。
 - `dfy.wav`（默认音色，5.16 秒日语）**不是** MOSS 生成的：它取自 B 站视频《人是猫》(`BV1freb6iErC`) 的 **AI 合成人声**，
   经人声分离与滤波处理，不含真人录音，因此不涉及真人声音权利；此处标注来源只为说明出处。
   这一段只作为「随包默认音色」使用，不用于训练其他模型。
+- `dfy.zh.wav`、`dfy.en.wav` 是用上面这段 AI 合成参考 + GPT-SoVITS 生成的中文/英文同音色参考（seed 20261024），
+  同样不含真人录音；生成参数与台本见 `assets/voices/prompts.json`。
 
 `vendor/audify/` 是 [audify](https://github.com/almoghamdani/audify) 1.10.1 官方发布的 napi-v10 win32-x64 预编译件(`audify.node`、`rtaudio.dll`、`opus.dll`),原样随包，用来放声。许可：audify MIT(`LICENSE`)、[RtAudio](https://github.com/thestk/rtaudio) MIT 式(`LICENSE.rtaudio`)、[Opus](https://opus-codec.org/) BSD-3-Clause(`COPYING.opus`)。
 

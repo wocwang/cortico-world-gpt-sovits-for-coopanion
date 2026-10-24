@@ -30,7 +30,7 @@ import { registerCustomVoiceOptions } from './voice-options.ts';
 import { promptLanguageOf, speechText, ttsPlain, ttsSafe } from './speech-text.ts';
 import { synthesize, switchWeights, type SpeechLang, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
-import { DEFAULT_PRESET, isPreset, type VoicePreset } from './voices.ts';
+import { DEFAULT_PRESET, isPreset, presetRefId, type VoicePreset } from './voices.ts';
 import { installedBaseWeights, resolveTrained, type TrainedResult, type TrainedWeights } from './weights.ts';
 import { readSeconds, wavBytes } from './wav.ts';
 
@@ -40,13 +40,26 @@ const ENV_PROMPT_FILES = {
 };
 
 
-/** 包内预设参考音频的路径特征：`assets/voices/<id>.wav`。 */
-const PRESET_PATH = /[\\/]assets[\\/]voices[\\/][a-z]+\.wav$/i;
+/** 包内预设参考音频的路径特征：`assets/voices/<名>.wav`，含分语言的 `dfy.zh.wav` / `dfy.en.wav`。 */
+const PRESET_PATH = /[\\/]assets[\\/]voices[\\/][^\\/]+\.wav$/i;
 
-const presetFiles = (id: VoicePreset): { audio: string; text: string } => ({
-  audio: fileURLToPath(new URL(`../assets/voices/${id}.wav`, import.meta.url)),
-  text: fileURLToPath(new URL(`../assets/voices/${id}.txt`, import.meta.url)),
-});
+/**
+ * 预设音色在这个语音语言下的参考文件；没有对应语言的参考（或文件缺失）时回退到预设的默认语言。
+ */
+const presetFiles = (id: VoicePreset, textLang: SpeechLang): { audio: string; text: string } => {
+  const langs: SpeechLang[] = textLang === 'auto' ? ['auto'] : [textLang, 'auto'];
+  let fallback: { audio: string; text: string } | null = null;
+  for (const lang of langs) {
+    const name = presetRefId(id, lang);
+    const files = {
+      audio: fileURLToPath(new URL(`../assets/voices/${name}.wav`, import.meta.url)),
+      text: fileURLToPath(new URL(`../assets/voices/${name}.txt`, import.meta.url)),
+    };
+    fallback ??= files;
+    if (existsSync(files.audio) && existsSync(files.text)) return files;
+  }
+  return fallback!;
+};
 
 /** 预热的三句：中、英、日的文本前端各在首次使用时加载。语言写死，不跟着用户的「语音语言」走。 */
 const WARMUP: Array<{ text: string; lang: Exclude<SpeechLang, 'auto'> }> = [
@@ -273,8 +286,8 @@ export class GptSovitsWorld implements World {
     }
     if (!custom) {
       if (!isPreset(p)) return;
-      // 预设音色：把包内的参考音频与台本镜像进字段，用户看得见当前用的是什么文件。
-      const f = presetFiles(p);
+      // 预设音色：把包内的参考音频与台本镜像进字段，用户看得见当前用的是什么文件（按语音语言选）。
+      const f = presetFiles(p, this.cfg.textLang);
       if (!existsSync(f.audio) || !existsSync(f.text)) return;
       const text = readText(f.text);
       const mirrored = !v.audio || PRESET_PATH.test(v.audio) || voices.some((x) => x.audio === v.audio);
@@ -337,7 +350,7 @@ export class GptSovitsWorld implements World {
       return this.voiceIssue ? null : { audio: v.audio, text: v.text, preset: null };
     }
     const id = isPreset(v.preset) ? v.preset : DEFAULT_PRESET;
-    const f = presetFiles(id);
+    const f = presetFiles(id, this.cfg.textLang);
     return existsSync(f.audio) && existsSync(f.text) ? { audio: f.audio, text: readText(f.text), preset: id } : null;
   }
 

@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { secondsOf, wavBytes } from '../src/wav.ts';
+import { readSeconds, secondsOf, wavBytes } from '../src/wav.ts';
 
 /** 一份 PCM16 WAV；`declared` 可以覆盖 `data` 长度字段(流式写的文件是 0)。 */
 function wav(rate: number, channels: number, seconds: number, declared?: number): Buffer {
@@ -54,5 +57,38 @@ describe('wavBytes', () => {
     expect(out.readUInt32LE(24)).toBe(32000);
     expect(out.readUInt32LE(40)).toBe(pcm.length);
     expect(secondsOf(out, out.length)).toBeCloseTo(pcm.length / 64000, 5);
+  });
+});
+
+describe('readSeconds', () => {
+  it('measures a real file on disk', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gsv-wav-'));
+    const file = join(dir, 'ref.wav');
+    try {
+      writeFileSync(file, wav(32000, 1, 5));
+      expect(readSeconds(file)).toBeCloseTo(5, 3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null for a file that is not a WAV', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gsv-wav-'));
+    const file = join(dir, 'ref.txt');
+    try {
+      writeFileSync(file, 'not a wave');
+      expect(readSeconds(file)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the shipped dfy language references inside the 3–10 s window', () => {
+    for (const name of ['dfy.zh.wav', 'dfy.en.wav']) {
+      const seconds = readSeconds(join(process.cwd(), 'assets', 'voices', name));
+      expect(seconds).not.toBeNull();
+      expect(seconds!).toBeGreaterThanOrEqual(3);
+      expect(seconds!).toBeLessThanOrEqual(10);
+    }
   });
 });

@@ -35,7 +35,7 @@ export function secondsOf(head: Buffer, fileSize: number): number | null {
 export function readSeconds(path: string): number | null {
   let fd: number | undefined;
   try {
-    fd = openSync(path, 'rb');
+    fd = openSync(path, 'r');
     const head = Buffer.alloc(HEAD_BYTES);
     const read = readSync(fd, head, 0, head.length, 0);
     return secondsOf(head.subarray(0, read), statSync(path).size);
