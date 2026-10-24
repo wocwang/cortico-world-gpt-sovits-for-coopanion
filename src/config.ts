@@ -81,7 +81,7 @@ export const VOICE_OPTIONS = `${GPT_SOVITS_ID}:voice`;
 const TEXT = {
   zh: {
     title: 'GPTSovits 语音',
-    preset: { title: '音色', description: '填了自定义参考音频时用自定义的。' },
+    preset: { title: '音色', description: '预设或已添加的自定义音色。添加/改名/删除自定义音色在「语音」页。' },
     audio: { title: '自定义参考音频', description: '3–10 秒的 WAV。填了就不用上面的预设音色，清空后改回预设。' },
     text: { title: '参考音频的台本', description: '参考音频里说的话，要逐字一致。' },
     gptWeights: { title: '自备 GPT 权重', description: '自己训的 s1 权重(.ckpt)。与下面的 SoVITS 权重一起填才生效；都留空就用内置底模。' },
@@ -98,7 +98,7 @@ const TEXT = {
   },
   en: {
     title: 'GPTSovits Voice',
-    preset: { title: 'Voice', description: 'A custom reference audio takes precedence.' },
+    preset: { title: 'Voice', description: 'A preset or an added custom voice. Add / rename / delete custom voices on the Voice page.' },
     audio: { title: 'Custom reference audio', description: 'A 3–10 second WAV. When set, the preset voice above is not used; clear it to go back to the preset.' },
     text: { title: 'Reference transcript', description: 'The exact words spoken in the reference audio.' },
     gptWeights: { title: 'Own GPT weights', description: 'Your own trained s1 weights (.ckpt). Takes effect together with the SoVITS weights below; leave both empty to use the bundled base model.' },

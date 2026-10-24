@@ -26,6 +26,7 @@ import { panelText, stateWords } from './i18n.ts';
 import { isRuntimeDir, RuntimeJob, WeightsJob, type JobState } from './install.ts';
 import { Player } from './player.ts';
 import { SovitsServer, type ServerState } from './server.ts';
+import { registerCustomVoiceOptions } from './voice-options.ts';
 import { speechText, ttsPlain, ttsSafe } from './speech-text.ts';
 import { synthesize, switchWeights, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
@@ -113,6 +114,7 @@ export class GptSovitsWorld implements World {
     this.weights = new WeightsJob(opts.modelsRoot, () => this.version());
     this.server = new SovitsServer(this.log);
     this.player = new Player({ device: () => opts.cfg.outputDevice, volume: () => opts.cfg.volume, log: { warn: (msg, meta) => this.log.warn(msg, meta) } as Logger });
+    registerCustomVoiceOptions(() => (this.cfg.voices ?? []).map((v) => ({ value: v.id, label: v.name })));
   }
 
   private get cfg(): GptSovitsConfigSection {

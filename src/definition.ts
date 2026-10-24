@@ -8,6 +8,7 @@ import {
 import { listOutputDevices } from './player.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { VOICE_PRESETS, presetLabel } from './voices.ts';
+import { customVoiceOptions } from './voice-options.ts';
 import { GptSovitsWorld, STATE_EVENT } from './world.ts';
 
 const DESCRIBE: WorldDescribe = {
@@ -22,6 +23,9 @@ const DESCRIBE: WorldDescribe = {
   }],
 };
 
+/**
+ * 自定义音色由 voice-options.ts 提供动态选项（world 启动时注册），这里合并进音色下拉。
+ */
 export const GPT_SOVITS: WorldDefinition<GptSovitsConfigSection> = {
   id: GPT_SOVITS_ID,
   label: 'GPTSovits 语音',
@@ -29,7 +33,10 @@ export const GPT_SOVITS: WorldDefinition<GptSovitsConfigSection> = {
   configOptions(kind, language) {
     if (kind === TIER_OPTIONS) return tierOptions(language);
     if (kind === PROMPT_LANGUAGE_OPTIONS) return promptLanguageOptions();
-    if (kind === VOICE_OPTIONS) return VOICE_PRESETS.map((id) => ({ value: id, label: presetLabel(id, language) }));
+    if (kind === VOICE_OPTIONS) {
+      const presets = VOICE_PRESETS.map((id) => ({ value: id, label: presetLabel(id, language) }));
+      return [...presets, ...customVoiceOptions()];
+    }
     if (kind === DEVICE_OPTIONS) {
       let devices: Array<{ value: string; label: string }> = [];
       try { devices = listOutputDevices().map((d) => ({ value: d.name, label: d.name })); } catch { /* audify 不可用时只留系统默认 */ }
