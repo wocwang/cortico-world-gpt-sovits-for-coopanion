@@ -1,20 +1,88 @@
-# GPTSovits 语音(cortico-world-gpt-sovits-for-coopanion)
+# 更好的GPTSovits 语音 — 大肥鱼来咯
 
-Owner: `src/world.ts`
+`@wocwang/cortico-world-gpt-sovits-for-coopanion`
+
+给 Coopanion 桌宠配上真实的 GPT-SoVITS 语音：桌宠每次说话，插件就在**你自己的电脑上**把这句话合成出来、从声卡播出。全程本机运行，不上传任何录音。
+
+---
+
+## 普通用户：装完就能用
+
+1. **安装**：在 Coopanion 插件市场搜索「大肥鱼」或「GPTSovits」安装。
+2. **等待自动下载**：装好后插件会自动下载语音运行时和模型（显卡档约 4–7 GB，取决于网速，几分钟到十几分钟）。**期间桌宠暂时没有声音，属正常**，下载完自动出声。
+3. **开始聊天**：什么都不用配置——默认音色就是「大肥鱼(日语)」，桌宠说话自动带声音。
+
+### 常见问题
+
+**第一次装完没声音？**
+正在下载运行时与模型（看语音页的下载进度）。显卡档首次启动还要编译一次 CUDA 内核（约 1–2 分钟，只此一次）。之后每次开机都是几秒内就绪。
+
+**想换个声音？**
+设置 → 「更好的GPTSovits 语音」→ 音色下拉，三个预设任选：
+
+| 音色 | 说明 |
+|---|---|
+| 大肥鱼(日语) | **默认**。青年感，日语参考 |
+| 女声 | 普通话女声 |
+| 男声 | 普通话男声 |
+
+选完即生效，音频和台本都是配套的，不用填任何东西。
+
+**想用自己（或别处）的声音？**
+两条路：
+
+- **简单**：准备一段 3–10 秒的干净录音（WAV），在语音页上传，并填上录音里说的那句话（逐字一致）。系统默认音色和上传的参考是一对，差一个字音色就会变。
+- **进阶**：用 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 自己训练，把训出的两个文件填进「自备 GPT 权重 / 自备 SoVITS 权重」两个框，服务在跑也会就地换上、不用重启。详见下方「自备训练权重」。
+
+**需要什么硬件？**
+有 NVIDIA 显卡自动走显卡档（V5 turbo，又快又好）；没有就自动走 CPU 档（v2ProPlus），能出声但慢一些。
+
+**会联网吗？会泄露隐私吗？**
+联网只发生在**下载**运行时与模型的时候；之后所有语音合成都在你电脑上完成，**不上传任何录音与文本**。
+
+**怎么让桌宠闭嘴？**
+对话里直接说「安静一下」，桌宠会停掉正在念的句子。
+
+---
+
+## 进阶配置（可选）
+
+全部在 Coopanion 高级模式的「更好的GPTSovits 语音」页，不填就是合理的默认值。
+
+| 配置 | 默认 | 说明 |
+|---|---|---|
+| `voice.preset` | `dfy`（大肥鱼） | 预设音色：`dfy` / `female` / `male` |
+| `voice.audio`、`voice.text` | 空 | 自定义参考音频（3–10 秒 WAV）与它的台本；填了就优先于预设音色 |
+| `weights.gpt`、`weights.sovits` | 空 | 自备训练权重：自己训的 s1（`.ckpt`）与 s2（`.pth`），两个都填才生效 |
+| `speed` | 1 | 语速 |
+| `seed` | -1 | 采样种子：`-1` 每次随机（同一句每次听起来都不同）；填 0 或正整数则固定，同一句逐字节一致 |
+| `volume` | 1 | 音量 0–1 |
+| `outputDevice` | 空 | 输出设备名，空为系统默认 |
+| `tier` | `auto` | 推理档：`auto` / `cuda` / `cpu` |
+| `autoStart` | true | 启动时自动拉起本机推理服务 |
+
+> 同一句话「忽好忽坏」通常是 `seed=-1` 每次重新采样的缘故，不是坏了。想要稳定输出就把 `seed` 固定。
+
+## 自备训练权重（进阶）
+
+用 GPT-SoVITS 训出来的模型这样接：
+
+- `.ckpt` 填 `weights.gpt`（s1 / 文本→语义），`.pth` 填 `weights.sovits`（s2 / 音色与声学），**两个必须来自同一次训练的同一轮**（如 `-e8.ckpt` 配 `_e8_*.pth`）。
+- 版本自动判定：读 `.pth` 头两字节，`08` = v5turbo（显卡档）、`06` = v2ProPlus（CPU 档），其他版本会拦下并说明原因。
+- 服务在跑时改配置会走 `/set_gpt_weights` + `/set_sovits_weights` 就地热换，不打断正在播的句子；清空两个框则换回内置底模。
+
+---
+
+## 开发者信息
 
 > 本仓库是 [Phantivia/cortico-world-gpt-sovits-for-coopanion](https://github.com/Phantivia/cortico-world-gpt-sovits-for-coopanion)
 > 的 fork（原作者同意后维护），在原版 0.1.2 之上补了参考音频时长校验、装饰符号导致合成崩溃的修复、
 > 采样种子选项、自备训练权重入口与随包默认音色，改动见 [CHANGELOG.md](CHANGELOG.md)。
 > 原包名仍由原作者在 npm 上维护，本 fork 发布为 `@wocwang/cortico-world-gpt-sovits-for-coopanion`。
 
-给 Coopanion 的桌宠配上声音：Coo 每次 `pet_say` 之前在同一次回复里先调用 `sovits_speak`,
-扩展用本机的 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 流式合成这句话，从声卡播出。
-`sovits_speak` 等第一块音频写进声卡才返回，主循环按顺序执行同一次回复里的工具调用，所以紧跟其后的
-`pet_say` 在声音开始时出气泡。没调 `sovits_speak` 的 `pet_say` 不出声。
+Owner: `src/world.ts`
 
-设置在 Coopanion 高级模式的「GPTSovits 语音」页。
-
-## 两档
+### 两档
 
 | 档 | 条件 | 模型 | 本机实测(RTX 5090 Laptop / Core Ultra 9 290HX) |
 |---|---|---|---|
@@ -26,13 +94,13 @@ Owner: `src/world.ts`
 
 首次启动显卡档要编译 CUDA 内核，本机第一次 74 s,之后约 11 s。服务起来后用中、英、日各一句预热，预热完才算可用。
 
-## 预设音色
+### 预设音色
 
-随包带三个预设音色，在配置「音色」里选择：
+随包带三个预设音色，音频与台本成对放在 `assets/voices/<id>.wav` / `<id>.txt`：
 
 | id | 名称 | 来源 |
 |---|---|---|
-| `dfy` | 大肥鱼(日语) | **默认**。5.16 秒日语参考（AI 合成人声，非真人录音，来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)），参考文字 `ティード パラパパパ ニーノ ナラナナナ ピンドン`，随包在 `assets/voices/dfy.wav` / `dfy.txt`。该参考只做了滤波：高通 80 Hz + 工频陷波，未做谱减（保留气声，不发闷） |
+| `dfy` | 大肥鱼(日语) | **默认**。5.16 秒日语参考（AI 合成人声，非真人录音，来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)），参考文字 `ティード パラパパパ ニーノ ナラナナナ ピンドン`。该参考只做了滤波：高通 80 Hz + 工频陷波，未做谱减（保留气声，不发闷） |
 | `female` | 女声 | [MOSS-VoiceGenerator](https://huggingface.co/OpenMOSS-Team/MOSS-VoiceGenerator) 按文字描述生成 |
 | `male` | 男声 | 同上 |
 
@@ -43,7 +111,7 @@ Owner: `src/world.ts`
 
 > 换预设音色时，参考音频与台本是一对：`<id>.wav` 与 `<id>.txt` 必须内容一致，差一个字音色就会漂。
 
-## 推理后端
+### 推理后端
 
 按优先级取第一个：
 
@@ -56,22 +124,8 @@ Owner: `src/world.ts`
 
 本机服务以 `runtime/python.exe -I -X utf8 -u api_v2.py` 在运行时根下启动，监听 127.0.0.1 的空闲端口。
 
-## 自备训练权重
+### 自备训练权重细节
 
-默认只用扩展自己下载的底模（`s1v3.ckpt` + `s2Gv5turbo.pth` / `s2Gv2ProPlus.pth`）。
-用 GPT-SoVITS 自己训出来的模型，填进配置就换过来：
-
-| 键 | 文件 | 是什么 |
-|---|---|---|
-| `weights.gpt` | `.ckpt` | s1 / T2S，「文本 → 语义 token」那一半，训练产物形如 `我的模型-e12.ckpt` |
-| `weights.sovits` | `.pth` | s2 / VITS，音色与声学细节，LoRA 训练产物形如 `我的模型_e8_s672_l32.pth` |
-
-几条约定：
-
-- **两个一起填**。只换 s1 不换 s2 出来的音色不对，扩展当成配置错误报出来，不会静默只换一半。
-- **版本要和推理档对上**：显卡档 `v5turbo`，CPU 档 `v2ProPlus`。扩展读 `.pth` 头两个字节判版本
-  （`08` = v5turbo LoRA、`06` = v2ProPlus），对不上就拦下并说明原因，不等到加载底座时才崩。
-- **配对取同一轮**：`-e8.ckpt` 配 `_e8_*.pth`，跨 epoch 混搭音色容易飘。
 - **底模还得留着**：v5turbo 的 s2 训练产物是 LoRA 增量，加载时先读 `s2Gv5turbo.pth` 再合并，
   所以自备权重不代替底模下载。
 - **生效方式**：托管与自备目录两种后端在启动时把这两条路径写进 `tts_infer.<档>.yaml`；
@@ -89,27 +143,13 @@ Owner: `src/world.ts`
 | `05` | v2Pro | ❌ |
 | `04` / `03` / `02` / `01` / `00` | v4 / v3 / v2 / v1 | ❌ |
 
-## 工具与事件
+### 工具与事件
 
 - `sovits_speak(text)`:去掉 `【…】` 与 `<…>` 标记后合成，排在没念完的句子后面。
 - `sovits_hush()`:停下当前一句并清空队列。
 - 事件 `gpt-sovits.state`:语音变为可用或不可用(piggyback,随下一批事件送达)。环境提示词里的状态是前缀重建时的快照，以事件为准。
 
-## 配置(`worlds.gpt-sovits`)
-
-| 键 | 默认 | 说明 |
-|---|---|---|
-| `tier` | `auto` | `auto` / `cuda` / `cpu`,重启推理服务生效 |
-| `voice.preset` | `female` | 预设音色:`female` / `male` |
-| `voice.audio`、`voice.text` | 空 | 自定义参考音频(3–10 秒 WAV)与它的台本;配置里可选本机文件，语音页可上传，填了就不用预设音色 |
-| `weights.gpt`、`weights.sovits` | 空 | 自备训练权重:自己训的 s1(`.ckpt`)与 s2(`.pth`)。两个都填才生效，留空用内置底模；版本要和推理档一致 |
-| `speed` | 1 | 语速，对应 api_v2 的 `speed_factor` |
-| `seed` | -1 | 采样种子，对应 api_v2 的 `seed`。`-1` 每次重新采样（同一句每次听起来都不同）；填 0 或正整数则固定，同一句逐字节一致 |
-| `volume` | 1 | 0–1 |
-| `outputDevice` | 空 | 输出设备名，空为系统默认 |
-| `autoStart` | true | World 启动时启动本机推理服务 |
-| `serverUrl`、`runtimeDir` | 空 | 见上 |
-| `promptLanguage` | `zh` | 环境提示词语言 |
+### 输入防护
 
 自定义参考音频必须是 **3–10 秒**的 WAV。api_v2 收到范围外的音频只回一个不带原因的 `400 Bad Request`,
 所以扩展在合成前自己量一次时长，把「实际多长、要求多长」报出来(`sovits_speak` 的返回和环境提示词里的状态都带上)。
@@ -118,13 +158,7 @@ Owner: `src/world.ts`
 `torch.cat()` 并崩掉(`expected a non-empty list`)。扩展在送合成前先把这类符号去掉；
 万一还是失败，再去掉标点重试一次(已经出过声时不重试，免得多播半句)。
 
-## 合成结果的不确定性
-
-插件发给 api_v2 的请求**不带 `seed`**，api_v2 默认 `seed=-1` 即每次重新随机采样。
-所以同一句话多次合成会有明显差别(实测同一句三次:f0 中位数 308–374 Hz、时长 2.5–4.4 s、
-音高标准差 8.9–11.2 半音)。听起来"忽好忽坏"通常是这个原因，不是参考音频配错了。
-
-## 开发
+### 开发
 
 ```bash
 pnpm install
