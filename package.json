@@ -1,10 +1,16 @@
 {
-  "name": "cortico-world-gpt-sovits-for-coopanion",
+  "name": "@wocwang/cortico-world-gpt-sovits-for-coopanion",
   "version": "0.2.0",
   "type": "module",
   "description": "Cortico World for Coopanion: speaks the pet's lines aloud with GPT-SoVITS (V5 on NVIDIA GPUs, a CPU tier otherwise), installing a portable runtime and weights in one click",
-  "author": "Phantivia",
+  "author": "wocwang",
+  "contributors": [
+    "Phantivia"
+  ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion.git"
