@@ -35,8 +35,8 @@ export interface GptSovitsConfigSection {
   /** 语速倍率，对应 api_v2 的 `speed_factor`。 */
   speed: number;
   /**
-   * 合成语言，对应 api_v2 的 `text_lang`。`zh` 中文优先（英文段照读），
-   * `auto` 逐段识别——短句容易被认成日语，输出会中日混杂。
+   * 合成语言，对应 api_v2 的 `text_lang`，同时决定 bot 怎么写台词：
+   * `zh` 直接照读聊天文字；`en` / `ja` 先把聊天文字翻译成该语言再念；`auto` 跟随原文。
    */
   textLang: SpeechLang;
   /** 每句合成完另存一个 WAV，供其他程序（如 QQ 机器人）取用。 */
@@ -104,8 +104,8 @@ const TEXT = {
     speed: { title: '语速', description: '1 为原速。' },
     textLang: {
       title: '语音语言',
-      description: '合成用的语言，与界面语言无关。「中文优先」时英文仍按英文读；「自动识别」逐段判断，短句容易把中文认成日语。',
-      auto: '自动识别（可能误判日语）', zh: '中文优先（英文照读）', en: 'English', ja: '日本語',
+      description: '与界面语言无关。中文：直接照读聊天框里的这句文字；English / 日本語：先把聊天文字翻译成该语言再念（气泡文字不变）。',
+      auto: '跟随原文（不翻译）', zh: '中文（直接照读）', en: 'English（先翻译）', ja: '日本語（先翻译）',
     },
     saveAudio: { title: '把语音保存成文件', description: '每句合成完另存一个 WAV，方便交给其他程序（如 QQ 机器人）发送。' },
     saveDir: { title: '语音保存目录', description: '留空为插件数据目录下的 gpt-sovits\\out。' },
@@ -128,8 +128,8 @@ const TEXT = {
     speed: { title: 'Speech rate', description: '1 is the original rate.' },
     textLang: {
       title: 'Speech language',
-      description: 'The language used for synthesis, independent of the UI language. "Chinese first" still reads English segments as English; "Auto" detects every segment and often mistakes short Chinese phrases for Japanese.',
-      auto: 'Auto (may misread Chinese as Japanese)', zh: 'Chinese first (English still read)', en: 'English', ja: '日本語',
+      description: 'Independent of the UI language. Chinese: reads the chat line as-is; English / Japanese: translates the chat line into that language first (the bubble text stays unchanged).',
+      auto: 'Follow the text (no translation)', zh: 'Chinese (read as-is)', en: 'English (translate first)', ja: '日本語 (translate first)',
     },
     saveAudio: { title: 'Save the speech to files', description: 'Also writes every synthesized line to a WAV file, so other programs (a QQ bot, for example) can send it.' },
     saveDir: { title: 'Speech folder', description: 'Empty uses gpt-sovits\\out under the plugin data folder.' },

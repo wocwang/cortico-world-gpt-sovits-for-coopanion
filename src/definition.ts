@@ -11,7 +11,7 @@ import { listOutputDevices } from './player.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { VOICE_PRESETS, presetLabel } from './voices.ts';
 import { customVoiceOptions } from './voice-options.ts';
-import { GptSovitsWorld, STATE_EVENT } from './world.ts';
+import { GptSovitsWorld, LANGUAGE_EVENT, STATE_EVENT } from './world.ts';
 
 const DESCRIBE: WorldDescribe = {
   tools: describeTools(SOVITS_TOOL_DECLS, {
@@ -21,6 +21,10 @@ const DESCRIBE: WorldDescribe = {
   events: [{
     type: STATE_EVENT,
     description: { zh: '语音变为可用或不可用，随下一批事件送达。', en: 'The voice became available or unavailable; delivered with the next batch of events.' },
+    trigger: 'piggyback',
+  }, {
+    type: LANGUAGE_EVENT,
+    description: { zh: '语音语言被切换，随后台词该怎么写（直接照读还是先翻译）。', en: 'The speech language changed, and how the next lines should be written (read as-is or translated first).' },
     trigger: 'piggyback',
   }],
 };

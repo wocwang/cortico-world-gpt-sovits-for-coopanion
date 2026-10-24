@@ -3,6 +3,7 @@ import { INLINE_TAG_MAX, promptLanguageOf, speechText, ttsPlain, ttsSafe } from 
 import { parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth.ts';
 import { applyGain, upmix } from '../src/player.ts';
 import { wavBytes } from '../src/wav.ts';
+import { languageWords } from '../src/i18n.ts';
 
 describe('speechText', () => {
   it('drops the bubble markup the pet parses as actions', () => {
@@ -54,6 +55,23 @@ describe('promptLanguageOf', () => {
     expect(promptLanguageOf('こんにちは、いい天気ですね。')).toBe('ja');
     expect(promptLanguageOf('Hello there.')).toBe('en');
     expect(promptLanguageOf('你好 world')).toBe('zh');
+  });
+});
+
+// 语音语言决定 bot 怎么写 sovits_speak：中文照读气泡，日语/英语先翻译。
+describe('languageWords', () => {
+  it('tells the bot to read the chat line as-is in Chinese mode', () => {
+    const w = languageWords('zh', 'zh');
+    expect(w.name).toBe('中文');
+    expect(w.rule).toContain('逐字相同');
+    expect(w.rule).toContain('不要先用日语或英语');
+  });
+
+  it('tells the bot to translate the chat line in Japanese and English modes', () => {
+    expect(languageWords('zh', 'ja').rule).toContain('日语翻译');
+    expect(languageWords('zh', 'en').rule).toContain('英语翻译');
+    expect(languageWords('en', 'ja').rule).toContain('Japanese translation');
+    expect(languageWords('en', 'en').name).toBe('English');
   });
 });
 

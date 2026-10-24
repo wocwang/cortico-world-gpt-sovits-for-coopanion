@@ -22,7 +22,7 @@ import { nowIso } from 'cortico/core/util.ts';
 import { OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
 import { configGroups, GPT_SOVITS_ID, REF_MAX_SECONDS, REF_MIN_SECONDS, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
-import { panelText, stateWords } from './i18n.ts';
+import { languageWords, panelText, stateWords } from './i18n.ts';
 import { isRuntimeDir, RuntimeJob, WeightsJob, type JobState } from './install.ts';
 import { Player, applyGain } from './player.ts';
 import { SovitsServer, type ServerState } from './server.ts';
@@ -73,6 +73,9 @@ function referenceIssue(path: string): string | null {
 
 export const STATE_EVENT = 'gpt-sovits.state';
 
+/** 语音语言被切换时推给 bot；配置页写入不会通知 World，只能自己盯着。 */
+export const LANGUAGE_EVENT = 'gpt-sovits.language';
+
 export interface GptSovitsWorldOptions {
   cfg: GptSovitsConfigSection;
   timezone: string;
@@ -115,6 +118,9 @@ export class GptSovitsWorld implements World {
   private appliedTarget: TrainedWeights | null = null;
   /** 切换失败的签名，同一条配置不重复试。 */
   private weightsFailed = '';
+  /** 上一次告诉 bot 的语音语言；配置变了就推事件。 */
+  private appliedTextLang: SpeechLang | null = null;
+  private langTimer: NodeJS.Timeout | undefined;
 
   constructor(private readonly opts: GptSovitsWorldOptions) {
     this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
@@ -342,7 +348,8 @@ export class GptSovitsWorld implements World {
 
   envPromptVars(): Record<string, string> {
     const w = stateWords(this.cfg.promptLanguage);
-    return { 'sovits.state': this.stateFor(w) };
+    const lang = languageWords(this.cfg.promptLanguage, this.cfg.textLang);
+    return { 'sovits.state': this.stateFor(w), 'sovits.language': `${lang.name}——${lang.rule}` };
   }
 
   private stateFor(w: ReturnType<typeof stateWords>): string {
@@ -356,14 +363,17 @@ export class GptSovitsWorld implements World {
 
   tools(): ToolDef[] {
     const [speak, hush] = SOVITS_TOOL_DECLS;
+    // 工具描述每次请求都会带上：把当前语音语言规则附在这里，前缀过期或被旧记忆带偏时也能纠正。
+    const lang = languageWords('en', this.cfg.textLang);
     return [
-      { ...speak!, handler: (args) => this.speak(String(args.text ?? '')) },
+      { ...speak!, description: `${speak!.description} Speech language: ${lang.name} — ${lang.rule}`, handler: (args) => this.speak(String(args.text ?? '')) },
       { ...hush!, handler: async () => { this.hush(); return 'Stopped.'; } },
     ];
   }
 
   /** 排进队列，等这一句开始出声(或失败、被清空、超时)再返回。 */
   private async speak(script: string): Promise<ToolOutcome> {
+    this.syncLanguage();
     const text = ttsSafe(speechText(script));
     if (!text) return { text: 'Nothing to say: the text has only markup.' };
     if (!this.voice()) return { text: `Voice unavailable: ${this.voiceIssue ?? 'no reference audio is set'}.`, failed: true };
@@ -498,6 +508,9 @@ export class GptSovitsWorld implements World {
     this.cuda = await detectCuda();
     // 启动即把当前音色的音频/台本镜像进配置字段：配置页一打开就能看到实际用的文件。
     this.settlePreset();
+    this.appliedTextLang = null;
+    this.syncLanguage(true);
+    this.langTimer = setInterval(() => this.syncLanguage(), 1000);
     if (this.launching && this.canStart()) void this.startServer().finally(() => { this.launching = false; });
     else this.launching = false;
   }
@@ -517,8 +530,32 @@ export class GptSovitsWorld implements World {
     }, { trigger: 'piggyback' });
   }
 
+  /**
+   * 语音语言变了就推一条事件。配置页写入不会回调 World（框架没有配置变更钩子），
+   * system 前缀又只在会话开始时组装，所以这里每秒对一次配置；启动时也推一次当前规则。
+   */
+  private syncLanguage(initial = false): void {
+    const applied = this.appliedTextLang;
+    this.appliedTextLang = this.cfg.textLang;
+    if (applied === this.cfg.textLang || !this.host || this.stopped) return;
+    const lang = languageWords(this.cfg.promptLanguage, this.cfg.textLang);
+    const text = this.cfg.promptLanguage === 'zh'
+      ? `${initial ? '当前语音语言' : '语音语言已切换为'}${lang.name}：${lang.rule}`
+      : `${initial ? 'Current speech language' : 'The speech language is now'} ${lang.name}: ${lang.rule}`;
+    void this.host.pushEvent({
+      type: LANGUAGE_EVENT,
+      ts: nowIso(this.opts.timezone),
+      source: this.id,
+      origin: 'internal',
+      senderKey: this.id,
+      text,
+    }, { trigger: 'piggyback' });
+  }
+
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.langTimer) clearInterval(this.langTimer);
+    this.langTimer = undefined;
     this.hush();
     this.player.close();
     this.runtime.cancel();
@@ -781,6 +818,7 @@ export class GptSovitsWorld implements World {
   }
 
   panelState(): PanelState {
+    this.syncLanguage();
     this.settlePreset();
     const b = this.backend();
     const voice = this.voice();

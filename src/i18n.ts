@@ -3,6 +3,7 @@
  * 所以这里只 `import type` 框架：简体与繁体中文读中文，其余语言读英文。
  */
 import type { Language } from 'cortico/core/language.ts';
+import type { SpeechLang } from './synth.ts';
 
 const PANEL = {
   zh: {
@@ -164,3 +165,29 @@ const STATE = {
 
 export type StateWords = (typeof STATE)['zh'];
 export const stateWords = (language: 'zh' | 'en'): StateWords => STATE[language];
+
+/**
+ * `{{sovits.language}}` 与语言切换事件的取值：告诉 bot 这句台词该怎么写。
+ * 中文＝直接照读聊天文字；日语/英语＝先把中文台词翻译过去（气泡仍是聊天语言）。
+ */
+const LANGUAGE = {
+  zh: {
+    auto: { name: '自动识别', rule: '`sovits_speak` 的 text 与这次 `pet_say` 的 script 逐字相同。' },
+    zh: { name: '中文', rule: '`sovits_speak` 的 text 与这次 `pet_say` 的 script 逐字相同；直接用中文想这句台词，不要先用日语或英语组织再翻译。' },
+    en: { name: '英语', rule: '`pet_say` 的 script 保持聊天语言（通常是中文）；`sovits_speak` 的 text 是这句台词自然、口语化的英语翻译（标记照抄），不要夹中文，也不要把翻译过程念出来。' },
+    ja: { name: '日语', rule: '`pet_say` 的 script 保持聊天语言（通常是中文）；`sovits_speak` 的 text 是这句台词自然、口语化的日语翻译（标记照抄），不要夹中文，也不要把翻译过程念出来。' },
+    ko: { name: '韩语', rule: '`pet_say` 的 script 保持聊天语言（通常是中文）；`sovits_speak` 的 text 是这句台词自然、口语化的韩语翻译（标记照抄），不要夹中文，也不要把翻译过程念出来。' },
+  },
+  en: {
+    auto: { name: 'auto', rule: 'the `sovits_speak` text is identical to this `pet_say` script.' },
+    zh: { name: 'Chinese', rule: 'the `sovits_speak` text is identical to this `pet_say` script; write the line directly in Chinese instead of composing it in Japanese or English first.' },
+    en: { name: 'English', rule: '`pet_say` stays in the chat language (usually Chinese); the `sovits_speak` text is a natural, spoken English translation of that line (copy the markup), with no Chinese left in it and no translation notes read aloud.' },
+    ja: { name: 'Japanese', rule: '`pet_say` stays in the chat language (usually Chinese); the `sovits_speak` text is a natural, spoken Japanese translation of that line (copy the markup), with no Chinese left in it and no translation notes read aloud.' },
+    ko: { name: 'Korean', rule: '`pet_say` stays in the chat language (usually Chinese); the `sovits_speak` text is a natural, spoken Korean translation of that line (copy the markup), with no Chinese left in it and no translation notes read aloud.' },
+  },
+};
+
+export interface LanguageWords { name: string; rule: string }
+
+export const languageWords = (promptLanguage: 'zh' | 'en', textLang: SpeechLang): LanguageWords =>
+  LANGUAGE[promptLanguage][textLang] ?? LANGUAGE[promptLanguage].auto;
