@@ -11,13 +11,13 @@
           "file": "dfy.zh.wav",
           "text": "今天天气不错，我们出去走走吧。顺便买点水果回来，晚上一起吃。",
           "seed": 20261024,
-          "source": "用上面的日语参考 + 本机 GPT-SoVITS v5turbo 合成（text_lang=zh, prompt_lang=ja），再裁掉首尾静音、峰值归一到 0.9"
+          "source": "用上面的日语参考 + 本机 GPT-SoVITS v5turbo 合成（text_lang=zh, prompt_lang=ja），裁掉首尾静音后，再用 ref_denoise.py --no-denoise 做高通 80 Hz + 50/100/150/200 Hz 工频陷波，峰值归一 0.9"
         },
         "en": {
           "file": "dfy.en.wav",
           "text": "The weather is lovely today. Let me tell you a little story about a fish who lives by the sea.",
           "seed": 20261024,
-          "source": "用上面的日语参考 + 本机 GPT-SoVITS v5turbo 合成（text_lang=en, prompt_lang=ja），再裁掉首尾静音、峰值归一到 0.9"
+          "source": "用上面的日语参考 + 本机 GPT-SoVITS v5turbo 合成（text_lang=en, prompt_lang=ja），裁掉首尾静音后，再用 ref_denoise.py --no-denoise 做高通 80 Hz + 50/100/150/200 Hz 工频陷波，峰值归一 0.9"
         }
       }
     },

@@ -112,7 +112,7 @@ Owner: `src/world.ts`
 
 | id | 名称 | 来源 |
 |---|---|---|
-| `dfy` | 大肥鱼(日中英) | **默认**。日语参考 5.16 秒（AI 合成人声，非真人录音，来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)），参考文字 `ティード パラパパパ ニーノ ナラナナナ ピンドン`；另带中文/英文同音色参考 `dfy.zh.wav` / `dfy.en.wav`，选中文或英文语音时自动换用。原参考只做了滤波：高通 80 Hz + 工频陷波，未做谱减（保留气声，不发闷） |
+| `dfy` | 大肥鱼(日中英) | **默认**。日语参考 5.16 秒（AI 合成人声，非真人录音，来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)），参考文字 `ティード パラパパパ ニーノ ナラナナナ ピンドン`；另带中文/英文同音色参考 `dfy.zh.wav` / `dfy.en.wav`，选中文或英文语音时自动换用。三段参考都走同一套**仅滤波**处理：高通 80 Hz + 50/100/150/200 Hz 工频陷波，未做谱减（保留气声与呼吸），峰值归一 0.9 |
 | `female` | 女声 | [MOSS-VoiceGenerator](https://huggingface.co/OpenMOSS-Team/MOSS-VoiceGenerator) 按文字描述生成 |
 | `male` | 男声 | 同上 |
 
