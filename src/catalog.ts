@@ -69,11 +69,13 @@ export const TIER_MODEL: Readonly<Record<Tier, ModelVersion>> = {
 export type ModelVersion = 'v5turbo' | 'v2ProPlus';
 
 /**
- * 播放时乘的增益。v2ProPlus 经 api_v2 出来的峰值约 −27 dBFS(CPU 与显卡一样),V5 接近满幅。
+ * 播放时乘的增益。实测 v2ProPlus 经 api_v2 出来的峰值约 −7~−8 dBFS，乘 2 倍（+6 dB）
+ * 仍留约 1 dB 余量；以前按「−27 dBFS」乘 8 倍，会把两成以上样本压进软限幅，听起来发糊。
+ * V5 接近满幅，乘 1。
  */
 export const OUTPUT_GAIN: Readonly<Record<ModelVersion, number>> = {
   v5turbo: 1,
-  v2ProPlus: 8,
+  v2ProPlus: 2,
 };
 
 const MS_UP = 'https://www.modelscope.cn/models/XXXXRT/GPT-SoVITS-Pretrained/resolve/master/pretrained_models';
