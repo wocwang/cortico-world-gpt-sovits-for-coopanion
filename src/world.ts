@@ -20,18 +20,18 @@ import type { Logger, ToolDef, ToolOutcome, World, WorldHost, WorldLamp, WorldWe
 import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
 import { officialVoice, OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
-import { configGroups, GPT_SOVITS_ID, REF_MAX_SECONDS, REF_MIN_SECONDS, type GptSovitsConfigSection, type Tier } from './config.ts';
+import { configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
 import { startHttpTts, type HttpTtsHandle, type TtsJob } from './http-tts.ts';
 import { channelWords, languageWords, panelText, shareWords, stateWords } from './i18n.ts';
 import { isRuntimeDir, RuntimeJob, WeightsJob, type JobState } from './install.ts';
-import { Player, applyGain } from './player.ts';
+import { Player, applyGain, listOutputDevices } from './player.ts';
 import { SovitsServer, type ServerState } from './server.ts';
-import { registerCustomVoiceOptions } from './voice-options.ts';
+import { customVoiceOptions, registerCustomVoiceOptions } from './voice-options.ts';
 import { promptLanguageOf, speechText, ttsPlain, ttsSafe } from './speech-text.ts';
 import { synthesize, switchWeights, type SpeechLang, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
-import { DEFAULT_PRESET, isPreset, presetRefId, VOICE_PRESETS, type VoicePreset } from './voices.ts';
+import { DEFAULT_PRESET, isPreset, presetFileLabel, presetLabel, presetRefId, VOICE_PRESETS, type VoicePreset } from './voices.ts';
 import { installedBaseWeights, officialWeights, resolveTrained, type TrainedResult, type TrainedWeights } from './weights.ts';
 import { readSeconds, staleSavedLine, wavBytes } from './wav.ts';
 
@@ -162,6 +162,8 @@ export class GptSovitsWorld implements World {
   private weightsFailed = '';
   /** 上一次告诉 bot 的语音语言；配置变了就推事件。 */
   private appliedTextLang: SpeechLang | null = null;
+  /** 最近一次渲染 WebUI 的界面语言，配置分类页据此取字段标题。 */
+  private uiLanguage: Language = 'zh';
   private langTimer: NodeJS.Timeout | undefined;
   /** 闲置停服的定时器，以及服务是否已因闲置停下（下一句自动唤醒）。 */
   private idleTimer: NodeJS.Timeout | undefined;
@@ -982,6 +984,13 @@ export class GptSovitsWorld implements World {
 
   webUi(language: Language = 'zh'): WorldWebUiDecl {
     const t = panelText(language);
+    this.uiLanguage = language;
+    const groups = configGroups(language);
+    /** 配置分类页：标题/说明直接取配置组的 schema，字段读写走框架配置面。 */
+    const cfgPanel = (id: string, group: string) => {
+      const schema = (groups.find((g) => g.id === group)?.schema ?? {}) as { title?: string; description?: string };
+      return { id, title: schema.title ?? id, description: schema.description ?? '', getMethods: ['config'] };
+    };
     const st = this.server.state();
     const remote = this.backend().kind === 'remote';
     const lamp: WorldLamp = remote
@@ -996,6 +1005,10 @@ export class GptSovitsWorld implements World {
       lamps: [lamp],
       panels: [
         { id: 'voice', title: t.panel, description: t.panelHint, getMethods: ['state'] },
+        cfgPanel('cfg-voice', `world:${GPT_SOVITS_ID}`),
+        cfgPanel('cfg-output', `world:${GPT_SOVITS_ID}:output`),
+        cfgPanel('cfg-link', `world:${GPT_SOVITS_ID}:link`),
+        cfgPanel('cfg-service', `world:${GPT_SOVITS_ID}:service`),
         { id: 'voices', title: t.voicesPanel, description: t.voicesPanelHint, getMethods: ['state'] },
       ],
       invoke: (panel, method, args) => this.invoke(panel, method, args),
@@ -1015,8 +1028,72 @@ export class GptSovitsWorld implements World {
     };
   }
 
+  /** 配置分类页的数据面：返回某组字段与当前值；写回由框架 `ctx.setConfig` 处理。 */
+  private configSchema(groupId: string, keyPrefix: string, topOnly: boolean): unknown {
+    const language = this.uiLanguage;
+    const group = configGroups(language).find((g) => g.id === groupId);
+    if (!group?.schema) return { error: `unknown group ${groupId}` };
+    const props = (group.schema as { properties?: Record<string, any> }).properties ?? {};
+    const valuePrefix = `worlds.${GPT_SOVITS_ID}.`;
+    const optionsFor = (kind: unknown): Array<{ value: string; label: string }> | undefined => {
+      switch (kind) {
+        case VOICE_OPTIONS:
+          return [
+            ...VOICE_PRESETS.map((id) => ({ value: id, label: `${presetLabel(id, language)} · ${presetFileLabel(id)}` })),
+            ...customVoiceOptions(),
+          ];
+        case TEXT_LANGUAGE_OPTIONS:
+          return textLanguageOptions(language);
+        case PROMPT_LANGUAGE_OPTIONS:
+          return promptLanguageOptions();
+        case TIER_OPTIONS:
+          return tierOptions(language);
+        case DEVICE_OPTIONS:
+          try {
+            return [{ value: '', label: systemDeviceLabel(language) }, ...listOutputDevices().map((d) => ({ value: d.name, label: d.name }))];
+          } catch {
+            return [{ value: '', label: systemDeviceLabel(language) }];
+          }
+        default:
+          return undefined;
+      }
+    };
+    const resolve = (key: string): unknown => {
+      if (!key.startsWith(valuePrefix)) return undefined;
+      let cur: any = this.cfg;
+      for (const part of key.slice(valuePrefix.length).split('.')) {
+        if (cur == null) return undefined;
+        cur = cur[part];
+      }
+      return cur;
+    };
+    const out: Array<Record<string, unknown>> = [];
+    const values: Record<string, unknown> = {};
+    for (const [key, def] of Object.entries(props) as Array<[string, any]>) {
+      if (keyPrefix && !key.startsWith(keyPrefix)) continue;
+      if (topOnly && key.slice(valuePrefix.length).split('.').length !== 1) continue;
+      out.push({
+        key,
+        type: def.type || 'string',
+        title: def.title || key.split('.').pop(),
+        description: def.description,
+        options: optionsFor(def['x-options']),
+        path: def['x-path'],
+        minimum: def.minimum,
+        maximum: def.maximum,
+        multipleOf: def.multipleOf,
+        xHot: def['x-hot'] === true,
+      });
+      values[key] = resolve(key);
+    }
+    return { groupId, title: (group.schema as any).title, description: (group.schema as any).description, properties: out, values };
+  }
+
   /** 面板数据面。 */
   async invoke(panel: string, method: string, args: unknown[]): Promise<unknown> {
+    if (method === 'config') {
+      return this.configSchema(String(args[0] ?? ''), String(args[1] ?? ''), args[2] === true);
+    }
     if (panel === 'voices') {
       switch (method) {
         case 'state': return this.panelState();

@@ -9,3 +9,6 @@
 .gsv-acts { display: flex; gap: .4em; }
 .gsv-output { max-height: 12em; overflow: auto; font-size: .8em; opacity: .8; white-space: pre-wrap; }
 .gsv-voice-current { font-size: .85em; opacity: .8; overflow-wrap: anywhere; margin-bottom: .5em; }
+.gsv-cfg { margin: .7em 0; }
+.gsv-cfg .field, .gsv-cfg select, .gsv-cfg textarea { width: 100%; }
+.gsv-cfg .gsv-detail { margin-top: .2em; }

@@ -77,6 +77,12 @@ const PANEL = {
     lastError: '上次合成失败',
     output: '推理服务输出',
     startMs: (s: number) => `启动用了 ${s} 秒`,
+    saved: '已保存',
+    saveFailed: '保存失败',
+    noFields: '这一组暂无可配置项。',
+    restartNeeded: '（改完需重启生效）',
+    chooseFile: '选择文件',
+    chooseDir: '选择目录',
   },
   en: {
     label: 'GPTSovits Voice',
@@ -149,6 +155,12 @@ const PANEL = {
     lastError: 'Last synthesis failed',
     output: 'Inference server output',
     startMs: (s: number) => `Started in ${s} s`,
+    saved: 'Saved',
+    saveFailed: 'Save failed',
+    noFields: 'Nothing to configure in this section.',
+    restartNeeded: ' (takes effect after a restart)',
+    chooseFile: 'Choose file',
+    chooseDir: 'Choose folder',
   },
 };
 
