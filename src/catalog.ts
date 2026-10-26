@@ -113,11 +113,10 @@ export interface OfficialVoice {
 }
 
 const GH_XLL = 'https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion/releases/download/voice-xll-v1';
-const GH_DFY = 'https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion/releases/download/voice-dfy-v1';
 
 /**
- * 官模按预设挑：`xll` 是蒸自肥鱼 CosyVoice3 的中英双语版，`dfy` 是日语特化版。
- * 只有选中其中一个时才需要它的权重，其余预设只下底模。
+ * 官模按预设挑：目前只有 `xll`（蒸自肥鱼 CosyVoice3 的中英双语版）带官模权重；
+ * `dfy` 用官方底模，其余预设只下底模。
  */
 export const OFFICIAL_VOICES: Readonly<Record<string, OfficialVoice>> = {
   xll: {
@@ -126,14 +125,6 @@ export const OFFICIAL_VOICES: Readonly<Record<string, OfficialVoice>> = {
     files: [
       { path: 'xll/feiyu_xll_e30.ckpt', bytes: 155313504, sha256: '03461c53d2b202fa7028fe257f803cbf3d8ed586e5348949bb9c0922e7def1a0', sources: [`${GH_XLL}/feiyu_xll_e30.ckpt`] },
       { path: 'xll/feiyu_xll_e12_s960_l32.pth', bytes: 75550587, sha256: '99397bb1498497db347531e4856c5d5a753c9fd626581d0e7429d175e4a4c3f5', sources: [`${GH_XLL}/feiyu_xll_e12_s960_l32.pth`] },
-    ],
-  },
-  dfy: {
-    gpt: 'dfy/dfy_5-e30.ckpt',
-    sovits: 'dfy/dfy_5_e12_s1380_l32.pth',
-    files: [
-      { path: 'dfy/dfy_5-e30.ckpt', bytes: 155313312, sha256: 'ae691b9d027bcdce7a0ceaf6b7021b7625009ae27890a52c75008fb87c11fb6b', sources: [`${GH_DFY}/dfy_5-e30.ckpt`] },
-      { path: 'dfy/dfy_5_e12_s1380_l32.pth', bytes: 75550395, sha256: '3b78249c0a31cf882319a2cd1fa65f41564ad4eb6d0ff986ee6da21ce866e28d', sources: [`${GH_DFY}/dfy_5_e12_s1380_l32.pth`] },
     ],
   },
 };

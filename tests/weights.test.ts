@@ -138,9 +138,9 @@ describe('api_v2 配置里的路径', () => {
 });
 
 describe('随包官模', () => {
-  it('按预设挑：xll 与 dfy 有，female/male 与自定义音色没有', () => {
+  it('按预设挑：只有 xll 有，dfy/female/male 与自定义音色没有', () => {
     expect(officialVoice('xll')?.gpt).toBe('xll/feiyu_xll_e30.ckpt');
-    expect(officialVoice('dfy')?.sovits).toBe('dfy/dfy_5_e12_s1380_l32.pth');
+    expect(officialVoice('dfy')).toBeNull();
     expect(officialVoice('female')).toBeNull();
     expect(officialVoice('male')).toBeNull();
     expect(officialVoice('自定义 id')).toBeNull();
@@ -159,14 +159,14 @@ describe('随包官模', () => {
 
   it('权重没下齐时返回 null，下齐才给绝对路径', () => {
     const modelsDir = join(dir, 'models');
-    for (const voice of Object.values(OFFICIAL_VOICES)) {
-      expect(officialWeights(modelsDir, voice.sovits.startsWith('xll/') ? 'xll' : 'dfy')).toBeNull();
+    for (const [preset, voice] of Object.entries(OFFICIAL_VOICES)) {
+      expect(officialWeights(modelsDir, preset)).toBeNull();
       for (const f of voice.files) {
         const file = join(modelsDir, f.path);
         mkdirSync(dirname(file), { recursive: true });
         writeFileSync(file, Buffer.alloc(8, 1));
       }
-      const got = officialWeights(modelsDir, voice.sovits.startsWith('xll/') ? 'xll' : 'dfy');
+      const got = officialWeights(modelsDir, preset);
       expect(got).toEqual({ gpt: join(modelsDir, voice.gpt), sovits: join(modelsDir, voice.sovits) });
     }
   });

@@ -23,7 +23,7 @@
 | 音色 | 说明 |
 |---|---|
 | 大肥鱼_星落落版本(中英) | **默认**。蒸自肥鱼 CosyVoice3，中英双语；显卡档自动加载随包官模权重 |
-| 大肥鱼(日中英) | 旧默认音色，日语参考（另有中文/英文参考）；显卡档自动加载日语特化官模权重 |
+| 大肥鱼(日中英) | 旧默认音色，日语参考（另有中文/英文参考）；使用官方底模 |
 | 女声 | 普通话女声 |
 | 男声 | 普通话男声 |
 
@@ -116,7 +116,7 @@ Owner: `src/world.ts`
 | id | 名称 | 来源 |
 |---|---|---|
 | `xll` | 大肥鱼_星落落版本(中英) | **默认**。蒸自肥鱼 CosyVoice3（该模型卡只声明 `zh` / `en`，没有日语），中文参考 4.00 秒、英文参考 3.20 秒，台本分别是 `你听起来有点累，要不要休息一下？` / `You can always come back here.`。两段都走**仅滤波**处理：高通 80 Hz + 50/100/150/200 Hz 工频陷波，未做谱减，峰值归一 0.9。显卡档另配随包官模权重，见下节 |
-| `dfy` | 大肥鱼(日中英) | 旧默认音色。日语参考 5.16 秒（AI 合成人声，非真人录音，来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)），参考文字 `ティード パラパパパ ニーノ ナラナナナ ピンドン`；另带中文/英文同音色参考 `dfy.zh.wav` / `dfy.en.wav`，选中文或英文语音时自动换用。三段参考都走同一套**仅滤波**处理：高通 80 Hz + 50/100/150/200 Hz 工频陷波，未做谱减（保留气声与呼吸），峰值归一 0.9。显卡档另配日语特化官模权重，见下节 |
+| `dfy` | 大肥鱼(日中英) | 旧默认音色。日语参考 5.16 秒（AI 合成人声，非真人录音，来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)），参考文字 `ティード パラパパパ ニーノ ナラナナナ ピンドン`；另带中文/英文同音色参考 `dfy.zh.wav` / `dfy.en.wav`，选中文或英文语音时自动换用。三段参考都走同一套**仅滤波**处理：高通 80 Hz + 50/100/150/200 Hz 工频陷波，未做谱减（保留气声与呼吸），峰值归一 0.9。**用官方底模**，不加载训练权重 |
 | `female` | 女声 | [MOSS-VoiceGenerator](https://huggingface.co/OpenMOSS-Team/MOSS-VoiceGenerator) 按文字描述生成 |
 | `male` | 男声 | 同上 |
 
@@ -129,19 +129,17 @@ Owner: `src/world.ts`
 
 > 换预设音色时，参考音频与台本是一对：`<id>.wav` 与 `<id>.txt` 必须内容一致，差一个字音色就会漂。
 
-### 官模权重（`xll` / `dfy`）
+### 官模权重（`xll`）
 
-选中 `xll` 或 `dfy` 且**同时满足**「显卡档（v5turbo）+ 托管安装（不是自备运行时目录，也不是连已有服务）」时，
-服务加载随包官模权重而不是底模：
+选中 `xll` 且**同时满足**「显卡档（v5turbo）+ 托管安装（不是自备运行时目录，也不是连已有服务）」时，
+服务加载随包官模权重而不是底模。`dfy` 等其他预设一律使用官方底模：
 
 | 预设 | 文件 | 作用 | 字节数 |
 |---|---|---|---|
 | `xll` | `pretrained_models/xll/feiyu_xll_e30.ckpt` | s1（文本→语义） | 155,313,504 |
 | `xll` | `pretrained_models/xll/feiyu_xll_e12_s960_l32.pth` | s2 v5turbo **LoRA**（头字节 `08`） | 75,550,587 |
-| `dfy` | `pretrained_models/dfy/dfy_5-e30.ckpt` | s1（文本→语义） | 155,313,312 |
-| `dfy` | `pretrained_models/dfy/dfy_5_e12_s1380_l32.pth` | s2 v5turbo **LoRA**（头字节 `08`） | 75,550,395 |
 
-它们只在你**选中对应预设时**才进下载清单（选 `female` / `male` 或自定义音色只下底模），
+它们只在你**选中 `xll` 时**才进下载清单（选 `dfy` / `female` / `male` 或自定义音色只下底模），
 下载时校验字节数与 SHA-256。服务日志会先「Loading VITS pretrained weights from … All keys matched」
 再「Loading LoRA weights from …」——先加载底模 `gsv-v5-pretrained/s2Gv5turbo.pth`、再合并 LoRA，
 这是 v5turbo LoRA 的正常路径。
