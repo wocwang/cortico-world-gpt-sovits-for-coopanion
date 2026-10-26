@@ -21,6 +21,11 @@ export interface GptSovitsConfigSection {
   /** World 启动时一并启动本机推理服务。 */
   autoStart: boolean;
   /**
+   * 闲置这么多分钟就停掉本机推理服务，释放显存/内存；下一句自动重新加载。
+   * `0` 为不停。只对本机服务生效，连已有服务时没有意义。
+   */
+  idleMinutes: number;
+  /**
    * 音色：`preset` 是预设 id / 自定义音色 id / 「＋新建」哨兵；
    * `name`、`audio`、`text` 是当前音色的参数——选自定义音色时镜像显示，改了直接保存回音色。
    */
@@ -70,6 +75,7 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   runtimeDir: '',
   serverUrl: '',
   autoStart: true,
+  idleMinutes: 0,
   voice: { preset: DEFAULT_PRESET, name: '', audio: '', text: '' },
   voices: [],
   weights: { gpt: '', sovits: '' },
@@ -113,6 +119,7 @@ const TEXT = {
     volume: { title: '音量' },
     outputDevice: { title: '输出设备', description: '留空使用系统默认设备。', system: '系统默认' },
     autoStart: { title: '随 Cortico 启动推理服务' },
+    idle: { title: '闲置停服', description: '多久不说话就停掉本机推理服务，把显存和内存让出来；下一句会自动重新加载（显卡档通常十几秒）。0 为不停。只对本机服务生效。' },
     serverUrl: { title: '已有的 GPT-SoVITS 地址', description: '填写后连接这个 api_v2 服务，不在本机启动，也不下载运行时。' },
     runtimeDir: { title: '自备运行时目录', description: '含 runtime/python.exe 与 api_v2.py 的 GPT-SoVITS 目录；填写后不下载运行时。' },
     promptLanguage: { title: '提示词语言' },
@@ -137,6 +144,7 @@ const TEXT = {
     volume: { title: 'Volume' },
     outputDevice: { title: 'Output device', description: 'Empty for the system default.', system: 'System default' },
     autoStart: { title: 'Start the inference server with Cortico' },
+    idle: { title: 'Stop when idle', description: 'Stops the local inference server after this many minutes without speech, freeing VRAM and RAM; the next line reloads it (usually ten-odd seconds on GPU). 0 keeps it running. Local server only.' },
     serverUrl: { title: 'Existing GPT-SoVITS address', description: 'Connects to this api_v2 server instead of starting one here; nothing is downloaded.' },
     runtimeDir: { title: 'Own runtime directory', description: 'A GPT-SoVITS directory with runtime/python.exe and api_v2.py; the runtime is not downloaded.' },
     promptLanguage: { title: 'Prompt language' },
@@ -181,6 +189,7 @@ export function configGroups(language: Language): ConfigGroup[] {
         [`${K}.volume`]: { type: 'number', title: t.volume.title, minimum: 0, maximum: 1, multipleOf: .05, 'x-hot': true },
         [`${K}.outputDevice`]: { type: 'string', title: t.outputDevice.title, description: t.outputDevice.description, 'x-options': DEVICE_OPTIONS, 'x-hot': true },
         [`${K}.autoStart`]: { type: 'boolean', title: t.autoStart.title, 'x-hot': true },
+        [`${K}.idleMinutes`]: { type: 'number', title: t.idle.title, description: t.idle.description, minimum: 0, multipleOf: 1, 'x-hot': true },
         [`${K}.serverUrl`]: { type: 'string', title: t.serverUrl.title, description: t.serverUrl.description, 'x-hot': true },
         [`${K}.runtimeDir`]: { type: 'string', title: t.runtimeDir.title, description: t.runtimeDir.description, 'x-hot': true },
         [`${K}.promptLanguage`]: { type: 'string', title: t.promptLanguage.title, 'x-options': PROMPT_LANGUAGE_OPTIONS, 'x-hot': true },

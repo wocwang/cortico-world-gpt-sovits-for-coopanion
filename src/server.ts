@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import type { Logger } from 'cortico/core/types.ts';
 import { weightPaths, type ModelVersion } from './catalog.ts';
 import type { Tier } from './config.ts';
+import { patchRuntime } from './runtime-patch.ts';
 import type { TrainedWeights } from './weights.ts';
 
 export interface ServerState {
@@ -32,6 +33,8 @@ export interface LaunchSpec {
   trained: TrainedWeights | null;
   /** 生成的 api_v2 配置文件放在这里。 */
   dataDir: string;
+  /** 托管运行时才打「BERT 按需加载、CNHuBERT 用完即卸」的补丁；自备目录是用户的，不动。 */
+  patchRuntime?: boolean;
 }
 
 /** 首次加载要把几个模型读进内存,CPU 档慢的机器上要一两分钟。 */
@@ -94,6 +97,8 @@ export class SovitsServer {
   private st: ServerState = { phase: 'stopped', url: null, pid: null, detail: null, startMs: null };
   private tail: string[] = [];
   private starting: Promise<void> | null = null;
+  /** 正在收尾的旧进程；闲置停服后马上来一句时，新进程要等它退干净。 */
+  private stopping: Promise<void> | null = null;
 
   /** `onExit` 在子进程意外退出时调用，参数是失败原因。 */
   constructor(private readonly log: Logger, private readonly onExit: (detail: string) => void = () => {}) {}
@@ -110,7 +115,10 @@ export class SovitsServer {
   start(spec: LaunchSpec): Promise<void> {
     if (this.starting) return this.starting;
     if (this.child) return Promise.resolve();
-    this.starting = this.launch(spec).finally(() => { this.starting = null; });
+    this.starting = (async () => {
+      if (this.stopping) await this.stopping;
+      await this.launch(spec);
+    })().finally(() => { this.starting = null; });
     return this.starting;
   }
 
@@ -119,17 +127,28 @@ export class SovitsServer {
     this.child = null;
     this.st = { phase: 'stopped', url: null, pid: null, detail: null, startMs: null };
     if (!child?.pid || child.exitCode !== null) return;
-    await new Promise<void>((done) => {
-      child.once('exit', () => done());
+    const done = new Promise<void>((finish) => {
+      child.once('exit', () => finish());
       if (process.platform === 'win32') spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
       else child.kill('SIGTERM');
-      setTimeout(done, 5000).unref();
+      setTimeout(finish, 5000).unref();
     });
+    this.stopping = done;
+    try {
+      await done;
+    } finally {
+      if (this.stopping === done) this.stopping = null;
+    }
   }
 
   private async launch(spec: LaunchSpec): Promise<void> {
     const started = Date.now();
     this.tail = [];
+    if (spec.patchRuntime) {
+      const result = patchRuntime(spec.runtimeDir);
+      if (result === 'patched') this.log.info('已给托管运行时打上按需加载补丁', { dir: spec.runtimeDir });
+      else if (result !== 'already') this.log.warn('托管运行时没能打上按需加载补丁，按原样启动', { result, dir: spec.runtimeDir });
+    }
     if (spec.weightsDir) linkWeights(join(spec.runtimeDir, 'GPT_SoVITS', 'pretrained_models'), spec.weightsDir);
     mkdirSync(spec.dataDir, { recursive: true });
     const yaml = join(spec.dataDir, `tts_infer.${spec.tier}.yaml`);

@@ -37,6 +37,7 @@ const PANEL = {
     starting: '启动中',
     warming: '预热中',
     running: '运行中',
+    asleep: '已休眠',
     install: '安装并启动',
     installSize: (mb: number) => `安装并启动(下载 ${mb} MB)`,
     cancel: '取消',
@@ -108,6 +109,7 @@ const PANEL = {
     starting: 'Starting',
     warming: 'Warming up',
     running: 'Running',
+    asleep: 'Asleep',
     install: 'Install and start',
     installSize: (mb: number) => `Install and start (${mb} MB download)`,
     cancel: 'Cancel',
@@ -156,11 +158,11 @@ export const panelText = (language: Language): PanelText => (language === 'zh' |
 /** `{{sovits.state}}` 的取值。 */
 const STATE = {
   zh: {
-    available: '可用', notInstalled: '未安装', starting: '启动中', noVoice: '没有设置参考音频', error: (d: string): string => `出错(${d})`,
+    available: '可用', notInstalled: '未安装', starting: '启动中', asleep: '已休眠（下一句自动唤醒）', noVoice: '没有设置参考音频', error: (d: string): string => `出错(${d})`,
     nowAvailable: '语音可用了。', nowUnavailable: (d: string): string => `语音不可用了:${d}`,
   },
   en: {
-    available: 'available', notInstalled: 'not installed', starting: 'starting', noVoice: 'no reference audio set', error: (d: string): string => `failed (${d})`,
+    available: 'available', notInstalled: 'not installed', starting: 'starting', asleep: 'asleep (wakes on the next line)', noVoice: 'no reference audio set', error: (d: string): string => `failed (${d})`,
     nowAvailable: 'The voice is available now.', nowUnavailable: (d: string): string => `The voice is unavailable now: ${d}`,
   },
 };

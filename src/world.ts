@@ -61,12 +61,13 @@ const presetFiles = (id: VoicePreset, textLang: SpeechLang): { audio: string; te
   return fallback!;
 };
 
-/** 预热的三句：中、英、日的文本前端各在首次使用时加载。语言写死，不跟着用户的「语音语言」走。 */
-const WARMUP: Array<{ text: string; lang: Exclude<SpeechLang, 'auto'> }> = [
-  { text: '你好。', lang: 'zh' },
-  { text: 'Hello.', lang: 'en' },
-  { text: 'こんにちは。', lang: 'ja' },
-];
+/**
+ * 预热一句：只热当前语音语言的文本前端。以前中英日各来一句,但中文那句会把 BERT(约 622 MB)拉进显存,
+ * 日语/英语用户白占;现在按需加载,切到中文后的第一句会多等一会儿。
+ */
+const WARMUP_TEXT: Record<SpeechLang, string> = {
+  zh: '你好。', en: 'Hello.', ja: 'こんにちは。', ko: '안녕하세요.', auto: '你好，Hello。',
+};
 
 /** `sovits_speak` 等第一块音频的上限;超时照常返回，声音晚到。 */
 const SPEAK_WAIT_MAX_MS = 3000;
@@ -134,6 +135,11 @@ export class GptSovitsWorld implements World {
   /** 上一次告诉 bot 的语音语言；配置变了就推事件。 */
   private appliedTextLang: SpeechLang | null = null;
   private langTimer: NodeJS.Timeout | undefined;
+  /** 闲置停服的定时器，以及服务是否已因闲置停下（下一句自动唤醒）。 */
+  private idleTimer: NodeJS.Timeout | undefined;
+  private sleeping = false;
+  /** 正在进行的启动+预热，避免休眠唤醒与面板按钮同时启动两次。 */
+  private startingServer: Promise<void> | null = null;
 
   constructor(private readonly opts: GptSovitsWorldOptions) {
     this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
@@ -378,6 +384,7 @@ export class GptSovitsWorld implements World {
   private stateFor(w: ReturnType<typeof stateWords>): string {
     if (!this.voice()) return this.voiceIssue ?? w.noVoice;
     if (this.url()) return w.available;
+    if (this.sleeping) return w.asleep;
     const st = this.server.state();
     if (st.phase === 'error') return w.error(st.detail ?? '');
     if (st.phase === 'starting' || this.warming || this.launching) return w.starting;
@@ -400,14 +407,21 @@ export class GptSovitsWorld implements World {
     const text = ttsSafe(speechText(script));
     if (!text) return { text: 'Nothing to say: the text has only markup.' };
     if (!this.voice()) return { text: `Voice unavailable: ${this.voiceIssue ?? 'no reference audio is set'}.`, failed: true };
-    if (!this.url()) return { text: `Voice unavailable: ${this.stateFor(stateWords('en'))}.`, failed: true };
+    const ready = this.url();
+    if (!ready) {
+      if (!this.sleeping || !this.canStart()) return { text: `Voice unavailable: ${this.stateFor(stateWords('en'))}.`, failed: true };
+      // 闲置停服后第一句：先叫醒服务，这一句排在队列里等它加载完。
+      this.sleeping = false;
+      this.log.info('推理服务在休眠，这句话会叫醒它');
+      void this.startServer().finally(() => { this.armIdle(); void this.pump(); });
+    }
     const ahead = this.queue.length + (this.current ? 1 : 0);
     let timer: NodeJS.Timeout | undefined;
     const started = new Promise<void>((done) => {
       this.queue.push({ text, at: Date.now(), started: done });
       timer = setTimeout(done, SPEAK_WAIT_MAX_MS);
     });
-    void this.pump();
+    if (ready) void this.pump();
     await started;
     clearTimeout(timer);
     return { text: ahead ? `Queued after ${ahead} line(s).` : 'Speaking.' };
@@ -507,7 +521,34 @@ export class GptSovitsWorld implements World {
       }
     } finally {
       this.pumping = false;
+      this.armIdle();
     }
+  }
+
+  /** 队列空了就开始计时：闲置到 `idleMinutes` 分钟就停服务释放显存；0 为不停。 */
+  private armIdle(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = undefined;
+    }
+    const minutes = this.cfg.idleMinutes;
+    if (!minutes || minutes <= 0 || this.sleeping || this.stopped) return;
+    if (this.backend().kind === 'remote' || this.server.state().phase !== 'ready') return;
+    if (this.queue.length || this.current || this.pumping) return;
+    this.idleTimer = setTimeout(() => { void this.sleep(); }, minutes * 60_000);
+    this.idleTimer.unref();
+  }
+
+  /** 闲置到点：停掉本机服务并把状态记为休眠，下一句 `sovits_speak` 会重新拉起。 */
+  private async sleep(): Promise<void> {
+    this.idleTimer = undefined;
+    if (this.stopped || this.sleeping) return;
+    if (this.queue.length || this.current || this.pumping) return this.armIdle();
+    if (this.backend().kind === 'remote' || this.server.state().phase !== 'ready') return;
+    this.sleeping = true;
+    this.warmed = false;
+    this.log.info('推理服务闲置，停掉以释放显存', { minutes: this.cfg.idleMinutes });
+    await this.server.stop();
   }
 
   /** 合成一句要用的请求参数；预热时可指定语言。 */
@@ -524,6 +565,7 @@ export class GptSovitsWorld implements World {
     this.server = new SovitsServer(this.log, (detail) => this.announce(false, detail));
     this.stopped = false;
     this.announced = null;
+    this.sleeping = false;
     this.appliedWeights = '';
     this.appliedTarget = null;
     this.weightsFailed = '';
@@ -579,6 +621,9 @@ export class GptSovitsWorld implements World {
     this.stopped = true;
     if (this.langTimer) clearInterval(this.langTimer);
     this.langTimer = undefined;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = undefined;
+    this.sleeping = false;
     this.hush();
     this.player.close();
     this.runtime.cancel();
@@ -594,9 +639,17 @@ export class GptSovitsWorld implements World {
     return this.runtime.status().phase === 'ready' && this.weights.baseReady();
   }
 
-  private async startServer(): Promise<void> {
+  /** 启动本机服务并预热；同一时间只跑一次（休眠唤醒、面板按钮、World 启动都可能触发）。 */
+  private startServer(): Promise<void> {
+    if (this.startingServer) return this.startingServer;
+    this.startingServer = this.launchServer().finally(() => { this.startingServer = null; });
+    return this.startingServer;
+  }
+
+  private async launchServer(): Promise<void> {
     const b = this.backend();
     if (b.kind === 'remote' || this.stopped) return;
+    this.sleeping = false;
     this.warmed = false;
     const trained = this.trained().weights;
     await this.server.start({
@@ -606,12 +659,14 @@ export class GptSovitsWorld implements World {
       version: this.version(),
       trained,
       dataDir: this.opts.dataDir,
+      patchRuntime: b.kind === 'managed',
     });
     // yaml 里已经是这组权重，启动即加载，不必再调一遍换权重的接口。
     this.appliedWeights = this.weightsSignature();
     this.appliedTarget = trained ?? this.baseTarget();
     this.weightsFailed = '';
     await this.warmUp();
+    this.armIdle();
   }
 
   private async warmUp(): Promise<void> {
@@ -621,9 +676,8 @@ export class GptSovitsWorld implements World {
     if (!voice) { this.warmed = true; return; }
     this.warming = true;
     try {
-      for (const item of WARMUP) {
-        for await (const _ of synthesize(st.url, this.request(item.text, voice, item.lang))) { /* 只为加载，丢掉音频 */ }
-      }
+      const lang = this.cfg.textLang;
+      for await (const _ of synthesize(st.url, this.request(WARMUP_TEXT[lang], voice, lang))) { /* 只为加载，丢掉音频 */ }
     } catch (err) {
       this.log.warn('GPT-SoVITS 预热失败', { err: String(err) });
     } finally {
@@ -635,6 +689,7 @@ export class GptSovitsWorld implements World {
 
   private async restartServer(): Promise<void> {
     this.hush();
+    this.sleeping = false;
     await this.server.stop();
     if (this.canStart()) await this.startServer();
   }
@@ -757,7 +812,7 @@ export class GptSovitsWorld implements World {
       : {
         label: t.lamp,
         state: st.phase === 'ready' && this.warmed ? 'online' : st.phase === 'starting' || this.warming ? 'loading' : st.phase === 'error' ? 'error' : 'offline',
-        hint: st.detail ?? undefined,
+        hint: this.sleeping ? t.asleep : st.detail ?? undefined,
       };
     return {
       label: t.label,
