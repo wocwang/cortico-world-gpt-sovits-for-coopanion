@@ -4,7 +4,6 @@
  * 数据经 `ctx.invoke` 走 World 的 `invoke(<panel>, …)`,每秒轮询一次状态。
  */
 import type { WebUiClientBundle, WebUiPanel, WebUiPanelContext } from 'cortico/web/shared/client-panel.ts';
-import type { ConfigValue } from 'cortico/core/config-schema.ts';
 import { panelText } from '../i18n.ts';
 import type { PanelState } from '../world.ts';
 import './style.css';
@@ -359,15 +358,78 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
 }
 
 /**
- * 配置分类页：一个面板 = 一组配置（音色与台词 / 输出与保存 / 与其他插件联动 / 推理服务）。
- * 字段标题与说明来自配置组 schema，读写走框架 `ctx.setConfig`，和配置页是同一份值。
+ * 渲染一个配置字段；保存走面板的 `setConfigValue`，和原配置页是同一份值。
  */
-function configPanel(group: string, extra?: (ctx: WebUiPanelContext, host: HTMLElement) => void | Promise<void>): WebUiPanel {
+function mountConfigField(ctx: WebUiPanelContext, host: HTMLElement, f: ConfigField, value: unknown): void {
+  const { ui } = ctx;
+  const t = panelText(ctx.language);
+  let pending: { dispose(): void } | null = null;
+  const save = (next: unknown) => {
+    void ctx.invoke('setConfigValue', [f.key, next]).then(
+      () => ui.toast(t.saved),
+      (err: unknown) => ui.toast(`${t.saveFailed}: ${errText(err)}`, 'bad'),
+    );
+  };
+  const commit = (next: unknown, immediate = false) => {
+    pending?.dispose();
+    pending = null;
+    if (immediate) save(next);
+    else pending = ctx.timeout(() => { pending = null; save(next); }, 350);
+  };
+
+  let control: HTMLElement;
+  if (f.type === 'boolean') {
+    control = ui.checkbox('', { checked: !!value, onChange: (v: boolean) => commit(v, true) }).el;
+  } else if (f.options?.length) {
+    const current = f.options.some((o) => o.value === String(value ?? '')) ? String(value ?? '') : f.options[0].value;
+    control = ui.select({ value: current, options: f.options, onChange: (v: string) => commit(v, true) });
+  } else if (f.path) {
+    const input = ui.input({ value: value == null ? '' : String(value), onChange: (v: string) => commit(v) });
+    const pick = ui.button(f.path.kind === 'directory' ? t.chooseDir : t.chooseFile, {
+      size: 'sm',
+      onClick: () => {
+        void ctx.pickPath({
+          kind: f.path?.kind === 'directory' ? 'directory' : 'file',
+          extensions: f.path?.extensions,
+          currentPath: input.value,
+        }).then((chosen) => {
+          if (!chosen) return;
+          input.value = chosen;
+          commit(chosen, true);
+        });
+      },
+    });
+    const row = ui.h('div', 'gsv-acts');
+    input.style.flex = '1';
+    row.append(input, pick);
+    control = row;
+  } else if (f.type === 'number' || f.type === 'integer') {
+    const input = ui.input({ type: 'number', value: value == null ? '' : String(value), onChange: (v: string) => commit(Number(v)) });
+    if (f.minimum !== undefined) input.min = String(f.minimum);
+    if (f.maximum !== undefined) input.max = String(f.maximum);
+    if (f.multipleOf !== undefined) input.step = String(f.multipleOf);
+    control = input;
+  } else if (f.key.endsWith('.voice.text')) {
+    control = ui.textarea({ value: value == null ? '' : String(value), rows: 2, onChange: (v: string) => commit(v) });
+  } else {
+    control = ui.input({ value: value == null ? '' : String(value), onChange: (v: string) => commit(v) });
+  }
+
+  const wrap = ui.h('div', 'gsv-cfg');
+  wrap.append(ui.field(f.title + (f.xHot ? '' : t.restartNeeded), control));
+  if (f.description) wrap.append(ui.h('div', 'gsv-detail', f.description));
+  host.append(wrap);
+}
+
+/**
+ * 配置分类页：一个面板 = 一组配置（音色与台词 / 输出与保存 / 推理服务）。
+ * 字段标题与说明来自配置组 schema，保存走 `setConfigValue`，和旧配置页是同一份值。
+ */
+function configPanel(group: string): WebUiPanel {
   return {
     async mount(ctx: WebUiPanelContext) {
       const { ui } = ctx;
       const t = panelText(ctx.language);
-      const msg = ui.msgline();
       let resp: ConfigResp;
       try {
         resp = await ctx.invoke<ConfigResp>('config', [group, '', false]);
@@ -380,72 +442,45 @@ function configPanel(group: string, extra?: (ctx: WebUiPanelContext, host: HTMLE
         return;
       }
       const sheet = ui.sheet({ title: resp.title || group, desc: resp.description });
-      ctx.root.append(sheet.el, msg);
+      ctx.root.append(sheet.el);
       if (!resp.properties.length) {
         sheet.body.append(ui.placeholder(t.noFields));
         return;
       }
+      for (const f of resp.properties) mountConfigField(ctx, sheet.body, f, resp.values[f.key]);
+    },
+  };
+}
 
-      for (const f of resp.properties) {
-        const value = resp.values[f.key];
-        let pending: { dispose(): void } | null = null;
-        const save = (next: unknown) => {
-          void ctx.setConfig(group, { [f.key]: next as ConfigValue }).then(
-            () => ui.toast(t.saved),
-            (err: unknown) => ui.toast(`${t.saveFailed}: ${errText(err)}`, 'bad'),
-          );
-        };
-        const commit = (next: unknown, immediate = false) => {
-          pending?.dispose();
-          pending = null;
-          if (immediate) save(next);
-          else pending = ctx.timeout(() => { pending = null; save(next); }, 350);
-        };
-
-        let control: HTMLElement;
-        if (f.type === 'boolean') {
-          control = ui.checkbox('', { checked: !!value, onChange: (v: boolean) => commit(v, true) }).el;
-        } else if (f.options?.length) {
-          const current = f.options.some((o) => o.value === String(value ?? '')) ? String(value ?? '') : f.options[0].value;
-          control = ui.select({ value: current, options: f.options, onChange: (v: string) => commit(v, true) });
-        } else if (f.path) {
-          const input = ui.input({ value: value == null ? '' : String(value), onChange: (v: string) => commit(v) });
-          const pick = ui.button(f.path.kind === 'directory' ? t.chooseDir : t.chooseFile, {
-            size: 'sm',
-            onClick: () => {
-              void ctx.pickPath({
-                kind: f.path?.kind === 'directory' ? 'directory' : 'file',
-                extensions: f.path?.extensions,
-                currentPath: input.value,
-              }).then((chosen) => {
-                if (!chosen) return;
-                input.value = chosen;
-                commit(chosen, true);
-              });
-            },
-          });
-          const row = ui.h('div', 'gsv-acts');
-          input.style.flex = '1';
-          row.append(input, pick);
-          control = row;
-        } else if (f.type === 'number' || f.type === 'integer') {
-          const input = ui.input({ type: 'number', value: value == null ? '' : String(value), onChange: (v: string) => commit(Number(v)) });
-          if (f.minimum !== undefined) input.min = String(f.minimum);
-          if (f.maximum !== undefined) input.max = String(f.maximum);
-          if (f.multipleOf !== undefined) input.step = String(f.multipleOf);
-          control = input;
-        } else if (f.key.endsWith('.voice.text')) {
-          control = ui.textarea({ value: value == null ? '' : String(value), rows: 2, onChange: (v: string) => commit(v) });
-        } else {
-          control = ui.input({ value: value == null ? '' : String(value), onChange: (v: string) => commit(v) });
-        }
-
-        const wrap = ui.h('div', 'gsv-cfg');
-        wrap.append(ui.field(f.title + (f.xHot ? '' : t.restartNeeded), control));
-        if (f.description) wrap.append(ui.h('div', 'gsv-detail', f.description));
-        sheet.body.append(wrap);
+/** 「与其他插件联动」：按插件拆成子卡片（中文大标题 + 英文小标题），各自只放相关选项。 */
+function linkPanel(): WebUiPanel {
+  return {
+    async mount(ctx: WebUiPanelContext) {
+      const { ui } = ctx;
+      const t = panelText(ctx.language);
+      let resp: ConfigResp;
+      try {
+        resp = await ctx.invoke<ConfigResp>('config', ['world:gpt-sovits:link', '', false]);
+      } catch (err) {
+        ctx.root.append(ui.msgline(errText(err), true));
+        return;
       }
-      if (extra) await extra(ctx, sheet.body);
+      if (!resp || !Array.isArray(resp.properties)) {
+        ctx.root.append(ui.msgline(errText((resp as unknown as { error?: string })?.error ?? 'config unavailable'), true));
+        return;
+      }
+      const fields = new Map(resp.properties.map((f) => [f.key, f]));
+      const mount = (host: HTMLElement, suffix: string): void => {
+        const f = [...fields.entries()].find(([key]) => key.endsWith(suffix))?.[1];
+        if (f) mountConfigField(ctx, host, f, resp.values[f.key]);
+      };
+      const fresh = ui.sheet({ title: t.newQqTitle, en: 'cortico-world-qq-final', desc: t.newQqDesc });
+      ctx.root.append(fresh.el);
+      for (const suffix of ['.httpApi', '.httpPort', '.httpToken', '.channelVoice']) mount(fresh.body, suffix);
+      await mountQqGuide(ctx, fresh.body);
+      const legacy = ui.sheet({ title: t.oldQqTitle, en: 'cortico-world-qq', desc: t.oldQqDesc });
+      ctx.root.append(legacy.el);
+      mount(legacy.body, '.shareAudio');
     },
   };
 }
@@ -456,7 +491,7 @@ const bundle: WebUiClientBundle = {
     voices: voicesPanel,
     'cfg-voice': configPanel('world:gpt-sovits'),
     'cfg-output': configPanel('world:gpt-sovits:output'),
-    'cfg-link': configPanel('world:gpt-sovits:link', mountQqGuide),
+    'cfg-link': linkPanel(),
     'cfg-service': configPanel('world:gpt-sovits:service'),
   },
 };

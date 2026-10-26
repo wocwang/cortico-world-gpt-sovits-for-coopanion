@@ -98,6 +98,10 @@ const PANEL = {
     qqConfirm: '会先备份当前 config.json，然后把语音配置写进 QQ 插件；需要重启 Coopanion 生效。继续吗？',
     qqWriteOk: '已写入 QQ 配置，请重启 Coopanion',
     qqCurrent: 'QQ 插件当前值',
+    newQqTitle: '新版 QQ 插件',
+    newQqDesc: 'cortico-world-qq-final 直接取本机语音；下面的接口与音色设置都给它用。',
+    oldQqTitle: '旧版 QQ 插件',
+    oldQqDesc: 'cortico-world-qq 走附件句柄；只需打开「把整句语音交给其他插件」。',
   },
   en: {
     label: 'GPTSovits Voice',
@@ -191,6 +195,10 @@ const PANEL = {
     qqConfirm: 'The current config.json is backed up first, then the voice settings are written into the QQ plugin. Coopanion must be restarted. Continue?',
     qqWriteOk: 'QQ config written; restart Coopanion',
     qqCurrent: 'Current QQ values',
+    newQqTitle: 'New QQ plugin',
+    newQqDesc: 'cortico-world-qq-final calls this local voice API; the settings below are for it.',
+    oldQqTitle: 'Old QQ plugin',
+    oldQqDesc: 'cortico-world-qq takes an attachment handle; just enable "hand the line to other plugins".',
   },
 };
 

@@ -1014,7 +1014,6 @@ export class GptSovitsWorld implements World {
         { id: 'voices', title: t.voicesPanel, description: t.voicesPanelHint, getMethods: ['state'] },
       ],
       invoke: (panel, method, args) => this.invoke(panel, method, args),
-      config: configGroups(language),
       promptDocs: [{
         key: `worlds.${GPT_SOVITS_ID}.envPrompt`,
         title: `${t.label} · ${language === 'zh' || language === 'zh-Hant' ? '环境提示词' : 'environment prompt'}`,
@@ -1147,8 +1146,42 @@ export class GptSovitsWorld implements World {
     return { ok: true, path, backup, port, voice: qq.voice.voiceVoice, tokenSet: !!this.cfg.httpToken };
   }
 
+  /** 面板写配置：只接受已声明配置组里的键，按 schema 类型校验后写回。 */
+  private setConfigValue(key: string, raw: unknown): unknown {
+    const group = configGroups(this.uiLanguage).find((g) => key in ((g.schema as { properties?: Record<string, any> }).properties ?? {}));
+    if (!group) throw new Error(`未知配置项：${key}`);
+    const def = (group.schema as any).properties[key] as { type?: string; minimum?: number; maximum?: number };
+    let value: string | number | boolean;
+    if (def.type === 'boolean') {
+      if (typeof raw !== 'boolean') throw new Error(`${key} 需要布尔值`);
+      value = raw;
+    } else if (def.type === 'number' || def.type === 'integer') {
+      const n = typeof raw === 'number' ? raw : Number(raw);
+      if (!Number.isFinite(n)) throw new Error(`${key} 需要数字`);
+      if (def.type === 'integer' && !Number.isInteger(n)) throw new Error(`${key} 需要整数`);
+      if (def.minimum !== undefined && n < def.minimum) throw new Error(`${key} 最小 ${def.minimum}`);
+      if (def.maximum !== undefined && n > def.maximum) throw new Error(`${key} 最大 ${def.maximum}`);
+      value = n;
+    } else {
+      value = String(raw ?? '');
+    }
+    const prefix = `worlds.${GPT_SOVITS_ID}.`;
+    if (!key.startsWith(prefix)) throw new Error(`未知配置项：${key}`);
+    const parts = key.slice(prefix.length).split('.');
+    const patch: Record<string, any> = {};
+    let cur = patch;
+    for (let i = 0; i < parts.length - 1; i++) {
+      cur[parts[i]] = {};
+      cur = cur[parts[i]];
+    }
+    cur[parts[parts.length - 1]] = value;
+    this.opts.persist(patch as DeepPartial<GptSovitsConfigSection>);
+    return { ok: true, key, value };
+  }
+
   /** 面板数据面。 */
   async invoke(panel: string, method: string, args: unknown[]): Promise<unknown> {
+    if (method === 'setConfigValue') return this.setConfigValue(String(args[0] ?? ''), args[1]);
     if (method === 'qqGuide') return this.qqGuide();
     if (method === 'writeQqVoice') return this.writeQqVoice();
     if (method === 'config') {
