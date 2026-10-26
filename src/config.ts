@@ -128,6 +128,10 @@ export const VOICE_OPTIONS = `${GPT_SOVITS_ID}:voice`;
 const TEXT = {
   zh: {
     title: 'GPTSovits 语音',
+    groupVoice: { title: '音色与台词', description: '选音色、配参考音频与自备权重，以及这句台词怎么说（语言、语速、种子）。' },
+    groupOutput: { title: '输出与保存', description: '声音从哪出、要不要在本机外放、要不要落盘保存。' },
+    groupLink: { title: '与其他插件联动', description: '把语音交给 QQ 等插件：新插件（cortico-world-qq-final）用本地语音接口，老插件（cortico-world-qq）用附件句柄。两条路别同时开。' },
+    groupService: { title: '推理服务', description: '推理档、随程序自启、闲置停服，以及改用自备运行时目录或已有服务。' },
     preset: { title: '音色', description: '预设或已保存的音色（音色名后 ✓ 表示已配置完整）。添加、改名、换音频/权重都在「音色」页里做。' },
     audio: { title: '参考音频', description: '3–10 秒的 WAV。这里是当前音色的参考音频，与「音色」页同步。' },
     text: { title: '参考音频的台本', description: '参考音频里说的话，要逐字一致。' },
@@ -160,6 +164,10 @@ const TEXT = {
   },
   en: {
     title: 'GPTSovits Voice',
+    groupVoice: { title: 'Voice and lines', description: 'Pick the voice, its reference audio and own weights, and how a line is spoken (language, speed, seed).' },
+    groupOutput: { title: 'Output and saving', description: 'Where the sound comes out, whether it plays on this computer, and whether lines are written to files.' },
+    groupLink: { title: 'Other plugins (QQ voice)', description: 'Hand the voice to QQ: the new plugin (cortico-world-qq-final) calls the local voice API; the old one (cortico-world-qq) takes an attachment handle. Do not enable both.' },
+    groupService: { title: 'Inference service', description: 'Tier, start with the app, stop-when-idle, and switching to your own runtime directory or an existing server.' },
     preset: { title: 'Voice', description: 'A preset or a saved voice (a ✓ after the name means fully configured). Add, rename and edit voices on the "Voices" page.' },
     audio: { title: 'Reference audio', description: 'A 3–10 second WAV. The reference audio of the current voice, kept in sync with the "Voices" page.' },
     text: { title: 'Reference transcript', description: 'The exact words spoken in the reference audio.' },
@@ -207,41 +215,82 @@ export function textLanguageOptions(language: Language): Array<{ value: string; 
 
 export const systemDeviceLabel = (language: Language): string => pick(language, TEXT).outputDevice.system;
 
+/**
+ * 配置按用途拆成多组：设置页会把每组渲染成一张可折叠卡片，避免一长条。
+ * 组 id 唯一即可，值仍写在 `worlds.gpt-sovits.*` 下。
+ */
 export function configGroups(language: Language): ConfigGroup[] {
   const t = pick(language, TEXT);
-  return [{
-    id: `world:${GPT_SOVITS_ID}`,
-    owner: `world:${GPT_SOVITS_ID}`,
-    schema: {
-      type: 'object',
-      title: t.title,
-      properties: {
-        [`${K}.voice.preset`]: { type: 'string', title: t.preset.title, description: t.preset.description, 'x-options': VOICE_OPTIONS, 'x-hot': true },
-        [`${K}.voice.audio`]: { type: 'string', title: t.audio.title, description: t.audio.description, 'x-path': { kind: 'file', extensions: ['.wav'] }, 'x-hot': true },
-        [`${K}.voice.text`]: { type: 'string', title: t.text.title, description: t.text.description, 'x-hot': true },
-        [`${K}.weights.gpt`]: { type: 'string', title: t.gptWeights.title, description: t.gptWeights.description, 'x-path': { kind: 'file', extensions: ['.ckpt'] }, 'x-hot': true },
-        [`${K}.weights.sovits`]: { type: 'string', title: t.sovitsWeights.title, description: t.sovitsWeights.description, 'x-path': { kind: 'file', extensions: ['.pth'] }, 'x-hot': true },
-        [`${K}.tier`]: { type: 'string', title: t.tier.title, description: t.tier.description, 'x-options': TIER_OPTIONS, 'x-hot': true },
-        [`${K}.speed`]: { type: 'number', title: t.speed.title, description: t.speed.description, minimum: SPEED_MIN, maximum: SPEED_MAX, multipleOf: .05, 'x-hot': true },
-        [`${K}.textLang`]: { type: 'string', title: t.textLang.title, description: t.textLang.description, 'x-options': TEXT_LANGUAGE_OPTIONS, 'x-hot': true },
-        [`${K}.saveAudio`]: { type: 'boolean', title: t.saveAudio.title, description: t.saveAudio.description, 'x-hot': true },
-        [`${K}.saveDir`]: { type: 'string', title: t.saveDir.title, description: t.saveDir.description, 'x-path': { kind: 'directory' }, 'x-hot': true },
-        [`${K}.saveKeepHours`]: { type: 'number', title: t.saveKeepHours.title, description: t.saveKeepHours.description, minimum: 0, multipleOf: 1, 'x-hot': true },
-        [`${K}.shareAudio`]: { type: 'boolean', title: t.shareAudio.title, description: t.shareAudio.description, 'x-hot': true },
-        [`${K}.playLocally`]: { type: 'boolean', title: t.playLocally.title, description: t.playLocally.description, 'x-hot': true },
-        [`${K}.httpApi`]: { type: 'boolean', title: t.httpApi.title, description: t.httpApi.description, 'x-hot': true },
-        [`${K}.httpPort`]: { type: 'number', title: t.httpPort.title, description: t.httpPort.description, minimum: 1, maximum: 65535, multipleOf: 1, 'x-hot': true },
-        [`${K}.httpToken`]: { type: 'string', title: t.httpToken.title, description: t.httpToken.description, 'x-hot': true },
-        [`${K}.channelVoice`]: { type: 'boolean', title: t.channelVoice.title, description: t.channelVoice.description, 'x-hot': true },
-        [`${K}.seed`]: { type: 'number', title: t.seed.title, description: t.seed.description, minimum: SEED_RANDOM, multipleOf: 1, 'x-hot': true },
-        [`${K}.volume`]: { type: 'number', title: t.volume.title, minimum: 0, maximum: 1, multipleOf: .05, 'x-hot': true },
-        [`${K}.outputDevice`]: { type: 'string', title: t.outputDevice.title, description: t.outputDevice.description, 'x-options': DEVICE_OPTIONS, 'x-hot': true },
-        [`${K}.autoStart`]: { type: 'boolean', title: t.autoStart.title, 'x-hot': true },
-        [`${K}.idleMinutes`]: { type: 'number', title: t.idle.title, description: t.idle.description, minimum: 0, multipleOf: 1, 'x-hot': true },
-        [`${K}.serverUrl`]: { type: 'string', title: t.serverUrl.title, description: t.serverUrl.description, 'x-hot': true },
-        [`${K}.runtimeDir`]: { type: 'string', title: t.runtimeDir.title, description: t.runtimeDir.description, 'x-hot': true },
-        [`${K}.promptLanguage`]: { type: 'string', title: t.promptLanguage.title, 'x-options': PROMPT_LANGUAGE_OPTIONS, 'x-hot': true },
+  const owner = `world:${GPT_SOVITS_ID}`;
+  return [
+    {
+      id: owner,
+      owner,
+      schema: {
+        type: 'object',
+        title: t.groupVoice.title,
+        description: t.groupVoice.description,
+        properties: {
+          [`${K}.voice.preset`]: { type: 'string', title: t.preset.title, description: t.preset.description, 'x-options': VOICE_OPTIONS, 'x-hot': true },
+          [`${K}.voice.audio`]: { type: 'string', title: t.audio.title, description: t.audio.description, 'x-path': { kind: 'file', extensions: ['.wav'] }, 'x-hot': true },
+          [`${K}.voice.text`]: { type: 'string', title: t.text.title, description: t.text.description, 'x-hot': true },
+          [`${K}.weights.gpt`]: { type: 'string', title: t.gptWeights.title, description: t.gptWeights.description, 'x-path': { kind: 'file', extensions: ['.ckpt'] }, 'x-hot': true },
+          [`${K}.weights.sovits`]: { type: 'string', title: t.sovitsWeights.title, description: t.sovitsWeights.description, 'x-path': { kind: 'file', extensions: ['.pth'] }, 'x-hot': true },
+          [`${K}.textLang`]: { type: 'string', title: t.textLang.title, description: t.textLang.description, 'x-options': TEXT_LANGUAGE_OPTIONS, 'x-hot': true },
+          [`${K}.speed`]: { type: 'number', title: t.speed.title, description: t.speed.description, minimum: SPEED_MIN, maximum: SPEED_MAX, multipleOf: .05, 'x-hot': true },
+          [`${K}.seed`]: { type: 'number', title: t.seed.title, description: t.seed.description, minimum: SEED_RANDOM, multipleOf: 1, 'x-hot': true },
+          [`${K}.promptLanguage`]: { type: 'string', title: t.promptLanguage.title, 'x-options': PROMPT_LANGUAGE_OPTIONS, 'x-hot': true },
+        },
       },
     },
-  }];
+    {
+      id: `${owner}:output`,
+      owner,
+      schema: {
+        type: 'object',
+        title: t.groupOutput.title,
+        description: t.groupOutput.description,
+        properties: {
+          [`${K}.playLocally`]: { type: 'boolean', title: t.playLocally.title, description: t.playLocally.description, 'x-hot': true },
+          [`${K}.volume`]: { type: 'number', title: t.volume.title, minimum: 0, maximum: 1, multipleOf: .05, 'x-hot': true },
+          [`${K}.outputDevice`]: { type: 'string', title: t.outputDevice.title, description: t.outputDevice.description, 'x-options': DEVICE_OPTIONS, 'x-hot': true },
+          [`${K}.saveAudio`]: { type: 'boolean', title: t.saveAudio.title, description: t.saveAudio.description, 'x-hot': true },
+          [`${K}.saveDir`]: { type: 'string', title: t.saveDir.title, description: t.saveDir.description, 'x-path': { kind: 'directory' }, 'x-hot': true },
+          [`${K}.saveKeepHours`]: { type: 'number', title: t.saveKeepHours.title, description: t.saveKeepHours.description, minimum: 0, multipleOf: 1, 'x-hot': true },
+        },
+      },
+    },
+    {
+      id: `${owner}:link`,
+      owner,
+      schema: {
+        type: 'object',
+        title: t.groupLink.title,
+        description: t.groupLink.description,
+        properties: {
+          [`${K}.httpApi`]: { type: 'boolean', title: t.httpApi.title, description: t.httpApi.description, 'x-hot': true },
+          [`${K}.httpPort`]: { type: 'number', title: t.httpPort.title, description: t.httpPort.description, minimum: 1, maximum: 65535, multipleOf: 1, 'x-hot': true },
+          [`${K}.httpToken`]: { type: 'string', title: t.httpToken.title, description: t.httpToken.description, 'x-hot': true },
+          [`${K}.channelVoice`]: { type: 'boolean', title: t.channelVoice.title, description: t.channelVoice.description, 'x-hot': true },
+          [`${K}.shareAudio`]: { type: 'boolean', title: t.shareAudio.title, description: t.shareAudio.description, 'x-hot': true },
+        },
+      },
+    },
+    {
+      id: `${owner}:service`,
+      owner,
+      schema: {
+        type: 'object',
+        title: t.groupService.title,
+        description: t.groupService.description,
+        properties: {
+          [`${K}.tier`]: { type: 'string', title: t.tier.title, description: t.tier.description, 'x-options': TIER_OPTIONS, 'x-hot': true },
+          [`${K}.autoStart`]: { type: 'boolean', title: t.autoStart.title, 'x-hot': true },
+          [`${K}.idleMinutes`]: { type: 'number', title: t.idle.title, description: t.idle.description, minimum: 0, multipleOf: 1, 'x-hot': true },
+          [`${K}.serverUrl`]: { type: 'string', title: t.serverUrl.title, description: t.serverUrl.description, 'x-hot': true },
+          [`${K}.runtimeDir`]: { type: 'string', title: t.runtimeDir.title, description: t.runtimeDir.description, 'x-hot': true },
+        },
+      },
+    },
+  ];
 }

@@ -1,86 +1,86 @@
 {
-  "name": "@wocwang/cortico-world-gpt-sovits-for-coopanion",
-  "version": "0.5.7",
-  "type": "module",
-  "description": "Cortico World for Coopanion: speaks the pet's lines aloud with GPT-SoVITS (V5 on NVIDIA GPUs, a CPU tier otherwise), installing a portable runtime and weights in one click",
-  "author": "wocwang",
-  "contributors": [
-    "Phantivia"
-  ],
-  "license": "MIT",
-  "publishConfig": {
-    "access": "public"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion.git"
-  },
-  "homepage": "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion#readme",
-  "bugs": {
-    "url": "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion/issues"
-  },
-  "keywords": [
-    "cortico-world",
-    "cortico",
-    "coopanion",
-    "tts",
-    "gpt-sovits"
-  ],
-  "os": [
-    "win32"
-  ],
-  "engines": {
-    "node": ">=22"
-  },
-  "packageManager": "pnpm@11.5.0",
-  "main": "./src/index.ts",
-  "cortico": {
-    "kind": "world",
-    "api": 6,
-    "displayName": "更好的GPTSovits 语音—大肥鱼来咯",
-    "locales": {
-      "zh": {
-        "displayName": "更好的GPTSovits 语音—大肥鱼来咯",
-        "description": "支持星落落语音包！欢迎来尝试！给桌宠配上真实的 GPT-SoVITS 语音：全程在本机合成，从声卡出声，不上传任何录音。一键安装运行时与模型，装好即用；支持预设音色、自定义音色（参考音频+台本+可选自备权重）。"
-      },
-      "en": {
-        "displayName": "Better GPTSovits Voice — Fatfish",
-        "description": "Supports the Xll voice pack! Come and try it! Gives the desktop pet a real GPT-SoVITS voice: synthesized on your own machine, nothing uploaded. One-click runtime and weights, works out of the box; presets plus custom voices (reference audio + transcript + optional own weights)."
-      }
-    },
-    "tags": [
-      "voice",
-      "local",
-      "experimental"
-    ],
-    "webUiClient": "dist/webui.js",
-    "webUiStyle": "dist/webui.css",
-    "describe": "describe.json"
-  },
-  "files": [
-    "src",
-    "dist",
-    "assets",
-    "vendor",
-    "README.md",
-    "LICENSE",
-    "THIRD_PARTY_NOTICES.md",
-    "CHANGELOG.md",
-    "describe.json"
-  ],
-  "scripts": {
-    "build": "node scripts/build-webui.mjs",
-    "check:refs": "node --import tsx scripts/check-live-refs.mjs",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm test && npm run typecheck"
-  },
-  "devDependencies": {
-    "@types/node": "^22.10.0",
-    "cortico": "^0.2.3",
-    "esbuild": "^0.28.2",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
-  }
+    "name":  "@wocwang/cortico-world-gpt-sovits-for-coopanion",
+    "version":  "0.5.8",
+    "type":  "module",
+    "description":  "Cortico World for Coopanion: speaks the pet\u0027s lines aloud with GPT-SoVITS (V5 on NVIDIA GPUs, a CPU tier otherwise), installing a portable runtime and weights in one click",
+    "author":  "wocwang",
+    "contributors":  [
+                         "Phantivia"
+                     ],
+    "license":  "MIT",
+    "publishConfig":  {
+                          "access":  "public"
+                      },
+    "repository":  {
+                       "type":  "git",
+                       "url":  "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion.git"
+                   },
+    "homepage":  "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion#readme",
+    "bugs":  {
+                 "url":  "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion/issues"
+             },
+    "keywords":  [
+                     "cortico-world",
+                     "cortico",
+                     "coopanion",
+                     "tts",
+                     "gpt-sovits"
+                 ],
+    "os":  [
+               "win32"
+           ],
+    "engines":  {
+                    "node":  "\u003e=22"
+                },
+    "packageManager":  "pnpm@11.5.0",
+    "main":  "./src/index.ts",
+    "cortico":  {
+                    "kind":  "world",
+                    "api":  6,
+                    "displayName":  "更好的GPTSovits 语音—大肥鱼来咯",
+                    "locales":  {
+                                    "zh":  {
+                                               "displayName":  "更好的GPTSovits 语音—大肥鱼来咯",
+                                               "description":  "支持星落落语音包！欢迎来尝试！给桌宠配上真实的 GPT-SoVITS 语音：全程在本机合成、从声卡出声，不上传任何录音，一键装好运行时与模型。内置「大肥鱼_星落落版本」官模音色与日中英三种参考；支持自定义音色（参考音频+台本+可选自备权重）。自带闲置停服（省显存）、按需加载（最多省约 810 MB 显存）、语音落盘与保留期。还能把声音交给 QQ 插件：新版 cortico-world-qq-final 直接取本机语音接口，老版 cortico-world-qq 走句柄，QQ 语音就是桌宠的声音。"
+                                           },
+                                    "en":  {
+                                               "displayName":  "Better GPTSovits Voice — Fatfish",
+                                               "description":  "Supports the Xll voice pack! Come and try it! Gives the desktop pet a real GPT-SoVITS voice: synthesized on your own machine, nothing uploaded, one-click runtime and weights. Ships the official \"Fatfish Xll\" voice plus Chinese/English/Japanese references, and supports custom voices (reference audio + transcript + optional own weights). Includes stop-when-idle, on-demand model loading (up to ~810 MB VRAM saved), speech files with a retention window, and a local voice API so QQ plugins (cortico-world-qq-final / cortico-world-qq) can send voice in the pet\u0027s own voice."
+                                           }
+                                },
+                    "tags":  [
+                                 "voice",
+                                 "local",
+                                 "experimental"
+                             ],
+                    "webUiClient":  "dist/webui.js",
+                    "webUiStyle":  "dist/webui.css",
+                    "describe":  "describe.json"
+                },
+    "files":  [
+                  "src",
+                  "dist",
+                  "assets",
+                  "vendor",
+                  "README.md",
+                  "LICENSE",
+                  "THIRD_PARTY_NOTICES.md",
+                  "CHANGELOG.md",
+                  "describe.json"
+              ],
+    "scripts":  {
+                    "build":  "node scripts/build-webui.mjs",
+                    "check:refs":  "node --import tsx scripts/check-live-refs.mjs",
+                    "test":  "vitest run",
+                    "typecheck":  "tsc --noEmit",
+                    "prepublishOnly":  "npm run build \u0026\u0026 npm test \u0026\u0026 npm run typecheck"
+                },
+    "devDependencies":  {
+                            "@types/node":  "^22.10.0",
+                            "cortico":  "^0.2.3",
+                            "esbuild":  "^0.28.2",
+                            "tsx":  "^4.19.2",
+                            "typescript":  "^5.7.2",
+                            "vitest":  "^2.1.8"
+                        }
 }
