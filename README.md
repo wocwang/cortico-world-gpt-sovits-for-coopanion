@@ -67,8 +67,8 @@
    TTS 模型名            = tts-1
    请求超时              = 120
    ```
-3. 它的语音由「语义判定」触发（对方明确要语音时才发），判定需要一个 LLM 密钥：填「判定端点」`https://api.deepseek.com`、「判定密钥名」（在部署目录 `.env` 里放好同名密钥）、「判定模型」`deepseek-chat`。**不填就不会发语音**（语音收发开关开着也不发）。
-4. 两个插件都别忘：本插件的「推理服务」要处于就绪（面板灯绿）。本插件的接口 Token 建议留空；填了 Token 时 qq-final 的 local 方式不会带上它。
+3. **语义判定密钥（必须）**：qq-final 靠 LLM 判断“这条要不要发语音”，没有密钥就不发（`core.log` 会写「语义判定未配置 judgeApiKey，默认不发语音」）。点「一键写入」会自动填好判定端点 `https://api.deepseek.com`、判定模型 `deepseek-chat`、密钥变量名 `DEEPSEEK_API_KEY`；你只需在本插件「QQ 语音对接」的输入框里**粘贴一次 DeepSeek API Key**并保存（写入部署目录 `.env`，不会上传）。
+4. 两个插件都别忘：本插件的「推理服务」要处于就绪（面板灯绿）。本插件的接口 Token 建议留空；填了 Token 时 qq-final 的 local 方式不会带上它。改完 qq-final 的语音配置后重启 Coopanion。
 
 **能点名哪些音色？** 本地语音接口的 `voice` / `voice_desc` 支持：预设 `xll`（星落落） / `dfy` / `female` / `male`，以及你自己建的自定义音色的**名字或 id**；认不出就用插件当前音色。
 

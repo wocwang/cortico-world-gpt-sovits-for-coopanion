@@ -292,6 +292,7 @@ type QqGuide = {
   port: number;
   voice: string;
   tokenSet: boolean;
+  judgeConfigured: boolean;
   path: string;
   values: Array<{ label: string; value: string }>;
   current: { enabled: boolean; provider: string; tts: boolean; voiceBaseUrl: string; voiceVoice: string } | null;
@@ -308,10 +309,39 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
     ui.h('div', 'gsv-detail', `1. ${t.qqStep1}`),
     ui.h('div', 'gsv-detail', `2. ${t.qqStep2}`),
     ui.h('div', 'gsv-detail', `3. ${t.qqStep3}`),
+    ui.h('div', 'gsv-detail', `4. ${t.qqStep4}`),
   );
   const code = ui.h('pre', 'gsv-output');
   const acts = ui.actions();
   const msg = ui.msgline();
+  const judgeRow = ui.actions();
+  const judgeInput = ui.input({ type: 'password', placeholder: t.qqJudgePh });
+  judgeInput.style.flex = '1';
+  const judgeSave = ui.button(t.qqJudgeSave, {
+    size: 'sm',
+    onClick: () => {
+      void (async () => {
+        const key = judgeInput.value.trim();
+        if (!key) {
+          msg.textContent = t.qqJudgePh;
+          msg.classList.add('bad');
+          return;
+        }
+        try {
+          const res = await ctx.invoke<{ ok: boolean; name: string }>('setJudgeKey', [key]);
+          judgeInput.value = '';
+          msg.classList.remove('bad');
+          msg.textContent = `${t.qqJudgeSaved}（${res.name}）`;
+          ui.toast(t.qqJudgeSaved);
+          await load();
+        } catch (err) {
+          msg.textContent = errText(err);
+          msg.classList.add('bad');
+        }
+      })();
+    },
+  });
+  judgeRow.append(judgeInput, judgeSave);
   let guide: QqGuide | null = null;
   const codeText = () => (guide ? guide.values.map((v) => `${v.label} = ${v.value}`).join('\n') : '');
   const copyAll = ui.copyButton(() => codeText(), { label: t.qqCopyAll, size: 'sm' });
@@ -336,7 +366,7 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
     },
   });
   acts.append(copyAll, write);
-  sec.append(status, steps, code, acts, msg);
+  sec.append(status, steps, code, acts, judgeRow, msg);
   host.append(sec);
 
   const load = async () => {
@@ -345,11 +375,13 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
       status.textContent = [
         guide.installed ? t.qqInstalled : t.qqMissing,
         guide.httpApi ? t.qqApiOn : t.qqApiOff,
+        guide.judgeConfigured ? t.qqJudgeOk : t.qqJudgeMissing,
         guide.tokenSet ? t.qqTokenWarn : '',
         guide.current ? `${t.qqCurrent}：${guide.current.provider || '—'} · ${guide.current.voiceBaseUrl || '—'} · ${guide.current.voiceVoice || '—'}` : '',
       ].filter(Boolean).join(' · ');
       code.textContent = guide.values.map((v) => `${v.label}：${v.value}`).join('\n');
       write.disabled = !guide.installed;
+      judgeRow.hidden = guide.judgeConfigured;
     } catch (err) {
       status.textContent = errText(err);
     }

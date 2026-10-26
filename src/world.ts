@@ -1009,7 +1009,7 @@ export class GptSovitsWorld implements World {
         { id: 'voice', title: t.panel, description: t.panelHint, getMethods: ['state'] },
         cfgPanel('cfg-voice', `world:${GPT_SOVITS_ID}`),
         cfgPanel('cfg-output', `world:${GPT_SOVITS_ID}:output`),
-        cfgPanel('cfg-link', `world:${GPT_SOVITS_ID}:link`, ['config', 'qqGuide', 'writeQqVoice']),
+        cfgPanel('cfg-link', `world:${GPT_SOVITS_ID}:link`, ['config', 'qqGuide', 'writeQqVoice', 'setJudgeKey']),
         cfgPanel('cfg-service', `world:${GPT_SOVITS_ID}:service`),
         { id: 'voices', title: t.voicesPanel, description: t.voicesPanelHint, getMethods: ['state'] },
       ],
@@ -1098,10 +1098,16 @@ export class GptSovitsWorld implements World {
     const path = join(this.opts.botDir, 'config.json');
     let qq: any = null;
     try { qq = JSON.parse(readFileSync(path, 'utf8'))?.worlds?.qqbot ?? null; } catch { /* 没装或读不到就按未安装处理 */ }
+    const judgeSecret = qq?.voice?.judgeApiKeySecret || 'DEEPSEEK_API_KEY';
+    const judgeEndpoint = qq?.voice?.judgeEndpoint || 'https://api.deepseek.com';
+    const judgeModel = qq?.voice?.judgeModel || 'deepseek-chat';
     const values = [
       { label: zh ? '实现方式' : 'Provider', value: 'local' },
       { label: zh ? '发语音' : 'Send voice', value: 'true' },
-      { label: zh ? '语义判定是否说语音' : 'Judge when to speak', value: String(qq?.voice?.semanticJudge ?? true) },
+      { label: zh ? '语义判定是否说语音' : 'Judge when to speak', value: 'true' },
+      { label: zh ? '语义判定端点' : 'Judge endpoint', value: judgeEndpoint },
+      { label: zh ? '语义判定模型' : 'Judge model', value: judgeModel },
+      { label: zh ? '判定密钥变量' : 'Judge key variable', value: judgeSecret },
       { label: zh ? '语音模型网址' : 'Voice base URL', value: `http://127.0.0.1:${port}` },
       { label: zh ? '音色' : 'Voice', value: voice },
       { label: zh ? 'TTS 模型名' : 'TTS model', value: 'tts-1' },
@@ -1113,12 +1119,47 @@ export class GptSovitsWorld implements World {
       port,
       voice,
       tokenSet: !!this.cfg.httpToken,
+      judgeSecret,
+      judgeConfigured: this.secretConfigured(judgeSecret),
       path,
       values,
       current: qq?.voice
         ? { enabled: !!qq.voice.enabled, provider: qq.voice.provider ?? '', tts: !!qq.voice.tts, voiceBaseUrl: qq.voice.voiceBaseUrl ?? '', voiceVoice: qq.voice.voiceVoice ?? '' }
         : null,
     };
+  }
+
+  /** 部署 .env 或进程环境里有没有这个密钥变量（只看变量名，不读值）。 */
+  private secretConfigured(name: string): boolean {
+    if (!name) return false;
+    if (process.env[name]) return true;
+    try {
+      const env = readFileSync(join(this.opts.botDir, '.env'), 'utf8');
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`^\\s*${escaped}\\s*=`, 'm').test(env);
+    } catch {
+      return false;
+    }
+  }
+
+  /** 保存语义判定密钥到部署 .env（同名变量覆盖，其他行保留）。 */
+  private setJudgeKey(secret: string): unknown {
+    const value = secret.trim();
+    if (value.length < 8) throw new Error('密钥太短，请粘贴完整的 API Key。');
+    let name = 'DEEPSEEK_API_KEY';
+    try {
+      const raw = JSON.parse(readFileSync(join(this.opts.botDir, 'config.json'), 'utf8'));
+      name = raw?.worlds?.qqbot?.voice?.judgeApiKeySecret || name;
+    } catch { /* 没有 qq 配置就用默认名 */ }
+    const path = join(this.opts.botDir, '.env');
+    let lines: string[] = [];
+    try { lines = readFileSync(path, 'utf8').split(/\r?\n/); } catch { /* 还没有 .env */ }
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prefix = new RegExp(`^\\s*${escaped}\\s*=`);
+    lines = lines.filter((line) => line.trim() && !prefix.test(line));
+    lines.push(`${name}=${value}`);
+    writeFileSync(path, `${lines.join('\n')}\n`);
+    return { ok: true, name, path };
   }
 
   /** 一键把本地语音接口的参数写进 QQ 插件配置（改完需重启 Coopanion 生效）。 */
@@ -1136,10 +1177,14 @@ export class GptSovitsWorld implements World {
     qq.voice.enabled = true;
     qq.voice.provider = 'local';
     qq.voice.tts = true;
+    qq.voice.semanticJudge = true;
     qq.voice.voiceBaseUrl = `http://127.0.0.1:${port}`;
     qq.voice.voiceVoice = this.cfg.voice.preset || DEFAULT_PRESET;
     qq.voice.voiceTtsModel = 'tts-1';
     qq.voice.voiceTimeout = 120;
+    if (!qq.voice.judgeEndpoint) qq.voice.judgeEndpoint = 'https://api.deepseek.com';
+    if (!qq.voice.judgeModel) qq.voice.judgeModel = 'deepseek-chat';
+    if (!qq.voice.judgeApiKeySecret) qq.voice.judgeApiKeySecret = 'DEEPSEEK_API_KEY';
     const backup = `${path}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
     copyFileSync(path, backup);
     writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`);
@@ -1182,6 +1227,7 @@ export class GptSovitsWorld implements World {
   /** 面板数据面。 */
   async invoke(panel: string, method: string, args: unknown[]): Promise<unknown> {
     if (method === 'setConfigValue') return this.setConfigValue(String(args[0] ?? ''), args[1]);
+    if (method === 'setJudgeKey') return this.setJudgeKey(String(args[0] ?? ''));
     if (method === 'qqGuide') return this.qqGuide();
     if (method === 'writeQqVoice') return this.writeQqVoice();
     if (method === 'config') {

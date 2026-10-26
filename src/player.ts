@@ -165,14 +165,30 @@ export class Player {
   private open(sampleRate: number, device: string): void {
     this.audify ??= loadAudify();
     const audify = this.audify;
-    const rt = new audify.RtAudio(apiOf(audify));
-    const devices = rt.getDevices().filter((d) => d.outputChannels > 0);
+    let rt = new audify.RtAudio(apiOf(audify));
+    let devices = rt.getDevices().filter((d) => d.outputChannels > 0);
     const wanted = device ? devices.find((d) => d.name === device) ?? devices.find((d) => d.name.includes(device)) : undefined;
-    const deviceId = wanted?.id ?? rt.getDefaultOutputDevice();
-    const channels = Math.min(2, Math.max(1, devices.find((d) => d.id === deviceId)?.outputChannels ?? 2));
+    let deviceId = wanted?.id ?? rt.getDefaultOutputDevice();
     const frameSize = Math.round(sampleRate * FRAME_MS / 1000);
-    rt.openStream({ deviceId, nChannels: channels, firstChannel: 0 }, null, audify.RtAudioFormat.RTAUDIO_SINT16, sampleRate, frameSize, 'cortico-gpt-sovits', null, null);
-    rt.start();
+    const channelsOf = (id: number): number => Math.min(2, Math.max(1, devices.find((d) => d.id === id)?.outputChannels ?? 2));
+    const openOn = (): number => {
+      rt.openStream({ deviceId, nChannels: channelsOf(deviceId), firstChannel: 0 }, null, audify.RtAudioFormat.RTAUDIO_SINT16, sampleRate, frameSize, 'cortico-gpt-sovits', null, null);
+      rt.start();
+      return channelsOf(deviceId);
+    };
+    let channels: number;
+    try {
+      channels = openOn();
+    } catch (err) {
+      if (!wanted) throw new Error(`打不开输出设备：${String(err)}。请在「输出与保存」里换一个设备，或留空用系统默认。`);
+      // 配置里写的设备当前不可用（拔掉耳机、驱动重排）：退回系统默认，别让整句合成失败。
+      this.opts.log.warn('指定输出设备打不开，改用系统默认', { device, err: String(err) });
+      try { if (rt.isStreamOpen()) rt.closeStream(); } catch { /* 已断开 */ }
+      rt = new audify.RtAudio(apiOf(audify));
+      devices = rt.getDevices().filter((d) => d.outputChannels > 0);
+      deviceId = rt.getDefaultOutputDevice();
+      channels = openOn();
+    }
     this.rt = rt;
     this.rate = sampleRate;
     this.openedDevice = device;

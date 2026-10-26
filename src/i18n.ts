@@ -102,6 +102,13 @@ const PANEL = {
     newQqDesc: 'cortico-world-qq-final 直接取本机语音；下面的接口与音色设置都给它用。',
     oldQqTitle: '旧版 QQ 插件',
     oldQqDesc: 'cortico-world-qq 走附件句柄；只需打开「把整句语音交给其他插件」。',
+    qqJudgeOk: '语义判定密钥：已配置',
+    qqJudgeMissing: '语义判定密钥：未配置（没有它不会发语音）',
+    qqJudgeKey: 'DeepSeek 判定密钥',
+    qqJudgePh: '粘贴 DeepSeek API Key（只写入本机部署 .env）',
+    qqJudgeSave: '保存判定密钥',
+    qqJudgeSaved: '判定密钥已保存，重启 Coopanion 后生效',
+    qqStep4: '语义判定需要 DeepSeek 密钥：粘贴到下面保存一次；没有密钥就不会发语音。',
   },
   en: {
     label: 'GPTSovits Voice',
@@ -199,6 +206,13 @@ const PANEL = {
     newQqDesc: 'cortico-world-qq-final calls this local voice API; the settings below are for it.',
     oldQqTitle: 'Old QQ plugin',
     oldQqDesc: 'cortico-world-qq takes an attachment handle; just enable "hand the line to other plugins".',
+    qqJudgeOk: 'Judge key: configured',
+    qqJudgeMissing: 'Judge key: missing (voice will not be sent)',
+    qqJudgeKey: 'DeepSeek judge key',
+    qqJudgePh: 'Paste your DeepSeek API key (stored only in the local deployment .env)',
+    qqJudgeSave: 'Save judge key',
+    qqJudgeSaved: 'Judge key saved; restart Coopanion',
+    qqStep4: 'The semantic judge needs a DeepSeek key: paste it below once. Without it no voice is sent.',
   },
 };
 
