@@ -58,6 +58,17 @@ export interface GptSovitsConfigSection {
   /** 本机外放；关掉后语音只合成、不在本机出声（适合语音只发给 QQ 的场景）。 */
   playLocally: boolean;
   /**
+   * 对其他插件开放本地 HTTP 语音接口：QQ 插件（cortico-world-qq-final 等）把「语音模型网址」指过来，
+   * 就能用本插件的声音合成并发到 QQ。只监听 127.0.0.1。
+   */
+  httpApi: boolean;
+  /** HTTP 语音接口的端口；默认 9880。改端口要重挂扩展（重启 World）才生效。 */
+  httpPort: number;
+  /** HTTP 语音接口的访问令牌；留空不校验（接口只监听回环地址）。 */
+  httpToken: string;
+  /** 由对方插件自己合成语音的渠道（如 QQ）：开启后提示词让 bot 不为这些回复调用 sovits_speak。 */
+  channelVoice: boolean;
+  /**
    * 采样种子，对应 api_v2 的 `seed`。`-1` 每次重新采样（同一句每次都不一样），
    * `0` 及以上固定种子（同一句、同一进程内逐字节可复现）。
    */
@@ -95,6 +106,10 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   saveKeepHours: 0,
   shareAudio: false,
   playLocally: true,
+  httpApi: false,
+  httpPort: 9880,
+  httpToken: '',
+  channelVoice: false,
   seed: SEED_RANDOM,
   volume: 1,
   outputDevice: '',
@@ -130,6 +145,10 @@ const TEXT = {
     saveKeepHours: { title: '语音文件保留时长（小时）', description: '只清理本插件写出的 line-*.wav，别的文件不动；保存新语音时顺手清理过期的。0 为一直留着。' },
     shareAudio: { title: '把整句语音交给其他插件', description: '合成完把这一句的音频作为回执附件交出去：QQ 等插件可以用回执里的 [blob …] 句柄发送同一段音频，不必再读文件。代价是这句台词要等整句合成完才回执，气泡比往常晚一点出现。' },
     playLocally: { title: '本机外放', description: '关掉后语音不在本机出声，只合成——语音只发给 QQ 等渠道时用它。桌宠气泡不受影响；某一句想临时不播，让 bot 调 sovits_speak 时带 silent 参数即可。' },
+    httpApi: { title: '开放本地语音接口', description: '给其他插件取音频用：QQ 插件（cortico-world-qq-final 等）把「语音模型网址」填成本机地址，就能用这个声音合成并发到 QQ。只监听 127.0.0.1，开关与端口改动需重挂扩展（重启 World）生效。' },
+    httpPort: { title: '语音接口端口', description: '默认 9880。与别的程序冲突时换一个。' },
+    httpToken: { title: '语音接口令牌', description: '留空不校验（接口只监听本机回环地址）。填了以后对方请求要带 Authorization: Bearer 或 ?token=。' },
+    channelVoice: { title: '其他渠道的语音交给对方插件', description: '开启后提示词会告诉 bot：在由对方插件自己合成语音的渠道（如 QQ）回复时不要调用 sovits_speak，免得同一句在本机又念一遍；本机对话页照常出声。配合「开放本地语音接口」+ QQ 插件自带语音时用。' },
     seed: { title: '采样种子', description: '-1 每次重新采样（同一句每次听起来都不同）；填 0 或正整数可固定，同一句每次逐字节一致。' },
     volume: { title: '音量' },
     outputDevice: { title: '输出设备', description: '留空使用系统默认设备。', system: '系统默认' },
@@ -158,6 +177,10 @@ const TEXT = {
     saveKeepHours: { title: 'Keep speech files (hours)', description: 'Only removes line-*.wav files written by this plugin, nothing else; expired ones are swept whenever a new line is saved. 0 keeps everything.' },
     shareAudio: { title: 'Hand each line to other plugins', description: 'Returns the finished line as a result attachment, so plugins like QQ can send the same audio with the [blob …] handle instead of reading a file. The line must finish synthesizing first, so the bubble appears a little later than before.' },
     playLocally: { title: 'Play on this computer', description: 'When off, lines are synthesized but not played here — handy when the voice only goes to QQ. Bubbles are unaffected; for a single line, have the bot pass silent to sovits_speak.' },
+    httpApi: { title: 'Serve a local voice API', description: 'For other plugins to fetch audio: point a QQ plugin\'s (cortico-world-qq-final, for example) voice model URL at this computer and it can synthesize with this voice and send it to QQ. Loopback only; toggling it or the port needs the extension remounted (World restarted).' },
+    httpPort: { title: 'Voice API port', description: 'Defaults to 9880; change it if something else uses that port.' },
+    httpToken: { title: 'Voice API token', description: 'Empty means no check (the server listens on loopback only). When set, callers must send Authorization: Bearer or ?token=.' },
+    channelVoice: { title: 'Channel voice comes from the other plugin', description: 'When on, the prompt tells the bot not to call sovits_speak for replies on channels whose plugin synthesizes voice itself (QQ, for example), so the same line is not spoken here too; the chat page keeps its voice. Use it with the local voice API and a voice-capable QQ plugin.' },
     seed: { title: 'Sampling seed', description: '-1 resamples every time (the same line sounds different each run); 0 or a positive integer fixes it, making the same line byte-identical.' },
     volume: { title: 'Volume' },
     outputDevice: { title: 'Output device', description: 'Empty for the system default.', system: 'System default' },
@@ -206,6 +229,10 @@ export function configGroups(language: Language): ConfigGroup[] {
         [`${K}.saveKeepHours`]: { type: 'number', title: t.saveKeepHours.title, description: t.saveKeepHours.description, minimum: 0, multipleOf: 1, 'x-hot': true },
         [`${K}.shareAudio`]: { type: 'boolean', title: t.shareAudio.title, description: t.shareAudio.description, 'x-hot': true },
         [`${K}.playLocally`]: { type: 'boolean', title: t.playLocally.title, description: t.playLocally.description, 'x-hot': true },
+        [`${K}.httpApi`]: { type: 'boolean', title: t.httpApi.title, description: t.httpApi.description, 'x-hot': true },
+        [`${K}.httpPort`]: { type: 'number', title: t.httpPort.title, description: t.httpPort.description, minimum: 1, maximum: 65535, multipleOf: 1, 'x-hot': true },
+        [`${K}.httpToken`]: { type: 'string', title: t.httpToken.title, description: t.httpToken.description, 'x-hot': true },
+        [`${K}.channelVoice`]: { type: 'boolean', title: t.channelVoice.title, description: t.channelVoice.description, 'x-hot': true },
         [`${K}.seed`]: { type: 'number', title: t.seed.title, description: t.seed.description, minimum: SEED_RANDOM, multipleOf: 1, 'x-hot': true },
         [`${K}.volume`]: { type: 'number', title: t.volume.title, minimum: 0, maximum: 1, multipleOf: .05, 'x-hot': true },
         [`${K}.outputDevice`]: { type: 'string', title: t.outputDevice.title, description: t.outputDevice.description, 'x-options': DEVICE_OPTIONS, 'x-hot': true },

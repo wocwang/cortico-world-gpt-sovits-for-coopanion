@@ -182,6 +182,17 @@ const SHARE = {
 export const shareWords = (language: 'zh' | 'en', on: boolean): string => (on ? SHARE[language] : '');
 
 /**
+ * `{{sovits.channel}}` 的取值：开着「其他渠道的语音交给对方插件」时，告诉 bot 那些渠道不要自己念
+ * （由对方的插件用本插件的声音合成发出去），自己只管本机对话页。
+ */
+const CHANNEL = {
+  zh: '在由对方插件自己合成语音的渠道（如 QQ）回复时不要调用 `sovits_speak`：气泡照常 `pet_say`，语音交给对方的插件用同一套声音去发；只有和本机对话页里的对方说话时才用 `sovits_speak` 念出来。',
+  en: 'When replying on a channel whose plugin synthesizes voice itself (QQ, for example), do not call `sovits_speak`: use `pet_say` for the bubble and let that plugin produce the voice with this same voice; call `sovits_speak` only when talking to the person on this computer.',
+};
+
+export const channelWords = (language: 'zh' | 'en', on: boolean): string => (on ? CHANNEL[language] : '');
+
+/**
  * `{{sovits.language}}` 与语言切换事件的取值：告诉 bot 这句台词该怎么写。
  * 中文＝直接照读聊天文字；日语/英语＝先把中文台词翻译过去（气泡仍是聊天语言）。
  */

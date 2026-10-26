@@ -62,6 +62,10 @@
 | `saveKeepHours` | 0 | 保存的语音保留多少小时，过期的在下次保存时清掉；只清理本插件写出的 `line-*.wav`。0 为一直留着 |
 | `shareAudio` | false | 把整句语音作为 `sovits_speak` 回执的附件交出去：QQ 等插件用回执里的 `[blob …]` 句柄发同一段音频，不必读写文件。开启后这句要等整句合成完才回执，气泡会晚一点出现 |
 | `playLocally` | true | 本机外放。关掉后语音只合成、不在本机出声（语音只发 QQ 时有用）；某一句想临时不播，让 bot 调 `sovits_speak` 时带 `silent: true` |
+| `httpApi` | false | 对其他插件开放本地语音接口（只监听 127.0.0.1）：QQ 插件把「语音模型网址」指过来就能用这个声音合成并发到 QQ |
+| `httpPort` | 9880 | 语音接口端口；与别的程序冲突时换一个 |
+| `httpToken` | 空 | 语音接口令牌。留空不校验；填了以后对方要带 `Authorization: Bearer` 或 `?token=` |
+| `channelVoice` | false | 由对方插件自己合成语音的渠道（如 QQ）：开启后提示词让 bot 不为这些回复调用 `sovits_speak`，本机对话页照常出声 |
 | `seed` | -1 | 采样种子：`-1` 每次随机（同一句每次听起来都不同）；填 0 或正整数则固定，同一句逐字节一致 |
 | `volume` | 1 | 音量 0–1 |
 | `outputDevice` | 空 | 输出设备名，空为系统默认 |
@@ -150,6 +154,32 @@ Owner: `src/world.ts`
 回退规则：权重没下载完 / CPU 档（v2ProPlus 用不了 v5turbo 的 LoRA）/ 自备了权重 / 连的是已有服务，
 都按原逻辑走（底模或自备权重），面板「权重来源」会显示「内置底模」或「自备权重」。
 底模齐了就能起服务，官模没下完不影响出声，只是先用底模。
+
+### 给别的插件取音频（本地语音接口）
+
+`httpApi` 打开后，本插件在 `127.0.0.1:<httpPort>` 上开一个小接口，别的插件可以直接拿这个声音合成：
+
+| 路由 | 用途 |
+|---|---|
+| `GET /health` | 就绪状态：`{"ready":true,"state":"available"}` |
+| `POST /audio/speech` | OpenAI 兼容：`{model?, voice?, input, speed?}` → `audio/wav` 字节 |
+| `POST /tts` | VoxCPM 形状：`{text, voice_desc?, speed?, seed?}` → 48 kHz `audio/wav` 字节 |
+
+`voice` / `voice_desc` 可以点名音色（预设 `xll` / `dfy` / `female` / `male`，或自定义音色的名字/id），不填就用插件当前音色。
+合成不经过播放器，本机不会出声；多个请求自动排队，一次只合成一句。
+
+配合 `cortico-world-qq-final`（它的语音是自己合成的）时的填法：
+
+```
+worlds.qqbot.voice.provider     = local          # 或 custom（要同时填 API Key）
+worlds.qqbot.voice.voiceBaseUrl = http://127.0.0.1:9880
+worlds.qqbot.voice.voiceVoice   = xll            # 可选：指定音色；不填用插件当前音色
+worlds.qqbot.voice.voiceTimeout = 120            # 本地合成慢，默认值够
+worlds.qqbot.voice.semanticJudge = true          # 由它判断哪些回复用语音
+```
+
+再把本插件的 `channelVoice` 打开：提示词会告诉 bot 在 QQ 这类渠道不要自己念，避免同一句本地又响一遍。
+老插件 `cortico-world-qq`（用 `[blob …]` 句柄的 `qq_draft`）继续走 `shareAudio`，两条路别同时开。
 
 ### 推理后端
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.7
+
+- **先气泡、后语音**：工具按顺序执行，`sovits_speak` 要等第一块音频才返回，原来提示词要求它排在
+  `pet_say` 前面，导致「还没看到文字，声音就冒出来了」。现在提示词与 `sovits_speak` 的说明都改成
+  **先 `pet_say`、再 `sovits_speak`**，文字先出现、声音随后响起。
+- **新增本地语音接口**（`httpApi` / `httpPort` / `httpToken`，默认关）：在 `127.0.0.1:<端口>` 上开
+  `GET /health`、OpenAI 兼容的 `POST /audio/speech`、VoxCPM 形状的 `POST /tts`，让
+  **cortico-world-qq-final** 这类自己合成语音的插件把声音来源指向本插件；合成不播放、请求串行排队。
+  `voice` / `voice_desc` 可点名音色（预设或自定义音色），不填用当前音色。
+- **新增「其他渠道的语音交给对方插件」**（`channelVoice`，默认关）：开启后环境提示词告诉 bot 在
+  QQ 这类由对方插件出语音的渠道不要调用 `sovits_speak`，免得同一句在本机又念一遍；本机对话页照常出声，
+  配合本地语音接口即可把 QQ 语音切到 qq-final，同时保留本地外放。
+
 ## 0.5.6
 
 - **新增「本机外放」开关**（`playLocally`，默认开＝照常出声）：关掉后语音只合成、不在本机出声，

@@ -3,7 +3,7 @@
  * `sovits_hush` 停下当前一句并清空队列。
  *
  * `sovits_speak` 等这一句的第一块音频写进声卡才返回(至多 SPEAK_WAIT_MAX_MS)。主循环按顺序执行同一次回复里的
- * 工具调用，紧跟其后的 `pet_say` 因此在声音开始时才出气泡。
+ * 工具调用，所以提示词要求先 `pet_say` 再 `sovits_speak`：气泡先出现，声音随后响起。
  *
  * 推理后端三选一，优先级从高到低：配置的已有服务地址、配置的自备运行时目录、托管安装的运行时与权重。
  * 后两种由本 World 起子进程(见 server.ts),就绪后用中英日各一句预热，预热完才算可用。
@@ -22,7 +22,8 @@ import { nowIso } from 'cortico/core/util.ts';
 import { officialVoice, OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
 import { configGroups, GPT_SOVITS_ID, REF_MAX_SECONDS, REF_MIN_SECONDS, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
-import { languageWords, panelText, shareWords, stateWords } from './i18n.ts';
+import { startHttpTts, type HttpTtsHandle, type TtsJob } from './http-tts.ts';
+import { channelWords, languageWords, panelText, shareWords, stateWords } from './i18n.ts';
 import { isRuntimeDir, RuntimeJob, WeightsJob, type JobState } from './install.ts';
 import { Player, applyGain } from './player.ts';
 import { SovitsServer, type ServerState } from './server.ts';
@@ -30,7 +31,7 @@ import { registerCustomVoiceOptions } from './voice-options.ts';
 import { promptLanguageOf, speechText, ttsPlain, ttsSafe } from './speech-text.ts';
 import { synthesize, switchWeights, type SpeechLang, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
-import { DEFAULT_PRESET, isPreset, presetRefId, type VoicePreset } from './voices.ts';
+import { DEFAULT_PRESET, isPreset, presetRefId, VOICE_PRESETS, type VoicePreset } from './voices.ts';
 import { installedBaseWeights, officialWeights, resolveTrained, type TrainedResult, type TrainedWeights } from './weights.ts';
 import { readSeconds, staleSavedLine, wavBytes } from './wav.ts';
 
@@ -165,6 +166,8 @@ export class GptSovitsWorld implements World {
   /** 闲置停服的定时器，以及服务是否已因闲置停下（下一句自动唤醒）。 */
   private idleTimer: NodeJS.Timeout | undefined;
   private sleeping = false;
+  /** 给其他插件取音频的本地 HTTP 接口；配置关着时为 null。 */
+  private httpTts: HttpTtsHandle | null = null;
   /** 正在进行的启动+预热，避免休眠唤醒与面板按钮同时启动两次。 */
   private startingServer: Promise<void> | null = null;
 
@@ -414,6 +417,7 @@ export class GptSovitsWorld implements World {
       'sovits.state': this.stateFor(w),
       'sovits.language': `${lang.name}——${lang.rule}`,
       'sovits.share': shareWords(this.cfg.promptLanguage, this.cfg.shareAudio),
+      'sovits.channel': channelWords(this.cfg.promptLanguage, this.cfg.channelVoice),
     };
   }
 
@@ -674,6 +678,7 @@ export class GptSovitsWorld implements World {
     this.langTimer = setInterval(() => this.syncLanguage(), 1000);
     if (this.launching && this.canStart()) void this.startServer().finally(() => { this.launching = false; });
     else this.launching = false;
+    void this.startHttpApi();
   }
 
   /** 可用性变了才推事件;World 刚启动时第一次变为可用也报，因为前缀里写的是「启动中」。 */
@@ -724,7 +729,83 @@ export class GptSovitsWorld implements World {
     this.player.close();
     this.runtime.cancel();
     this.weights.cancel();
+    const api = this.httpTts;
+    this.httpTts = null;
+    if (api) await api.close();
     await this.server.stop();
+  }
+
+  /** 起「给其他插件取音频」的本地接口；没开或已经在跑就不做。 */
+  private async startHttpApi(): Promise<void> {
+    if (!this.cfg.httpApi || this.httpTts) return;
+    try {
+      this.httpTts = await startHttpTts({
+        port: this.cfg.httpPort || 9880,
+        token: this.cfg.httpToken,
+        deps: {
+          synthesize: (job, signal) => this.synthesizeForApi(job, signal),
+          ready: () => this.apiReady(),
+          stateText: () => this.stateFor(stateWords('en')),
+          log: this.log,
+        },
+      });
+    } catch (err) {
+      this.log.warn('HTTP 语音接口没起来，其他插件取不到音频', { err: String(err), port: this.cfg.httpPort });
+    }
+  }
+
+  /** 接口此刻能不能接活：服务就绪，或休眠中但能自己拉起来。 */
+  private apiReady(): boolean {
+    return !!this.url() || (this.sleeping && this.canStart());
+  }
+
+  /**
+   * HTTP 接口要的一句音频：用点名或当前的音色合成，只回 WAV —— 不播放、不进播放队列。
+   * 服务在休眠就先叫醒；失败抛错，由接口回 502。
+   */
+  private async synthesizeForApi(job: TtsJob, signal: AbortSignal): Promise<Buffer> {
+    const voice = this.voiceByName(job.voice) ?? this.voice();
+    if (!voice) throw new Error(this.voiceIssue ?? 'no reference audio is set');
+    if (!this.url() && this.sleeping && this.canStart()) {
+      this.sleeping = false;
+      this.log.info('推理服务在休眠，这次取音频会叫醒它');
+      await this.startServer();
+    }
+    const url = this.url();
+    if (!url) throw new Error(`voice not ready: ${this.stateFor(stateWords('en'))}`);
+    const gain = this.backend().kind === 'remote' ? 1 : OUTPUT_GAIN[this.version()];
+    const req = this.request(job.text, voice);
+    const chunks: Buffer[] = [];
+    let rate = 0;
+    const asked: SynthRequest = {
+      ...req,
+      ...(typeof job.speed === 'number' && job.speed > 0 ? { speed: job.speed } : {}),
+      ...(typeof job.seed === 'number' && job.seed >= 0 ? { seed: job.seed } : {}),
+    };
+    for await (const c of synthesize(url, asked, signal)) {
+      rate = c.sampleRate;
+      chunks.push(applyGain(c.pcm, gain));
+    }
+    if (!chunks.length) throw new Error('synthesized nothing');
+    return wavBytes(Buffer.concat(chunks), rate);
+  }
+
+  /** 接口点名的音色：自定义音色的 id 或名字、预设 id（xll/dfy/female/male）；认不出返回 null。 */
+  private voiceByName(name?: string): { audio: string; text: string } | null {
+    const want = (name ?? '').trim().toLowerCase();
+    if (!want) return null;
+    const custom = (this.cfg.voices ?? []).find((v) => v.id === name || v.name.toLowerCase() === want);
+    if (custom?.audio) {
+      if (!existsSync(custom.audio)) this.log.warn('HTTP 语音接口点名的自定义音色缺参考音频，用当前音色', { voice: name });
+      else if (!referenceIssue(custom.audio)) return { audio: custom.audio, text: custom.text };
+    }
+    const preset = VOICE_PRESETS.find((p) => p === want);
+    if (preset) {
+      const f = presetFiles(preset, this.cfg.textLang);
+      if (existsSync(f.audio) && existsSync(f.text)) return { audio: f.audio, text: readText(f.text) };
+    }
+    this.log.warn('HTTP 语音接口点名的音色认不出，用当前音色', { voice: name });
+    return null;
   }
 
   /** 本机服务要的东西都在。 */
@@ -928,6 +1009,7 @@ export class GptSovitsWorld implements World {
         vars: [
           { name: 'sovits.state', description: language === 'zh' || language === 'zh-Hant' ? '语音此刻的状态。' : 'The voice state at this moment.' },
           { name: 'sovits.share', description: language === 'zh' || language === 'zh-Hant' ? '开着「交给其他插件」时告诉 bot 怎么把同一句发出去；没开时为空。' : 'How to hand the same line to another plugin while the attachment mode is on; empty when it is off.' },
+          { name: 'sovits.channel', description: language === 'zh' || language === 'zh-Hant' ? '开着「其他渠道的语音交给对方插件」时提醒 bot 那些渠道不要自己念；没开时为空。' : 'Reminds the bot not to speak for channels whose plugin handles voice itself; empty when that option is off.' },
         ],
       }],
     };

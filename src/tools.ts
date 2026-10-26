@@ -4,7 +4,7 @@ import type { ToolSpec } from 'cortico/core/types.ts';
 export const SOVITS_TOOL_DECLS: readonly ToolSpec[] = [
   {
     name: 'sovits_speak',
-    description: 'Say a line aloud in your voice, after any line still playing. Emit it in the same reply as the pet_say it voices, immediately followed by that pet_say, without waiting for this result: the bubble then appears as the voice begins. Bubble markup (【…】 and <…>) is skipped, so the text can be the pet_say script verbatim.',
+    description: 'Say a line aloud in your voice, after any line still playing. Call it in the same reply as the pet_say it voices, right after that pet_say, without waiting for this result: tools run in order and this one only returns after the first audio chunk, so the bubble shows first and the voice starts after it. Bubble markup (【…】 and <…>) is skipped, so the text can be the pet_say script verbatim.',
     tags: ['speak'],
     parameters: {
       type: 'object',
