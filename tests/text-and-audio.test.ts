@@ -3,7 +3,8 @@ import { INLINE_TAG_MAX, promptLanguageOf, speechText, ttsPlain, ttsSafe } from 
 import { parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth.ts';
 import { applyGain, upmix } from '../src/player.ts';
 import { wavBytes } from '../src/wav.ts';
-import { languageWords } from '../src/i18n.ts';
+import { languageWords, shareWords } from '../src/i18n.ts';
+import { SOVITS_TOOL_DECLS } from '../src/tools.ts';
 import { presetRefId } from '../src/voices.ts';
 
 describe('speechText', () => {
@@ -181,5 +182,25 @@ describe('upmix', () => {
   it('copies every mono sample to both channels in order', () => {
     const out = upmix(Buffer.from(Int16Array.from([1, -2, 300]).buffer), 2);
     expect(Array.from(new Int16Array(out.buffer, out.byteOffset, 6))).toEqual([1, 1, -2, -2, 300, 300]);
+  });
+});
+
+describe('sovits_speak 声明', () => {
+  it('接受 silent 参数（发给其他渠道时本机不出声），且只有 text 必填', () => {
+    const speak = SOVITS_TOOL_DECLS.find((t) => t.name === 'sovits_speak')!;
+    const params = speak.parameters as { properties: Record<string, { type: string }>; required: string[]; additionalProperties: boolean };
+    expect(params.properties.silent?.type).toBe('boolean');
+    expect(params.additionalProperties).toBe(false);
+    expect(params.required).toEqual(['text']);
+  });
+});
+
+describe('shareWords', () => {
+  it('开着时给出句柄与 silent 的用法，关着时留空', () => {
+    expect(shareWords('zh', true)).toContain('silent: true');
+    expect(shareWords('zh', true)).toContain('[blob');
+    expect(shareWords('en', true)).toContain('silent: true');
+    expect(shareWords('zh', false)).toBe('');
+    expect(shareWords('en', false)).toBe('');
   });
 });

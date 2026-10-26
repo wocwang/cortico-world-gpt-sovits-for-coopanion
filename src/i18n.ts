@@ -175,8 +175,8 @@ export const stateWords = (language: 'zh' | 'en'): StateWords => STATE[language]
  * 没开就留空——那一行提示词会变成空行，不影响其余内容。
  */
 const SHARE = {
-  zh: '想把同一句话发到 QQ 等消息渠道时，用这次 `sovits_speak` 回执里的 `[blob …]` 音频句柄作为发送工具的音频来源（例如 `qq_draft` 的 voice 参数），不要再合成一遍。',
-  en: 'To send the same line to a chat channel such as QQ, use the audio `[blob …]` handle from this `sovits_speak` result as the audio for that send tool (the `qq_draft` voice parameter, for example) instead of synthesizing it again.',
+  zh: '想把同一句话发到 QQ 等消息渠道时，用这次 `sovits_speak` 回执里的 `[blob …]` 音频句柄作为发送工具的音频来源（例如 `qq_draft` 的 voice 参数），不要再合成一遍；这一句是发给那种渠道、不想在对方电脑外放时，给这次 `sovits_speak` 带上 `silent: true`。',
+  en: 'To send the same line to a chat channel such as QQ, use the audio `[blob …]` handle from this `sovits_speak` result as the audio for that send tool (the `qq_draft` voice parameter, for example) instead of synthesizing it again; when the line is meant for such a channel and should not be played on this computer, pass `silent: true` to that `sovits_speak`.',
 };
 
 export const shareWords = (language: 'zh' | 'en', on: boolean): string => (on ? SHARE[language] : '');

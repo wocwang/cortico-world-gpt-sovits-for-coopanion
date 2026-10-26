@@ -84,6 +84,8 @@ const delayed = (ms: number): Promise<null> => new Promise((resolve) => {
 interface QueuedLine {
   text: string;
   at: number;
+  /** true = 只合成不本机外放（这一句是发给别的渠道的）。 */
+  silent: boolean;
   /** 这一句开始出声（或失败、被清空、超时）时调用一次。 */
   started: () => void;
   /** 整句 PCM 就绪（或失败、被清空）时调用一次；`null` 表示这次没有音频。 */
@@ -431,16 +433,16 @@ export class GptSovitsWorld implements World {
     const lang = languageWords('en', this.cfg.textLang);
     // 开着「交给其他插件」时补一句附件用法，模型才知道把回执里的 [blob …] 句柄填给别的发送工具。
     const share = this.cfg.shareAudio
-      ? " The result also carries the whole line as an audio attachment: pass that [blob …] handle to another plugin's send tool (the QQ voice parameter, for example) to deliver the same audio."
+      ? " The result also carries the whole line as an audio attachment: pass that [blob …] handle to another plugin's send tool (the QQ voice parameter, for example) to deliver the same audio. Pass silent: true for a line meant for such a channel, so it is not played on this computer."
       : '';
     return [
-      { ...speak!, description: `${speak!.description} Speech language: ${lang.name} — ${lang.rule}${share}`, handler: (args) => this.speak(String(args.text ?? '')) },
+      { ...speak!, description: `${speak!.description} Speech language: ${lang.name} — ${lang.rule}${share}`, handler: (args) => this.speak(String(args.text ?? ''), args.silent === true) },
       { ...hush!, handler: async () => { this.hush(); return 'Stopped.'; } },
     ];
   }
 
   /** 排进队列，等这一句开始出声(或失败、被清空、超时)再返回。 */
-  private async speak(script: string): Promise<ToolOutcome> {
+  private async speak(script: string, silent = false): Promise<ToolOutcome> {
     this.syncLanguage();
     const text = ttsSafe(speechText(script));
     if (!text) return { text: 'Nothing to say: the text has only markup.' };
@@ -460,7 +462,7 @@ export class GptSovitsWorld implements World {
     const finished = sharing ? new Promise<Buffer | null>((resolve) => { finish = resolve; }) : null;
     let timer: NodeJS.Timeout | undefined;
     const started = new Promise<void>((done) => {
-      this.queue.push({ text, at: Date.now(), started: done, ...(finish ? { finish } : {}) });
+      this.queue.push({ text, at: Date.now(), silent, started: done, ...(finish ? { finish } : {}) });
       timer = setTimeout(done, SPEAK_WAIT_MAX_MS);
     });
     if (ready) void this.pump();
@@ -490,11 +492,12 @@ export class GptSovitsWorld implements World {
 
   /**
    * 合成一句话并写进播放器；返回首包时间和整句 PCM（只有开启保存或「交给其他插件」时才收）。
+   * `silent` 为 true 时只合成不写播放器：这一句是给别的渠道（QQ 等）的，本机不该出声。
    * 失败时抛出，由调用方决定要不要降级重试。`onFirst` 在第一次真正写进声卡时调用一次。
    */
   private async playLine(
     url: string, voice: { audio: string; text: string }, text: string,
-    signal: AbortSignal, onFirst: () => void,
+    signal: AbortSignal, onFirst: () => void, silent: boolean,
   ): Promise<{ first: number; wav: Buffer | null }> {
     const gain = this.backend().kind === 'remote' ? 1 : OUTPUT_GAIN[this.version()];
     // 落盘或交出去的内容与听到的一致（同一增益）；两者都关时不占内存。
@@ -502,10 +505,10 @@ export class GptSovitsWorld implements World {
     let first = 0;
     for await (const c of synthesize(url, this.request(text, voice), signal)) {
       if (archive) { archive.rate = c.sampleRate; archive.chunks.push(applyGain(c.pcm, gain)); }
-      await this.player.write(c.sampleRate, c.pcm, gain);
+      if (!silent) await this.player.write(c.sampleRate, c.pcm, gain);
       if (!first) { first = Date.now(); onFirst(); }
     }
-    this.player.flush();
+    if (!silent) this.player.flush();
     if (!archive?.chunks.length) return { first, wav: null };
     const bytes = Buffer.concat(archive.chunks);
     if (this.cfg.saveAudio) this.saveLine(bytes, archive.rate);
@@ -560,6 +563,8 @@ export class GptSovitsWorld implements World {
       while (this.queue.length && !this.stopped) {
         const item = this.queue.shift()!;
         const { text, at, started } = item;
+        // 本机不外放开关关着时整句静音；句子级 silent 参数也一样。
+        const silent = item.silent || !this.cfg.playLocally;
         const url = this.url();
         const voice = this.voice();
         if (!url || !voice) {
@@ -575,9 +580,9 @@ export class GptSovitsWorld implements World {
         const onFirst = (): void => { heard = true; started(); };
         try {
           await this.applyWeights(url);
-          const spoken = await this.playLine(url, voice, text, abort.signal, onFirst);
+          const spoken = await this.playLine(url, voice, text, abort.signal, onFirst, silent);
           wav = spoken.wav;
-          this.log.info('GPT-SoVITS 一句合成完', { chars: [...text].length, waitMs: spoken.first - at, totalMs: Date.now() - at });
+          this.log.info('GPT-SoVITS 一句合成完', { chars: [...text].length, silent, waitMs: spoken.first - at, totalMs: Date.now() - at });
           this.lastError = null;
         } catch (err) {
           if (abort.signal.aborted) {
@@ -589,7 +594,7 @@ export class GptSovitsWorld implements World {
             let ok = false;
             if (!heard && plain && plain !== text) {
               try {
-                wav = (await this.playLine(url, voice, plain, abort.signal, onFirst)).wav;
+                wav = (await this.playLine(url, voice, plain, abort.signal, onFirst, silent)).wav;
                 ok = true;
               } catch {
                 ok = false;

@@ -11,6 +11,7 @@ export const SOVITS_TOOL_DECLS: readonly ToolSpec[] = [
       additionalProperties: false,
       properties: {
         text: { type: 'string', maxLength: 2000, description: 'The line to say.' },
+        silent: { type: 'boolean', description: 'true synthesizes the line without playing it on this computer: use it for a line meant for another channel (a QQ voice message, for example) that should not be heard here.' },
       },
       required: ['text'],
     },
