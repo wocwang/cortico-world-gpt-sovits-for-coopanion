@@ -147,15 +147,19 @@ const voicesPanel: WebUiPanel = {
     let state: PanelState | null = null;
     let editingId: string | null = null;
 
-    const call = async (method: string, args: unknown[] = []) => {
+    // 返回是否成功：失败时保留表单与错误提示，别让用户以为「点了没反应」。
+    const call = async (method: string, args: unknown[] = []): Promise<boolean> => {
       msg.textContent = '';
       msg.classList.remove('bad');
       try {
         const next = await ctx.invoke<PanelState>(method, args);
-        if (next && 'backend' in next) render(next);
+        if (!next || !('backend' in next)) return false;
+        render(next);
+        return true;
       } catch (err) {
         msg.textContent = errText(err);
         msg.classList.add('bad');
+        return false;
       }
     };
 
@@ -225,9 +229,8 @@ const voicesPanel: WebUiPanel = {
         for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
         b64 = btoa(bin);
       }
-      if (editingId) await call('update', [editingId, fName.value, b64, fText.value, fGpt.value.trim(), fSov.value.trim()]);
-      else await call('add', [fName.value, f!.name, b64, fText.value, fGpt.value.trim(), fSov.value.trim()]);
-      closeForm();
+      if (editingId) { if (await call('update', [editingId, fName.value, b64, fText.value, fGpt.value.trim(), fSov.value.trim()])) closeForm(); }
+      else if (await call('add', [fName.value, f!.name, b64, fText.value, fGpt.value.trim(), fSov.value.trim()])) closeForm();
     }
 
     const setPill = (el: HTMLElement, label: string, tone: 'on' | 'off' | 'bad'): void => {

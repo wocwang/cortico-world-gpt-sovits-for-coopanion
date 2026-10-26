@@ -272,7 +272,12 @@ export class GptSovitsWorld implements World {
     const custom = selectedCustomVoice(voices, p);
     if (custom && switched) {
       // 刚切到这个音色：镜像它的全部参数，之后字段的改动即为对该音色的编辑。
-      this.opts.persist({ voice: { preset: custom.id, name: custom.name, audio: custom.audio, text: custom.text }, weights: custom.weights });
+      // 音色没自己的权重时不动全局权重——「音色管音色，权重是底座」，否则用户配好的自备权重会被清掉。
+      const own = !!custom.weights.gpt && !!custom.weights.sovits;
+      this.opts.persist({
+        voice: { preset: custom.id, name: custom.name, audio: custom.audio, text: custom.text },
+        ...(own ? { weights: custom.weights } : {}),
+      });
       return;
     }
     if (p === NEW_VOICE_PRESET) {
