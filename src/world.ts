@@ -19,7 +19,7 @@ import type { Language } from 'cortico/core/language.ts';
 import type { Logger, ToolDef, ToolOutcome, World, WorldHost, WorldLamp, WorldWebUiDecl } from 'cortico/core/types.ts';
 import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
-import { OFFICIAL_VOICE, OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
+import { officialVoice, OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
 import { configGroups, GPT_SOVITS_ID, REF_MAX_SECONDS, REF_MIN_SECONDS, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
 import { languageWords, panelText, stateWords } from './i18n.ts';
@@ -137,7 +137,7 @@ export class GptSovitsWorld implements World {
 
   constructor(private readonly opts: GptSovitsWorldOptions) {
     this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
-    this.weights = new WeightsJob(opts.modelsRoot, () => this.version());
+    this.weights = new WeightsJob(opts.modelsRoot, () => this.version(), () => officialVoice(this.cfg.voice.preset)?.files ?? []);
     this.server = new SovitsServer(this.log);
     this.player = new Player({ device: () => opts.cfg.outputDevice, volume: () => opts.cfg.volume, log: { warn: (msg, meta) => this.log.warn(msg, meta) } as Logger });
     registerCustomVoiceOptions(() => (this.cfg.voices ?? []).map((v) => {
@@ -175,12 +175,11 @@ export class GptSovitsWorld implements World {
     return off ? { weights: off, problem: null, official: true } : own;
   }
 
-  /** 官模只在「显卡档 + 托管安装 + 选中 xll」时生效；权重没装完就先用底模。 */
+  /** 官模只在「显卡档 + 托管安装 + 选中带官模的预设」时生效；权重没装完就先用底模。 */
   private official(): TrainedWeights | null {
-    if (this.cfg.voice.preset !== OFFICIAL_VOICE) return null;
     if (this.version() !== 'v5turbo') return null;
     if (this.backend().kind !== 'managed') return null;
-    return officialWeights(this.weights.dir());
+    return officialWeights(this.weights.dir(), this.cfg.voice.preset);
   }
 
   /** 权重签名：变了说明配置里换了模型。 */
@@ -592,7 +591,7 @@ export class GptSovitsWorld implements World {
     const b = this.backend();
     if (b.kind === 'remote') return false;
     if (b.kind === 'own') return isRuntimeDir(b.dir);
-    return this.runtime.status().phase === 'ready' && this.weights.status().phase === 'ready';
+    return this.runtime.status().phase === 'ready' && this.weights.baseReady();
   }
 
   private async startServer(): Promise<void> {

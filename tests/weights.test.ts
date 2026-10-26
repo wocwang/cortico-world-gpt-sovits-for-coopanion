@@ -1,10 +1,10 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { infererYaml, yamlScalar } from '../src/server.ts';
-import { weightPaths } from '../src/catalog.ts';
-import { installedBaseWeights, readSovitsHeader, resolveTrained, sovitsVersion, SOVITS_HEADERS } from '../src/weights.ts';
+import { OFFICIAL_VOICES, officialVoice, weightPaths } from '../src/catalog.ts';
+import { installedBaseWeights, officialWeights, readSovitsHeader, resolveTrained, sovitsVersion, SOVITS_HEADERS } from '../src/weights.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'sovits-weights-'));
 
@@ -134,5 +134,40 @@ describe('api_v2 配置里的路径', () => {
     expect(weightPaths('v5turbo').t2s).toBe('GPT_SoVITS/pretrained_models/s1v3.ckpt');
     expect(weightPaths('v5turbo').vits).toBe('GPT_SoVITS/pretrained_models/gsv-v5-pretrained/s2Gv5turbo.pth');
     expect(weightPaths('v2ProPlus').vits).toBe('GPT_SoVITS/pretrained_models/v2Pro/s2Gv2ProPlus.pth');
+  });
+});
+
+describe('随包官模', () => {
+  it('按预设挑：xll 与 dfy 有，female/male 与自定义音色没有', () => {
+    expect(officialVoice('xll')?.gpt).toBe('xll/feiyu_xll_e30.ckpt');
+    expect(officialVoice('dfy')?.sovits).toBe('dfy/dfy_5_e12_s1380_l32.pth');
+    expect(officialVoice('female')).toBeNull();
+    expect(officialVoice('male')).toBeNull();
+    expect(officialVoice('自定义 id')).toBeNull();
+  });
+
+  it('每个官模都列出两个文件的下载清单，且 path 与 gpt/sovits 对得上', () => {
+    for (const voice of Object.values(OFFICIAL_VOICES)) {
+      expect(voice.files.map((f) => f.path)).toEqual([voice.gpt, voice.sovits]);
+      for (const f of voice.files) {
+        expect(f.bytes).toBeGreaterThan(0);
+        expect(f.sha256).toMatch(/^[0-9a-f]{64}$/);
+        expect(f.sources.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('权重没下齐时返回 null，下齐才给绝对路径', () => {
+    const modelsDir = join(dir, 'models');
+    for (const voice of Object.values(OFFICIAL_VOICES)) {
+      expect(officialWeights(modelsDir, voice.sovits.startsWith('xll/') ? 'xll' : 'dfy')).toBeNull();
+      for (const f of voice.files) {
+        const file = join(modelsDir, f.path);
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, Buffer.alloc(8, 1));
+      }
+      const got = officialWeights(modelsDir, voice.sovits.startsWith('xll/') ? 'xll' : 'dfy');
+      expect(got).toEqual({ gpt: join(modelsDir, voice.gpt), sovits: join(modelsDir, voice.sovits) });
+    }
   });
 });

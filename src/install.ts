@@ -168,9 +168,14 @@ export class RuntimeJob extends Job {
 export const isRuntimeDir = (dir: string): boolean =>
   existsSync(join(dir, 'runtime', 'python.exe')) && existsSync(join(dir, 'api_v2.py'));
 
-/** 一个模型版本要的权重文件，放在 `dir()` 下。 */
+/** 一个模型版本要的权重文件，放在 `dir()` 下；选中官模预设时再加它那两份。 */
 export class WeightsJob extends Job {
-  constructor(private readonly root: () => string, private readonly version: () => ModelVersion) { super(); }
+  constructor(
+    private readonly root: () => string,
+    private readonly version: () => ModelVersion,
+    /** 当前选中预设的官模权重；没有官模就是空数组。 */
+    private readonly official: () => readonly PinnedFile[],
+  ) { super(); }
 
   dir(): string {
     return join(this.root(), 'gpt-sovits', 'pretrained_models');
@@ -178,12 +183,17 @@ export class WeightsJob extends Job {
 
   /** 还缺的文件。 */
   missing(): PinnedFile[] {
-    return MODEL_FILES[this.version()].filter((f) => !this.has(f));
+    return [...MODEL_FILES[this.version()], ...this.official()].filter((f) => !this.has(f));
   }
 
   /** 还要下载的字节数。 */
   bytes(): number {
     return this.missing().reduce((n, f) => n + f.bytes, 0);
+  }
+
+  /** 底模齐了就能起服务；官模权重没下完时先用底模，不影响出声。 */
+  baseReady(): boolean {
+    return MODEL_FILES[this.version()].every((f) => this.has(f));
   }
 
   private has(f: PinnedFile): boolean {

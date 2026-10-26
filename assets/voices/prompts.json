@@ -24,10 +24,15 @@
       }
     },
     "dfy": {
-      "source": "随包自带（本仓默认音色），5.16 秒日语参考，取自《人是猫》(BV1freb6iErC) 的 AI 合成人声第 003 段，非真人录音",
+      "source": "随包自带（本仓旧默认音色），5.16 秒日语参考，取自《人是猫》(BV1freb6iErC) 的 AI 合成人声第 003 段，非真人录音",
       "text": "ティード パラパパパ ニーノ ナラナナナ ピンドン",
       "note": "不是 MOSS-VoiceGenerator 生成；音频与台本必须成对使用，差一个字音色就会漂",
       "processed": "仅滤波：高通 80 Hz + 50/100/150/200 Hz 工频陷波，未做谱减，峰值归一到 0.9（保留气声与呼吸）",
+      "weights": {
+        "gpt": "dfy/dfy_5-e30.ckpt",
+        "sovits": "dfy/dfy_5_e12_s1380_l32.pth",
+        "note": "日语特化 v5turbo LoRA（头字节 08），随 GitHub Release voice-dfy-v1 分发，只在显卡档加载"
+      },
       "languages": {
         "zh": {
           "file": "dfy.zh.wav",
