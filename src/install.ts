@@ -6,7 +6,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -26,6 +26,24 @@ export async function sha256File(file: string): Promise<string> {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
   return hash.digest('hex');
+}
+
+/**
+ * 删目录但绝不跟着联接走。Windows 上 `rmSync(dir, { recursive: true })` 会进入目录联接
+ * (运行时的 `GPT_SoVITS/pretrained_models` 就是指向权重目录的 junction)，把目标里的权重一起删掉。
+ * 这里先逐层拆掉联接，再删真实目录。
+ */
+export function removeTreeSafely(dir: string): void {
+  let entries: import('node:fs').Dirent[] = [];
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { /* 目录不存在 */ }
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    let link = false;
+    try { link = lstatSync(path).isSymbolicLink(); } catch { continue; }
+    if (link) { rmSync(path, { force: true }); continue; }
+    if (entry.isDirectory()) removeTreeSafely(path);
+  }
+  rmSync(dir, { recursive: true, force: true });
 }
 
 /** 把一个地址下到 `dest`,`onBytes` 收到每块的长度。 */
@@ -147,8 +165,17 @@ export class RuntimeJob extends Job {
     await extract(archive, partial);
     rmSync(archive, { force: true });
     writeFileSync(join(partial, 'cortico-runtime.json'), JSON.stringify({ id: 'gpt-sovits', version: RUNTIME_VERSION, upstream: UPSTREAM_COMMIT, tier: this.tier() }, null, 2));
-    rmSync(dir, { recursive: true, force: true });
-    renameSync(partial, dir);
+    this.state.detail = '正在替换运行时目录';
+    try {
+      removeTreeSafely(dir);
+      renameSync(partial, dir);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EBUSY') {
+        throw new Error('替换运行时目录失败：推理服务还在占用文件。请先在「语音」页停止推理服务，再重装运行时。');
+      }
+      throw err;
+    }
   }
 
   /** 分片逐个下完拼回整包，再校验整包的 SHA-256。 */

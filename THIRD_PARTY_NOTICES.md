@@ -11,12 +11,10 @@
 - `xll.zh.wav`、`xll.en.wav` 是官模「大肥鱼_星落落版本」的中文/英文参考，来自 B 站 UP 主公开的
   肥鱼 CosyVoice3 音色素材（中英双语，源素材本身即 AI 合成，不含真人录音），
   经仅滤波处理（高通 80 Hz + 工频陷波，未做谱减）与峰值归一 0.9；台本见同名 `.txt`。
-  这一段只作为「随包官模音色」的参考使用。
+  这一段只作为「随包预设音色」的参考使用。
 
-官模权重（`xll/feiyu_xll_e30.ckpt`、`xll/feiyu_xll_e12_s960_l32.pth`）是本仓库用上述公开音色素材 +
-本机 CosyVoice3 蒸馏语料、在 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)(MIT) 之上训练得到的
-v5turbo LoRA，随本扩展的 GitHub Release（`voice-xll-v1`）分发，仅用于本扩展的语音合成。
-`dfy` 预设已改回官方底模，不再分发或加载训练权重。
+`xll` 预设使用官方底模 + 上述参考音频零样本合成，**不随包分发训练权重**。
+`dfy` 预设同样使用官方底模，不加载训练权重。
 
 `vendor/audify/` 是 [audify](https://github.com/almoghamdani/audify) 1.10.1 官方发布的 napi-v10 win32-x64 预编译件(`audify.node`、`rtaudio.dll`、`opus.dll`),原样随包，用来放声。许可：audify MIT(`LICENSE`)、[RtAudio](https://github.com/thestk/rtaudio) MIT 式(`LICENSE.rtaudio`)、[Opus](https://opus-codec.org/) BSD-3-Clause(`COPYING.opus`)。
 
@@ -26,7 +24,6 @@ v5turbo LoRA，随本扩展的 GitHub Release（`voice-xll-v1`）分发，仅用
 |---|---|---|
 | GPT-SoVITS 推理代码(运行时包内) | [RVC-Boss/GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) `e91506f` | MIT |
 | 预训练权重(s1v3、s2Gv5turbo、vocoder、s2Gv2ProPlus、sv) | [lj1995/GPT-SoVITS](https://huggingface.co/lj1995/GPT-SoVITS)、[XXXXRT/GPT-SoVITS-Pretrained](https://www.modelscope.cn/models/XXXXRT/GPT-SoVITS-Pretrained) | MIT |
-| 官模权重(`xll/*.ckpt`、`xll/*.pth`) | [wocwang/cortico-world-gpt-sovits-for-coopanion](https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion) 的 Release `voice-xll-v1`，由本仓库训练 | MIT |
 | chinese-roberta-wwm-ext-large | [hfl](https://huggingface.co/hfl/chinese-roberta-wwm-ext-large) | Apache-2.0 |
 | chinese-hubert-base | [TencentGameMate](https://huggingface.co/TencentGameMate/chinese-hubert-base) | MIT |
 | fast_langdetect lid.176.bin | [fastText](https://fasttext.cc/docs/en/language-identification.html) | CC BY-SA 3.0 |

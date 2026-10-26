@@ -138,12 +138,9 @@ describe('api_v2 配置里的路径', () => {
 });
 
 describe('随包官模', () => {
-  it('按预设挑：只有 xll 有，dfy/female/male 与自定义音色没有', () => {
-    expect(officialVoice('xll')?.gpt).toBe('xll/feiyu_xll_e30.ckpt');
-    expect(officialVoice('dfy')).toBeNull();
-    expect(officialVoice('female')).toBeNull();
-    expect(officialVoice('male')).toBeNull();
-    expect(officialVoice('自定义 id')).toBeNull();
+  it('不再随包训练权重：所有预设都走底模 + 参考音频', () => {
+    expect(OFFICIAL_VOICES).toEqual({});
+    for (const preset of ['xll', 'dfy', 'female', 'male', '自定义 id']) expect(officialVoice(preset)).toBeNull();
   });
 
   it('每个官模都列出两个文件的下载清单，且 path 与 gpt/sovits 对得上', () => {

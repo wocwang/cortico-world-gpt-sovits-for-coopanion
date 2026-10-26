@@ -112,22 +112,11 @@ export interface OfficialVoice {
   files: readonly PinnedFile[];
 }
 
-const GH_XLL = 'https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion/releases/download/voice-xll-v1';
-
 /**
- * 官模按预设挑：目前只有 `xll`（蒸自肥鱼 CosyVoice3 的中英双语版）带官模权重；
- * `dfy` 用官方底模，其余预设只下底模。
+ * 官模按预设挑。当前为空：`xll` 改为底模 + 参考音频的零样本音色，
+ * 不再随包/下载训练权重（训练版的高频质感不如底模）。
  */
-export const OFFICIAL_VOICES: Readonly<Record<string, OfficialVoice>> = {
-  xll: {
-    gpt: 'xll/feiyu_xll_e30.ckpt',
-    sovits: 'xll/feiyu_xll_e12_s960_l32.pth',
-    files: [
-      { path: 'xll/feiyu_xll_e30.ckpt', bytes: 155313504, sha256: '03461c53d2b202fa7028fe257f803cbf3d8ed586e5348949bb9c0922e7def1a0', sources: [`${GH_XLL}/feiyu_xll_e30.ckpt`] },
-      { path: 'xll/feiyu_xll_e12_s960_l32.pth', bytes: 75550587, sha256: '99397bb1498497db347531e4856c5d5a753c9fd626581d0e7429d175e4a4c3f5', sources: [`${GH_XLL}/feiyu_xll_e12_s960_l32.pth`] },
-    ],
-  },
-};
+export const OFFICIAL_VOICES: Readonly<Record<string, OfficialVoice>> = {};
 
 /** 选中的预设对应的官模；`female` / `male` / 自定义音色返回 null。 */
 export const officialVoice = (preset: string): OfficialVoice | null => OFFICIAL_VOICES[preset] ?? null;

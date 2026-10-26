@@ -5,11 +5,7 @@
       "source": "官模「大肥鱼_星落落版本」：肥鱼 CosyVoice3 音色素材，模型卡只声明 zh/en（无日语），中英双语",
       "processed": "仅滤波：高通 80 Hz + 50/100/150/200 Hz 工频陷波，未做谱减，峰值归一到 0.9；24 kHz 单声道 PCM16",
       "note": "音频与台本必须成对使用，差一个字音色就会漂；日语语音回退中文参考",
-      "weights": {
-        "gpt": "xll/feiyu_xll_e30.ckpt",
-        "sovits": "xll/feiyu_xll_e12_s960_l32.pth",
-        "note": "v5turbo LoRA（头字节 08），随 GitHub Release voice-xll-v1 分发，只在显卡档加载"
-      },
+      "weights": "不随包分发训练权重，使用官方底模 + 参考音频零样本合成",
       "languages": {
         "zh": {
           "file": "xll.zh.wav",
