@@ -12,7 +12,7 @@
  * 随下一批事件送达(piggyback),不单独唤醒 bot。
  */
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Language } from 'cortico/core/language.ts';
@@ -122,6 +122,8 @@ export interface GptSovitsWorldOptions {
   cfg: GptSovitsConfigSection;
   timezone: string;
   dataDir: string;
+  /** 部署目录（含 config.json），用于给 QQ 插件一键写语音配置。 */
+  botDir: string;
   runtimesRoot: () => string;
   modelsRoot: () => string;
   persist(patch: DeepPartial<GptSovitsConfigSection>): void;
@@ -987,9 +989,9 @@ export class GptSovitsWorld implements World {
     this.uiLanguage = language;
     const groups = configGroups(language);
     /** 配置分类页：标题/说明直接取配置组的 schema，字段读写走框架配置面。 */
-    const cfgPanel = (id: string, group: string) => {
+    const cfgPanel = (id: string, group: string, methods: string[] = ['config']) => {
       const schema = (groups.find((g) => g.id === group)?.schema ?? {}) as { title?: string; description?: string };
-      return { id, title: schema.title ?? id, description: schema.description ?? '', getMethods: ['config'] };
+      return { id, title: schema.title ?? id, description: schema.description ?? '', getMethods: methods };
     };
     const st = this.server.state();
     const remote = this.backend().kind === 'remote';
@@ -1007,7 +1009,7 @@ export class GptSovitsWorld implements World {
         { id: 'voice', title: t.panel, description: t.panelHint, getMethods: ['state'] },
         cfgPanel('cfg-voice', `world:${GPT_SOVITS_ID}`),
         cfgPanel('cfg-output', `world:${GPT_SOVITS_ID}:output`),
-        cfgPanel('cfg-link', `world:${GPT_SOVITS_ID}:link`),
+        cfgPanel('cfg-link', `world:${GPT_SOVITS_ID}:link`, ['config', 'qqGuide', 'writeQqVoice']),
         cfgPanel('cfg-service', `world:${GPT_SOVITS_ID}:service`),
         { id: 'voices', title: t.voicesPanel, description: t.voicesPanelHint, getMethods: ['state'] },
       ],
@@ -1089,8 +1091,66 @@ export class GptSovitsWorld implements World {
     return { groupId, title: (group.schema as any).title, description: (group.schema as any).description, properties: out, values };
   }
 
+  /** QQ 语音对接：给面板生成要填的值，并读出 QQ 插件当前配置做对照。 */
+  private qqGuide(): unknown {
+    const zh = this.uiLanguage === 'zh' || this.uiLanguage === 'zh-Hant';
+    const port = this.cfg.httpPort || 9880;
+    const voice = this.cfg.voice.preset || DEFAULT_PRESET;
+    const path = join(this.opts.botDir, 'config.json');
+    let qq: any = null;
+    try { qq = JSON.parse(readFileSync(path, 'utf8'))?.worlds?.qqbot ?? null; } catch { /* 没装或读不到就按未安装处理 */ }
+    const values = [
+      { label: zh ? '实现方式' : 'Provider', value: 'local' },
+      { label: zh ? '发语音' : 'Send voice', value: 'true' },
+      { label: zh ? '语义判定是否说语音' : 'Judge when to speak', value: String(qq?.voice?.semanticJudge ?? true) },
+      { label: zh ? '语音模型网址' : 'Voice base URL', value: `http://127.0.0.1:${port}` },
+      { label: zh ? '音色' : 'Voice', value: voice },
+      { label: zh ? 'TTS 模型名' : 'TTS model', value: 'tts-1' },
+      { label: zh ? 'TTS 请求超时(秒)' : 'TTS timeout (s)', value: '120' },
+    ];
+    return {
+      installed: !!qq,
+      httpApi: !!this.cfg.httpApi,
+      port,
+      voice,
+      tokenSet: !!this.cfg.httpToken,
+      path,
+      values,
+      current: qq?.voice
+        ? { enabled: !!qq.voice.enabled, provider: qq.voice.provider ?? '', tts: !!qq.voice.tts, voiceBaseUrl: qq.voice.voiceBaseUrl ?? '', voiceVoice: qq.voice.voiceVoice ?? '' }
+        : null,
+    };
+  }
+
+  /** 一键把本地语音接口的参数写进 QQ 插件配置（改完需重启 Coopanion 生效）。 */
+  private writeQqVoice(): unknown {
+    const port = this.cfg.httpPort || 9880;
+    // 先把自己的接口开关写进配置（HTTP 服务本身要重启 World 才挂载，这里只改值）。
+    if (!this.cfg.httpApi) this.opts.persist({ httpApi: true });
+    if (!this.cfg.httpPort) this.opts.persist({ httpPort: port });
+    const path = join(this.opts.botDir, 'config.json');
+    let raw: any;
+    try { raw = JSON.parse(readFileSync(path, 'utf8')); } catch { throw new Error(`读不到部署配置：${path}`); }
+    const qq = raw?.worlds?.qqbot;
+    if (!qq) throw new Error('没有找到 QQ 插件配置（worlds.qqbot），请先安装并启用 cortico-world-qq-final。');
+    qq.voice = { ...(qq.voice ?? {}) };
+    qq.voice.enabled = true;
+    qq.voice.provider = 'local';
+    qq.voice.tts = true;
+    qq.voice.voiceBaseUrl = `http://127.0.0.1:${port}`;
+    qq.voice.voiceVoice = this.cfg.voice.preset || DEFAULT_PRESET;
+    qq.voice.voiceTtsModel = 'tts-1';
+    qq.voice.voiceTimeout = 120;
+    const backup = `${path}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    copyFileSync(path, backup);
+    writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`);
+    return { ok: true, path, backup, port, voice: qq.voice.voiceVoice, tokenSet: !!this.cfg.httpToken };
+  }
+
   /** 面板数据面。 */
   async invoke(panel: string, method: string, args: unknown[]): Promise<unknown> {
+    if (method === 'qqGuide') return this.qqGuide();
+    if (method === 'writeQqVoice') return this.writeQqVoice();
     if (method === 'config') {
       return this.configSchema(String(args[0] ?? ''), String(args[1] ?? ''), args[2] === true);
     }

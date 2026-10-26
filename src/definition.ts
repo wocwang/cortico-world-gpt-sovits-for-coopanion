@@ -67,6 +67,7 @@ export const GPT_SOVITS: WorldDefinition<GptSovitsConfigSection> = {
     cfg: ctx.cfg,
     timezone: ctx.timezone,
     dataDir: join(ctx.dataDir, 'gpt-sovits'),
+    botDir: ctx.botDir,
     runtimesRoot,
     modelsRoot,
     persist: (patch) => ctx.persist(patch),

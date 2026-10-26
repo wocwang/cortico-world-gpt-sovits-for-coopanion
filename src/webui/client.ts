@@ -287,12 +287,82 @@ type ConfigField = {
   xHot: boolean;
 };
 type ConfigResp = { groupId: string; title?: string; description?: string; properties: ConfigField[]; values: Record<string, unknown> };
+type QqGuide = {
+  installed: boolean;
+  httpApi: boolean;
+  port: number;
+  voice: string;
+  tokenSet: boolean;
+  path: string;
+  values: Array<{ label: string; value: string }>;
+  current: { enabled: boolean; provider: string; tts: boolean; voiceBaseUrl: string; voiceVoice: string } | null;
+};
+
+/** 「与其他插件联动」页底部的 QQ 对接说明：展示要填的值 + 一键写入。 */
+async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<void> {
+  const { ui } = ctx;
+  const t = panelText(ctx.language);
+  const sec = ui.section(t.qqTitle, t.qqHint);
+  const status = ui.h('div', 'gsv-detail');
+  const steps = ui.h('div', 'gsv-cfg');
+  steps.append(
+    ui.h('div', 'gsv-detail', `1. ${t.qqStep1}`),
+    ui.h('div', 'gsv-detail', `2. ${t.qqStep2}`),
+    ui.h('div', 'gsv-detail', `3. ${t.qqStep3}`),
+  );
+  const code = ui.h('pre', 'gsv-output');
+  const acts = ui.actions();
+  const msg = ui.msgline();
+  let guide: QqGuide | null = null;
+  const codeText = () => (guide ? guide.values.map((v) => `${v.label} = ${v.value}`).join('\n') : '');
+  const copyAll = ui.copyButton(() => codeText(), { label: t.qqCopyAll, size: 'sm' });
+  const write = ui.button(t.qqWrite, {
+    variant: 'primary',
+    size: 'sm',
+    onClick: () => {
+      void (async () => {
+        if (!(await ui.confirm({ title: t.qqWrite, body: t.qqConfirm }))) return;
+        msg.classList.remove('bad');
+        msg.textContent = '';
+        try {
+          const res = await ctx.invoke<{ ok: boolean; path: string; backup: string }>('writeQqVoice');
+          ui.toast(t.qqWriteOk);
+          msg.textContent = `${t.qqWriteOk}（${res.path}）`;
+          await load();
+        } catch (err) {
+          msg.textContent = errText(err);
+          msg.classList.add('bad');
+        }
+      })();
+    },
+  });
+  acts.append(copyAll, write);
+  sec.append(status, steps, code, acts, msg);
+  host.append(sec);
+
+  const load = async () => {
+    try {
+      guide = await ctx.invoke<QqGuide>('qqGuide');
+      status.textContent = [
+        guide.installed ? t.qqInstalled : t.qqMissing,
+        guide.httpApi ? t.qqApiOn : t.qqApiOff,
+        guide.tokenSet ? t.qqTokenWarn : '',
+        guide.current ? `${t.qqCurrent}：${guide.current.provider || '—'} · ${guide.current.voiceBaseUrl || '—'} · ${guide.current.voiceVoice || '—'}` : '',
+      ].filter(Boolean).join(' · ');
+      code.textContent = guide.values.map((v) => `${v.label}：${v.value}`).join('\n');
+      write.disabled = !guide.installed;
+    } catch (err) {
+      status.textContent = errText(err);
+    }
+  };
+  await load();
+}
 
 /**
  * 配置分类页：一个面板 = 一组配置（音色与台词 / 输出与保存 / 与其他插件联动 / 推理服务）。
  * 字段标题与说明来自配置组 schema，读写走框架 `ctx.setConfig`，和配置页是同一份值。
  */
-function configPanel(group: string): WebUiPanel {
+function configPanel(group: string, extra?: (ctx: WebUiPanelContext, host: HTMLElement) => void | Promise<void>): WebUiPanel {
   return {
     async mount(ctx: WebUiPanelContext) {
       const { ui } = ctx;
@@ -375,6 +445,7 @@ function configPanel(group: string): WebUiPanel {
         if (f.description) wrap.append(ui.h('div', 'gsv-detail', f.description));
         sheet.body.append(wrap);
       }
+      if (extra) await extra(ctx, sheet.body);
     },
   };
 }
@@ -385,7 +456,7 @@ const bundle: WebUiClientBundle = {
     voices: voicesPanel,
     'cfg-voice': configPanel('world:gpt-sovits'),
     'cfg-output': configPanel('world:gpt-sovits:output'),
-    'cfg-link': configPanel('world:gpt-sovits:link'),
+    'cfg-link': configPanel('world:gpt-sovits:link', mountQqGuide),
     'cfg-service': configPanel('world:gpt-sovits:service'),
   },
 };
