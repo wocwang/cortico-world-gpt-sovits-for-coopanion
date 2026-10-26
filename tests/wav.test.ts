@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { readSeconds, secondsOf, wavBytes } from '../src/wav.ts';
+import { readSeconds, SAVED_LINE_RE, secondsOf, staleSavedLine, wavBytes } from '../src/wav.ts';
 
 /** 一份 PCM16 WAV；`declared` 可以覆盖 `data` 长度字段(流式写的文件是 0)。 */
 function wav(rate: number, channels: number, seconds: number, declared?: number): Buffer {
@@ -90,5 +90,22 @@ describe('readSeconds', () => {
       expect(seconds!).toBeGreaterThanOrEqual(3);
       expect(seconds!).toBeLessThanOrEqual(10);
     }
+  });
+});
+
+describe('保存的语音文件', () => {
+  it('只认插件自己写出的 line-*.wav', () => {
+    expect(SAVED_LINE_RE.test('line-20261026-125945-701.wav')).toBe(true);
+    for (const name of ['line-1.wav', 'line-20261026-125945.wav', 'ref.wav', 'line-20261026-125945-701.WAV', 'line-20261026-125945-701.wav.bak', 'foo-line-20261026-125945-701.wav']) {
+      expect(SAVED_LINE_RE.test(name)).toBe(false);
+    }
+  });
+
+  it('早于截止时间的才清，边界与别的文件都不动', () => {
+    const cutoff = 1_700_000_000_000;
+    expect(staleSavedLine('line-20261026-125945-701.wav', cutoff - 1, cutoff)).toBe(true);
+    expect(staleSavedLine('line-20261026-125945-701.wav', cutoff, cutoff)).toBe(false);
+    expect(staleSavedLine('line-20261026-125945-701.wav', cutoff + 1, cutoff)).toBe(false);
+    expect(staleSavedLine('ref.wav', cutoff - 1, cutoff)).toBe(false);
   });
 });

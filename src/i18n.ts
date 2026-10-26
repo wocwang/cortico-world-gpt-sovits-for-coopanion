@@ -171,6 +171,17 @@ export type StateWords = (typeof STATE)['zh'];
 export const stateWords = (language: 'zh' | 'en'): StateWords => STATE[language];
 
 /**
+ * `{{sovits.share}}` 的取值：开着「交给其他插件」时告诉 bot 怎么把同一句发给别的插件（QQ 等），
+ * 没开就留空——那一行提示词会变成空行，不影响其余内容。
+ */
+const SHARE = {
+  zh: '想把同一句话发到 QQ 等消息渠道时，用这次 `sovits_speak` 回执里的 `[blob …]` 音频句柄作为发送工具的音频来源（例如 `qq_draft` 的 voice 参数），不要再合成一遍。',
+  en: 'To send the same line to a chat channel such as QQ, use the audio `[blob …]` handle from this `sovits_speak` result as the audio for that send tool (the `qq_draft` voice parameter, for example) instead of synthesizing it again.',
+};
+
+export const shareWords = (language: 'zh' | 'en', on: boolean): string => (on ? SHARE[language] : '');
+
+/**
  * `{{sovits.language}}` 与语言切换事件的取值：告诉 bot 这句台词该怎么写。
  * 中文＝直接照读聊天文字；日语/英语＝先把中文台词翻译过去（气泡仍是聊天语言）。
  */

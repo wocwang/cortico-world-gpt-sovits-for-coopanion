@@ -12,7 +12,7 @@
  * 随下一批事件送达(piggyback),不单独唤醒 bot。
  */
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Language } from 'cortico/core/language.ts';
@@ -22,7 +22,7 @@ import { nowIso } from 'cortico/core/util.ts';
 import { officialVoice, OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
 import { configGroups, GPT_SOVITS_ID, REF_MAX_SECONDS, REF_MIN_SECONDS, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
-import { languageWords, panelText, stateWords } from './i18n.ts';
+import { languageWords, panelText, shareWords, stateWords } from './i18n.ts';
 import { isRuntimeDir, RuntimeJob, WeightsJob, type JobState } from './install.ts';
 import { Player, applyGain } from './player.ts';
 import { SovitsServer, type ServerState } from './server.ts';
@@ -32,7 +32,7 @@ import { synthesize, switchWeights, type SpeechLang, type SynthRequest } from '.
 import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { DEFAULT_PRESET, isPreset, presetRefId, type VoicePreset } from './voices.ts';
 import { installedBaseWeights, officialWeights, resolveTrained, type TrainedResult, type TrainedWeights } from './weights.ts';
-import { readSeconds, wavBytes } from './wav.ts';
+import { readSeconds, staleSavedLine, wavBytes } from './wav.ts';
 
 const ENV_PROMPT_FILES = {
   zh: fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url)),
@@ -71,6 +71,31 @@ const WARMUP_TEXT: Record<SpeechLang, string> = {
 
 /** `sovits_speak` 等第一块音频的上限;超时照常返回，声音晚到。 */
 const SPEAK_WAIT_MAX_MS = 3000;
+
+/** 开着「交给其他插件」时等整句音频的上限；超过就只回执文字，不附音频。 */
+const SHARE_WAIT_MAX_MS = 45_000;
+
+/** 等 `ms` 毫秒后给出 `null`，给一段等待加个上限。 */
+const delayed = (ms: number): Promise<null> => new Promise((resolve) => {
+  setTimeout(() => resolve(null), ms).unref();
+});
+
+/** 队列里的一句。`finish` 只在开启「交给其他插件」时由 `speak()` 提供。 */
+interface QueuedLine {
+  text: string;
+  at: number;
+  /** 这一句开始出声（或失败、被清空、超时）时调用一次。 */
+  started: () => void;
+  /** 整句 PCM 就绪（或失败、被清空）时调用一次；`null` 表示这次没有音频。 */
+  finish?: (wav: Buffer | null) => void;
+}
+
+/** 交付这一句的音频；重复调用只生效一次。 */
+const settleLine = (item: QueuedLine, wav: Buffer | null): void => {
+  const done = item.finish;
+  item.finish = undefined;
+  done?.(wav);
+};
 
 /** 参考音频上传的大小上限：10 秒 48 kHz 立体声 PCM16 不到 2 MB,留足余量。 */
 const VOICE_MAX_BYTES = 8 * 1024 * 1024;
@@ -111,7 +136,7 @@ export class GptSovitsWorld implements World {
   private readonly weights: WeightsJob;
   private server: SovitsServer;
   private readonly player: Player;
-  private readonly queue: Array<{ text: string; at: number; started: () => void }> = [];
+  private readonly queue: QueuedLine[] = [];
   private pumping = false;
   private current: AbortController | null = null;
   private warming = false;
@@ -383,7 +408,11 @@ export class GptSovitsWorld implements World {
   envPromptVars(): Record<string, string> {
     const w = stateWords(this.cfg.promptLanguage);
     const lang = languageWords(this.cfg.promptLanguage, this.cfg.textLang);
-    return { 'sovits.state': this.stateFor(w), 'sovits.language': `${lang.name}——${lang.rule}` };
+    return {
+      'sovits.state': this.stateFor(w),
+      'sovits.language': `${lang.name}——${lang.rule}`,
+      'sovits.share': shareWords(this.cfg.promptLanguage, this.cfg.shareAudio),
+    };
   }
 
   private stateFor(w: ReturnType<typeof stateWords>): string {
@@ -400,8 +429,12 @@ export class GptSovitsWorld implements World {
     const [speak, hush] = SOVITS_TOOL_DECLS;
     // 工具描述每次请求都会带上：把当前语音语言规则附在这里，前缀过期或被旧记忆带偏时也能纠正。
     const lang = languageWords('en', this.cfg.textLang);
+    // 开着「交给其他插件」时补一句附件用法，模型才知道把回执里的 [blob …] 句柄填给别的发送工具。
+    const share = this.cfg.shareAudio
+      ? " The result also carries the whole line as an audio attachment: pass that [blob …] handle to another plugin's send tool (the QQ voice parameter, for example) to deliver the same audio."
+      : '';
     return [
-      { ...speak!, description: `${speak!.description} Speech language: ${lang.name} — ${lang.rule}`, handler: (args) => this.speak(String(args.text ?? '')) },
+      { ...speak!, description: `${speak!.description} Speech language: ${lang.name} — ${lang.rule}${share}`, handler: (args) => this.speak(String(args.text ?? '')) },
       { ...hush!, handler: async () => { this.hush(); return 'Stopped.'; } },
     ];
   }
@@ -421,34 +454,51 @@ export class GptSovitsWorld implements World {
       void this.startServer().finally(() => { this.armIdle(); void this.pump(); });
     }
     const ahead = this.queue.length + (this.current ? 1 : 0);
+    // 开启「交给其他插件」时收下整句 PCM：合成完（或失败、被清空）后在 finished 上拿到音频。
+    const sharing = this.cfg.shareAudio;
+    let finish: ((wav: Buffer | null) => void) | undefined;
+    const finished = sharing ? new Promise<Buffer | null>((resolve) => { finish = resolve; }) : null;
     let timer: NodeJS.Timeout | undefined;
     const started = new Promise<void>((done) => {
-      this.queue.push({ text, at: Date.now(), started: done });
+      this.queue.push({ text, at: Date.now(), started: done, ...(finish ? { finish } : {}) });
       timer = setTimeout(done, SPEAK_WAIT_MAX_MS);
     });
     if (ready) void this.pump();
     await started;
     clearTimeout(timer);
-    return { text: ahead ? `Queued after ${ahead} line(s).` : 'Speaking.' };
+    const said = ahead ? `Queued after ${ahead} line(s).` : 'Speaking.';
+    if (!finished) return { text: said };
+    const wav = await Promise.race([finished, delayed(SHARE_WAIT_MAX_MS)]);
+    if (!wav) return { text: `${said} No audio attachment this time: the line did not finish within ${SHARE_WAIT_MAX_MS / 1000} s.` };
+    return {
+      text: said,
+      // 字节由宿主存成 log: 附件，句柄随回执交给模型；别的插件（QQ 等）用同一个句柄取回这段音频。
+      blobs: [{
+        bytes: wav,
+        mime: 'audio/wav',
+        name: 'line.wav',
+        fallbackText: 'This line as an audio file; hand this handle to another plugin (the QQ voice parameter, for example) to send the same audio.',
+      }],
+    };
   }
 
   private hush(): void {
-    for (const item of this.queue.splice(0)) item.started();
+    for (const item of this.queue.splice(0)) { item.started(); settleLine(item, null); }
     this.current?.abort();
     this.player.cut();
   }
 
   /**
-   * 合成一句话并写进播放器；返回首包时间。失败时抛出，由调用方决定要不要降级重试。
-   * `onFirst` 在第一次真正写进声卡时调用一次。
+   * 合成一句话并写进播放器；返回首包时间和整句 PCM（只有开启保存或「交给其他插件」时才收）。
+   * 失败时抛出，由调用方决定要不要降级重试。`onFirst` 在第一次真正写进声卡时调用一次。
    */
   private async playLine(
     url: string, voice: { audio: string; text: string }, text: string,
     signal: AbortSignal, onFirst: () => void,
-  ): Promise<number> {
+  ): Promise<{ first: number; wav: Buffer | null }> {
     const gain = this.backend().kind === 'remote' ? 1 : OUTPUT_GAIN[this.version()];
-    // 落盘的内容与听到的一致（同一增益）；关掉保存时不占内存。
-    const archive = this.cfg.saveAudio ? { rate: 0, chunks: [] as Buffer[] } : null;
+    // 落盘或交出去的内容与听到的一致（同一增益）；两者都关时不占内存。
+    const archive = this.cfg.saveAudio || this.cfg.shareAudio ? { rate: 0, chunks: [] as Buffer[] } : null;
     let first = 0;
     for await (const c of synthesize(url, this.request(text, voice), signal)) {
       if (archive) { archive.rate = c.sampleRate; archive.chunks.push(applyGain(c.pcm, gain)); }
@@ -456,8 +506,10 @@ export class GptSovitsWorld implements World {
       if (!first) { first = Date.now(); onFirst(); }
     }
     this.player.flush();
-    if (archive?.chunks.length) this.saveLine(Buffer.concat(archive.chunks), archive.rate);
-    return first;
+    if (!archive?.chunks.length) return { first, wav: null };
+    const bytes = Buffer.concat(archive.chunks);
+    if (this.cfg.saveAudio) this.saveLine(bytes, archive.rate);
+    return { first, wav: this.cfg.shareAudio ? bytes : null };
   }
 
   /** 把这一句的 PCM 另存为 WAV；保存失败只记日志，不影响播放。 */
@@ -471,8 +523,30 @@ export class GptSovitsWorld implements World {
       const file = join(dir, `line-${stamp}.wav`);
       writeFileSync(file, wavBytes(pcm, sampleRate));
       this.log.info('GPT-SoVITS 语音已保存', { file });
+      this.sweepSaved(dir);
     } catch (err) {
       this.log.warn('GPT-SoVITS 语音保存失败', { err: String(err) });
+    }
+  }
+
+  /** 按「保留时长」清掉过期的语音文件；只认本插件写出的 `line-*.wav`，目录里别的文件不动。 */
+  private sweepSaved(dir: string): void {
+    const hours = this.cfg.saveKeepHours;
+    if (!(hours > 0)) return;
+    const cutoff = Date.now() - hours * 3_600_000;
+    try {
+      let removed = 0;
+      for (const name of readdirSync(dir)) {
+        const file = join(dir, name);
+        let mtime = 0;
+        try { mtime = statSync(file).mtimeMs; } catch { continue; }
+        if (!staleSavedLine(name, mtime, cutoff)) continue;
+        rmSync(file, { force: true });
+        removed += 1;
+      }
+      if (removed) this.log.info('已清理过期的语音文件', { dir, removed, hours });
+    } catch (err) {
+      this.log.warn('清理语音文件失败', { err: String(err) });
     }
   }
 
@@ -482,18 +556,26 @@ export class GptSovitsWorld implements World {
     this.pumping = true;
     try {
       while (this.queue.length && !this.stopped) {
-        const { text, at, started } = this.queue.shift()!;
+        const item = this.queue.shift()!;
+        const { text, at, started } = item;
         const url = this.url();
         const voice = this.voice();
-        if (!url || !voice) { started(); for (const item of this.queue.splice(0)) item.started(); break; }
+        if (!url || !voice) {
+          started();
+          settleLine(item, null);
+          for (const rest of this.queue.splice(0)) { rest.started(); settleLine(rest, null); }
+          break;
+        }
         const abort = new AbortController();
         this.current = abort;
         let heard = false;
+        let wav: Buffer | null = null;
         const onFirst = (): void => { heard = true; started(); };
         try {
           await this.applyWeights(url);
-          const first = await this.playLine(url, voice, text, abort.signal, onFirst);
-          this.log.info('GPT-SoVITS 一句合成完', { chars: [...text].length, waitMs: first - at, totalMs: Date.now() - at });
+          const spoken = await this.playLine(url, voice, text, abort.signal, onFirst);
+          wav = spoken.wav;
+          this.log.info('GPT-SoVITS 一句合成完', { chars: [...text].length, waitMs: spoken.first - at, totalMs: Date.now() - at });
           this.lastError = null;
         } catch (err) {
           if (abort.signal.aborted) {
@@ -505,7 +587,7 @@ export class GptSovitsWorld implements World {
             let ok = false;
             if (!heard && plain && plain !== text) {
               try {
-                await this.playLine(url, voice, plain, abort.signal, onFirst);
+                wav = (await this.playLine(url, voice, plain, abort.signal, onFirst)).wav;
                 ok = true;
               } catch {
                 ok = false;
@@ -521,6 +603,8 @@ export class GptSovitsWorld implements World {
           }
         } finally {
           started();
+          // 交付这一句的音频：成功给 WAV，失败、被打断、没合成出来都给 null（重复调用只生效一次）。
+          settleLine(item, wav);
           this.current = null;
         }
       }
@@ -834,7 +918,10 @@ export class GptSovitsWorld implements World {
         description: language === 'zh' || language === 'zh-Hant' ? '要求 bot 每次 pet_say 前先调用 sovits_speak 的那一段。' : 'The passage asking the bot to call sovits_speak before each pet_say.',
         path: ENV_PROMPT_FILES[this.cfg.promptLanguage],
         role: 'envPrompt',
-        vars: [{ name: 'sovits.state', description: language === 'zh' || language === 'zh-Hant' ? '语音此刻的状态。' : 'The voice state at this moment.' }],
+        vars: [
+          { name: 'sovits.state', description: language === 'zh' || language === 'zh-Hant' ? '语音此刻的状态。' : 'The voice state at this moment.' },
+          { name: 'sovits.share', description: language === 'zh' || language === 'zh-Hant' ? '开着「交给其他插件」时告诉 bot 怎么把同一句发出去；没开时为空。' : 'How to hand the same line to another plugin while the attachment mode is on; empty when it is off.' },
+        ],
       }],
     };
   }

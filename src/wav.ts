@@ -64,3 +64,10 @@ export function wavBytes(pcm: Buffer, sampleRate: number): Buffer {
   head.writeUInt32LE(pcm.length, 40);
   return Buffer.concat([head, pcm]);
 }
+
+/** 本插件写出的语音文件名(`line-YYYYMMDD-HHMMSS-mmm.wav`)；保留期清理只认它。 */
+export const SAVED_LINE_RE = /^line-\d{8}-\d{6}-\d{3}\.wav$/;
+
+/** 该不该按保留期清掉:名字是插件写的那种，且修改时间早于 `cutoffMs`。 */
+export const staleSavedLine = (name: string, mtimeMs: number, cutoffMs: number): boolean =>
+  SAVED_LINE_RE.test(name) && mtimeMs < cutoffMs;

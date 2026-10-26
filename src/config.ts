@@ -48,6 +48,13 @@ export interface GptSovitsConfigSection {
   saveAudio: boolean;
   /** 语音保存目录；空为 `<data>/gpt-sovits/out`。 */
   saveDir: string;
+  /** 保存的语音保留多少小时；0 为一直留着。只清理本插件写出的 `line-*.wav`。 */
+  saveKeepHours: number;
+  /**
+   * 把整句语音作为工具回执的附件交出去：其他插件（如 QQ）能用回执里的 `[blob …]` 句柄发送同一段音频。
+   * 开启后 `sovits_speak` 要等整句合成完，气泡会比往常晚一点出现。
+   */
+  shareAudio: boolean;
   /**
    * 采样种子，对应 api_v2 的 `seed`。`-1` 每次重新采样（同一句每次都不一样），
    * `0` 及以上固定种子（同一句、同一进程内逐字节可复现）。
@@ -83,6 +90,8 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   textLang: 'zh',
   saveAudio: false,
   saveDir: '',
+  saveKeepHours: 0,
+  shareAudio: false,
   seed: SEED_RANDOM,
   volume: 1,
   outputDevice: '',
@@ -115,6 +124,8 @@ const TEXT = {
     },
     saveAudio: { title: '把语音保存成文件', description: '每句合成完另存一个 WAV，方便交给其他程序（如 QQ 机器人）发送。' },
     saveDir: { title: '语音保存目录', description: '留空为插件数据目录下的 gpt-sovits\\out。' },
+    saveKeepHours: { title: '语音文件保留时长（小时）', description: '只清理本插件写出的 line-*.wav，别的文件不动；保存新语音时顺手清理过期的。0 为一直留着。' },
+    shareAudio: { title: '把整句语音交给其他插件', description: '合成完把这一句的音频作为回执附件交出去：QQ 等插件可以用回执里的 [blob …] 句柄发送同一段音频，不必再读文件。代价是这句台词要等整句合成完才回执，气泡比往常晚一点出现。' },
     seed: { title: '采样种子', description: '-1 每次重新采样（同一句每次听起来都不同）；填 0 或正整数可固定，同一句每次逐字节一致。' },
     volume: { title: '音量' },
     outputDevice: { title: '输出设备', description: '留空使用系统默认设备。', system: '系统默认' },
@@ -140,6 +151,8 @@ const TEXT = {
     },
     saveAudio: { title: 'Save the speech to files', description: 'Also writes every synthesized line to a WAV file, so other programs (a QQ bot, for example) can send it.' },
     saveDir: { title: 'Speech folder', description: 'Empty uses gpt-sovits\\out under the plugin data folder.' },
+    saveKeepHours: { title: 'Keep speech files (hours)', description: 'Only removes line-*.wav files written by this plugin, nothing else; expired ones are swept whenever a new line is saved. 0 keeps everything.' },
+    shareAudio: { title: 'Hand each line to other plugins', description: 'Returns the finished line as a result attachment, so plugins like QQ can send the same audio with the [blob …] handle instead of reading a file. The line must finish synthesizing first, so the bubble appears a little later than before.' },
     seed: { title: 'Sampling seed', description: '-1 resamples every time (the same line sounds different each run); 0 or a positive integer fixes it, making the same line byte-identical.' },
     volume: { title: 'Volume' },
     outputDevice: { title: 'Output device', description: 'Empty for the system default.', system: 'System default' },
@@ -185,6 +198,8 @@ export function configGroups(language: Language): ConfigGroup[] {
         [`${K}.textLang`]: { type: 'string', title: t.textLang.title, description: t.textLang.description, 'x-options': TEXT_LANGUAGE_OPTIONS, 'x-hot': true },
         [`${K}.saveAudio`]: { type: 'boolean', title: t.saveAudio.title, description: t.saveAudio.description, 'x-hot': true },
         [`${K}.saveDir`]: { type: 'string', title: t.saveDir.title, description: t.saveDir.description, 'x-path': { kind: 'directory' }, 'x-hot': true },
+        [`${K}.saveKeepHours`]: { type: 'number', title: t.saveKeepHours.title, description: t.saveKeepHours.description, minimum: 0, multipleOf: 1, 'x-hot': true },
+        [`${K}.shareAudio`]: { type: 'boolean', title: t.shareAudio.title, description: t.shareAudio.description, 'x-hot': true },
         [`${K}.seed`]: { type: 'number', title: t.seed.title, description: t.seed.description, minimum: SEED_RANDOM, multipleOf: 1, 'x-hot': true },
         [`${K}.volume`]: { type: 'number', title: t.volume.title, minimum: 0, maximum: 1, multipleOf: .05, 'x-hot': true },
         [`${K}.outputDevice`]: { type: 'string', title: t.outputDevice.title, description: t.outputDevice.description, 'x-options': DEVICE_OPTIONS, 'x-hot': true },
