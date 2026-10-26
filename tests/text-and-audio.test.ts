@@ -90,6 +90,14 @@ describe('presetRefId', () => {
     expect(presetRefId('female', 'ja')).toBe('female');
     expect(presetRefId('male', 'en')).toBe('male');
   });
+
+  it('ships the official xll preset in Chinese and English only', () => {
+    expect(presetRefId('xll', 'zh')).toBe('xll.zh');
+    expect(presetRefId('xll', 'en')).toBe('xll.en');
+    expect(presetRefId('xll', 'auto')).toBe('xll.zh');
+    // 没有日语参考：日语台本回退到中文参考，仍能出音
+    expect(presetRefId('xll', 'ja')).toBe('xll.zh');
+  });
 });
 
 /** 44 字节的单声道 PCM16 头，数据长度字段写 0(流式回应就是这样)。 */

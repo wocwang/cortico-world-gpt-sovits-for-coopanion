@@ -103,8 +103,23 @@ const v5 = (path: string, bytes: number, sha256: string): PinnedFile => ({
   path, bytes, sha256, sources: [`${MS_OWN}/pretrained_models/${path}`, `${HF_UP}/${path}`],
 });
 
+/** 官模「大肥鱼_星落落版本」的权重目录与文件名（托管权重目录下）。 */
+export const OFFICIAL_VOICE = 'xll';
+export const OFFICIAL_VOICE_FILES = {
+  gpt: 'xll/feiyu_xll_e30.ckpt',
+  sovits: 'xll/feiyu_xll_e12_s960_l32.pth',
+} as const;
+
+const GH_VOICE = 'https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion/releases/download/voice-xll-v1';
+
+/** 官模是 v5turbo 的 LoRA 增量，只有显卡档能用；CPU 档退回底模 + 同一套参考音频。 */
+const OFFICIAL_VOICE_PINNED: readonly PinnedFile[] = [
+  { path: OFFICIAL_VOICE_FILES.gpt, bytes: 155313504, sha256: '03461c53d2b202fa7028fe257f803cbf3d8ed586e5348949bb9c0922e7def1a0', sources: [`${GH_VOICE}/feiyu_xll_e30.ckpt`] },
+  { path: OFFICIAL_VOICE_FILES.sovits, bytes: 75550587, sha256: '99397bb1498497db347531e4856c5d5a753c9fd626581d0e7429d175e4a4c3f5', sources: [`${GH_VOICE}/feiyu_xll_e12_s960_l32.pth`] },
+];
+
 export const MODEL_FILES: Readonly<Record<ModelVersion, readonly PinnedFile[]>> = {
-  v5turbo: [...SHARED, v5('gsv-v5-pretrained/s2Gv5turbo.pth', 766406144, '287b32a06b7d486f5303ec520468b0728fb01aac8b0f5d86fd5455c9a1d3e022'), v5('gsv-v5-pretrained/vocoder.pth', 57761163, 'b7543c83222aa2105bb4efb56845086bc5f2eeba61243d723ffa062052b3221f')],
+  v5turbo: [...SHARED, v5('gsv-v5-pretrained/s2Gv5turbo.pth', 766406144, '287b32a06b7d486f5303ec520468b0728fb01aac8b0f5d86fd5455c9a1d3e022'), v5('gsv-v5-pretrained/vocoder.pth', 57761163, 'b7543c83222aa2105bb4efb56845086bc5f2eeba61243d723ffa062052b3221f'), ...OFFICIAL_VOICE_PINNED],
   v2ProPlus: [...SHARED, upstream('v2Pro/s2Gv2ProPlus.pth', 200125741, 'd42a22bbbf65fb2bbdd45ad6a66841156977db45c7aabe0a6992ff378d9c7d3b'), upstream('sv/pretrained_eres2netv2w24s4ep4.ckpt', 107528697, '4f5a0bf73c61eb41b174e1bb54e7ee3c83233892be8e0af1f187024e8e581a35')],
 };
 

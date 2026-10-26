@@ -83,8 +83,8 @@ describe('readSeconds', () => {
     }
   });
 
-  it('keeps the shipped dfy language references inside the 3–10 s window', () => {
-    for (const name of ['dfy.zh.wav', 'dfy.en.wav']) {
+  it('keeps the shipped preset references inside the 3–10 s window', () => {
+    for (const name of ['dfy.zh.wav', 'dfy.en.wav', 'xll.zh.wav', 'xll.en.wav']) {
       const seconds = readSeconds(join(process.cwd(), 'assets', 'voices', name));
       expect(seconds).not.toBeNull();
       expect(seconds!).toBeGreaterThanOrEqual(3);

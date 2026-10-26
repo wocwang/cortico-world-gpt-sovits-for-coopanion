@@ -9,7 +9,7 @@ import {
 } from './config.ts';
 import { listOutputDevices } from './player.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
-import { VOICE_PRESETS, presetLabel } from './voices.ts';
+import { VOICE_PRESETS, presetFileLabel, presetLabel } from './voices.ts';
 import { customVoiceOptions } from './voice-options.ts';
 import { GptSovitsWorld, LANGUAGE_EVENT, STATE_EVENT } from './world.ts';
 
@@ -52,7 +52,7 @@ export const GPT_SOVITS: WorldDefinition<GptSovitsConfigSection> = {
     if (kind === PROMPT_LANGUAGE_OPTIONS) return promptLanguageOptions();
     if (kind === TEXT_LANGUAGE_OPTIONS) return textLanguageOptions(language);
     if (kind === VOICE_OPTIONS) {
-      const presets = VOICE_PRESETS.map((id) => ({ value: id, label: `${presetLabel(id, language)} · ${id}.wav${presetSnippet(id)}` }));
+      const presets = VOICE_PRESETS.map((id) => ({ value: id, label: `${presetLabel(id, language)} · ${presetFileLabel(id)}${presetSnippet(id)}` }));
       return [...presets, ...customVoiceOptions()];
     }
     if (kind === DEVICE_OPTIONS) {

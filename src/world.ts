@@ -19,7 +19,7 @@ import type { Language } from 'cortico/core/language.ts';
 import type { Logger, ToolDef, ToolOutcome, World, WorldHost, WorldLamp, WorldWebUiDecl } from 'cortico/core/types.ts';
 import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
-import { OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
+import { OFFICIAL_VOICE, OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
 import { configGroups, GPT_SOVITS_ID, REF_MAX_SECONDS, REF_MIN_SECONDS, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
 import { languageWords, panelText, stateWords } from './i18n.ts';
@@ -31,7 +31,7 @@ import { promptLanguageOf, speechText, ttsPlain, ttsSafe } from './speech-text.t
 import { synthesize, switchWeights, type SpeechLang, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { DEFAULT_PRESET, isPreset, presetRefId, type VoicePreset } from './voices.ts';
-import { installedBaseWeights, resolveTrained, type TrainedResult, type TrainedWeights } from './weights.ts';
+import { installedBaseWeights, officialWeights, resolveTrained, type TrainedResult, type TrainedWeights } from './weights.ts';
 import { readSeconds, wavBytes } from './wav.ts';
 
 const ENV_PROMPT_FILES = {
@@ -166,10 +166,21 @@ export class GptSovitsWorld implements World {
   }
 
   /** 配置里的自备权重，校验过版本与文件；用不上时 `problem` 里是原因。
-   *  选中音色自带权重时用音色的，否则用全局配置。 */
+   *  选中音色自带权重时用音色的，否则用全局配置；都没填时，选中官模音色就用随包官模权重。 */
   private trained(): TrainedResult {
     const custom = selectedCustomVoice(this.cfg.voices ?? [], this.cfg.voice.preset);
-    return resolveTrained(effectiveWeights(custom, this.cfg.weights), this.version());
+    const own = resolveTrained(effectiveWeights(custom, this.cfg.weights), this.version());
+    if (own.weights || own.problem) return own;
+    const off = this.official();
+    return off ? { weights: off, problem: null, official: true } : own;
+  }
+
+  /** 官模只在「显卡档 + 托管安装 + 选中 xll」时生效；权重没装完就先用底模。 */
+  private official(): TrainedWeights | null {
+    if (this.cfg.voice.preset !== OFFICIAL_VOICE) return null;
+    if (this.version() !== 'v5turbo') return null;
+    if (this.backend().kind !== 'managed') return null;
+    return officialWeights(this.weights.dir());
   }
 
   /** 权重签名：变了说明配置里换了模型。 */

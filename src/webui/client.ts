@@ -92,7 +92,7 @@ const voicePanel: WebUiPanel = {
         setPill(trainedRow.pill, t.error, 'bad');
         trainedRow.detail.textContent = s.trained.problem;
       } else if (s.trained.weights) {
-        setPill(trainedRow.pill, t.trainedOwn, 'on');
+        setPill(trainedRow.pill, s.trained.official ? t.trainedOfficial : t.trainedOwn, 'on');
         trainedRow.detail.textContent = `${baseName(s.trained.weights.gpt)} + ${baseName(s.trained.weights.sovits)}`;
       } else {
         setPill(trainedRow.pill, t.trainedBuiltin, 'on');

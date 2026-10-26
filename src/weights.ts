@@ -13,7 +13,7 @@
  */
 import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import { weightFiles, type ModelVersion } from './catalog.ts';
+import { weightFiles, OFFICIAL_VOICE_FILES, type ModelVersion } from './catalog.ts';
 
 export interface TrainedWeights {
   /** GPT(T2S)权重，`.ckpt`。 */
@@ -84,6 +84,8 @@ export interface TrainedResult {
   weights: TrainedWeights | null;
   /** 填了但用不上的原因，直给用户看。 */
   problem: string | null;
+  /** 这组权重来自随包官模（而不是自备文件）。 */
+  official?: boolean;
 }
 
 /**
@@ -119,4 +121,15 @@ export function resolveTrained(setting: Partial<TrainedWeights> | undefined, exp
 export function installedBaseWeights(modelsDir: string, version: ModelVersion): TrainedWeights {
   const f = weightFiles(version);
   return { gpt: join(modelsDir, f.t2s), sovits: join(modelsDir, f.vits) };
+}
+
+/**
+ * 随包官模「大肥鱼_星落落版本」的权重（在托管权重目录下），装好才返回绝对路径。
+ * 它是 v5turbo 的 LoRA 增量，只在显卡档可用；CPU 档退回底模 + 同一套参考音频。
+ */
+export function officialWeights(modelsDir: string): TrainedWeights | null {
+  const gpt = join(modelsDir, OFFICIAL_VOICE_FILES.gpt);
+  const sovits = join(modelsDir, OFFICIAL_VOICE_FILES.sovits);
+  if (!existsSync(gpt) || !existsSync(sovits)) return null;
+  return { gpt, sovits };
 }
