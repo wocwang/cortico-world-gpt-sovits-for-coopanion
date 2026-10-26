@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readSeconds, SAVED_LINE_RE, secondsOf, staleSavedLine, wavBytes } from '../src/wav.ts';
+import { parseWavHeader } from '../src/synth.ts';
 
 /** 一份 PCM16 WAV；`declared` 可以覆盖 `data` 长度字段(流式写的文件是 0)。 */
 function wav(rate: number, channels: number, seconds: number, declared?: number): Buffer {
@@ -94,6 +95,17 @@ describe('readSeconds', () => {
 });
 
 describe('保存的语音文件', () => {
+  it('交出去的字节是带头的完整 WAV，能被按 WAV 解析', () => {
+    // 交给其他插件（QQ 语音）的就是 wavBytes() 的产物：裸 PCM 会被 ffmpeg 判成无效数据。
+    const pcm = Buffer.alloc(4800 * 2); // 48 kHz 单声道 0.1 s
+    const file = wavBytes(pcm, 48000);
+    const head = parseWavHeader(file);
+    expect(head).not.toBeNull();
+    expect(head!.sampleRate).toBe(48000);
+    expect(head!.channels).toBe(1);
+    expect(file.length - head!.dataStart).toBe(pcm.length);
+  });
+
   it('只认插件自己写出的 line-*.wav', () => {
     expect(SAVED_LINE_RE.test('line-20261026-125945-701.wav')).toBe(true);
     for (const name of ['line-1.wav', 'line-20261026-125945.wav', 'ref.wav', 'line-20261026-125945-701.WAV', 'line-20261026-125945-701.wav.bak', 'foo-line-20261026-125945-701.wav']) {

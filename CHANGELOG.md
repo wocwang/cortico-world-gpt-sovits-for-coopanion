@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.5
+
+- **修复交给其他插件的音频是裸 PCM**：0.5.4 的附件模式把没有 RIFF 头的 PCM 当成 `audio/wav` 交出去，
+  QQ 语音转码会报「Invalid data found when processing input」。现在一律补上 44 字节 WAV 头再交出去，
+  文件与附件是同一段音频、同一增益。
+
 ## 0.5.4
 
 - **新增「语音文件保留时长」**（`saveKeepHours`，默认 `0`＝一直留着）：保存新语音时顺手清掉超过 N 小时的

@@ -509,7 +509,9 @@ export class GptSovitsWorld implements World {
     if (!archive?.chunks.length) return { first, wav: null };
     const bytes = Buffer.concat(archive.chunks);
     if (this.cfg.saveAudio) this.saveLine(bytes, archive.rate);
-    return { first, wav: this.cfg.shareAudio ? bytes : null };
+    // 交出去的一律是带 RIFF 头的完整 WAV：别的插件拿这段字节去转码，裸 PCM 会被 ffmpeg 判成
+    // 「Invalid data found when processing input」（QQ 语音就是这么失败的）。
+    return { first, wav: this.cfg.shareAudio ? wavBytes(bytes, archive.rate) : null };
   }
 
   /** 把这一句的 PCM 另存为 WAV；保存失败只记日志，不影响播放。 */
