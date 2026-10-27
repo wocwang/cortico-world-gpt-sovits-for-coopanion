@@ -101,6 +101,9 @@ export class Player {
   private rt: RtAudioLike | null = null;
   private rate = 0;
   private openedDevice = '';
+  /** 默认设备模式下，流实际打开的设备 id；用来发现系统默认设备被切换。 */
+  private defaultId = 0;
+  private defaultCheckedAt = 0;
   /** 一帧单声道的字节数;写入时再按声道数展开。 */
   private frameBytes = 0;
   private channels = 1;
@@ -119,7 +122,7 @@ export class Player {
   async write(sampleRate: number, raw: Buffer, gain = 1): Promise<void> {
     const pcm = applyGain(raw, gain);
     const device = this.opts.device();
-    if (this.rt && (sampleRate !== this.rate || device !== this.openedDevice)) {
+    if (this.rt && (sampleRate !== this.rate || device !== this.openedDevice || this.defaultMoved())) {
       await this.drain();
       this.close();
     }
@@ -162,6 +165,24 @@ export class Player {
     return left > 0 ? new Promise((done) => setTimeout(done, left)) : Promise.resolve();
   }
 
+  /**
+   * 默认设备模式下，系统默认输出是否已经换了（1 秒最多查一次，别每个 20 ms 帧都枚举）。
+   * 指定设备时不跟踪：配置里写死哪台就一直用它。
+   */
+  private defaultMoved(): boolean {
+    if (this.openedDevice) return false;
+    const now = Date.now();
+    if (now - this.defaultCheckedAt < 1000) return false;
+    this.defaultCheckedAt = now;
+    try {
+      const audify = this.audify ??= loadAudify();
+      const rt = new audify.RtAudio(apiOf(audify));
+      return rt.getDefaultOutputDevice() !== this.defaultId;
+    } catch {
+      return false;
+    }
+  }
+
   private open(sampleRate: number, device: string): void {
     this.audify ??= loadAudify();
     const audify = this.audify;
@@ -180,18 +201,23 @@ export class Player {
     try {
       channels = openOn();
     } catch (err) {
-      if (!wanted) throw new Error(`打不开输出设备：${String(err)}。请在「输出与保存」里换一个设备，或留空用系统默认。`);
-      // 配置里写的设备当前不可用（拔掉耳机、驱动重排）：退回系统默认，别让整句合成失败。
-      this.opts.log.warn('指定输出设备打不开，改用系统默认', { device, err: String(err) });
+      // 设备刚切换/驱动重排时可能瞬间打不开：换一个新实例再试一次。
+      if (wanted) this.opts.log.warn('指定输出设备打不开，改用系统默认', { device, err: String(err) });
       try { if (rt.isStreamOpen()) rt.closeStream(); } catch { /* 已断开 */ }
       rt = new audify.RtAudio(apiOf(audify));
       devices = rt.getDevices().filter((d) => d.outputChannels > 0);
       deviceId = rt.getDefaultOutputDevice();
-      channels = openOn();
+      try {
+        channels = openOn();
+      } catch (again) {
+        throw new Error(`打不开输出设备：${String(again)}。请在「输出与保存」里换一个设备，或留空用系统默认。`);
+      }
     }
     this.rt = rt;
     this.rate = sampleRate;
     this.openedDevice = device;
+    if (!wanted) this.defaultId = deviceId;
+    this.defaultCheckedAt = Date.now();
     this.frameBytes = frameSize * 2;
     this.channels = channels;
     this.endsAt = 0;
