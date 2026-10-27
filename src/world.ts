@@ -20,12 +20,13 @@ import type { Logger, ToolDef, ToolOutcome, World, WorldHost, WorldLamp, WorldWe
 import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
 import { officialVoice, OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
-import { configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
+import { configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, RVC_INDEX_MAX, RVC_INDEX_MIN, RVC_PROTECT_MAX, RVC_PROTECT_MIN, RVC_TIMEOUT_MAX, RVC_TIMEOUT_MIN, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
 import { startHttpTts, type HttpTtsHandle, type TtsJob } from './http-tts.ts';
 import { channelWords, languageWords, panelText, shareWords, stateWords } from './i18n.ts';
 import { isRuntimeDir, RuntimeJob, WeightsJob, type JobState } from './install.ts';
 import { Player, applyGain, listOutputDevices } from './player.ts';
+import { RvcLink, type RvcProbe } from './rvc-link.ts';
 import { SovitsServer, type ServerState } from './server.ts';
 import { customVoiceOptions, registerCustomVoiceOptions } from './voice-options.ts';
 import { promptLanguageOf, speechText, ttsPlain, ttsSafe } from './speech-text.ts';
@@ -180,12 +181,15 @@ export class GptSovitsWorld implements World {
   private startingServer: Promise<void> | null = null;
   /** 训练页管理器，懒建；面板点开才起。 */
   private trainerManager: TrainerManager | null = null;
+  /** 出口变声：交给其他插件的音频再过一遍本机 RVC。 */
+  private readonly rvc: RvcLink;
 
   constructor(private readonly opts: GptSovitsWorldOptions) {
     this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
     this.weights = new WeightsJob(opts.modelsRoot, () => this.version(), () => officialVoice(this.cfg.voice.preset)?.files ?? []);
     this.server = new SovitsServer(this.log);
     this.player = new Player({ device: () => opts.cfg.outputDevice, volume: () => opts.cfg.volume, log: { warn: (msg, meta) => this.log.warn(msg, meta) } as Logger });
+    this.rvc = new RvcLink(() => opts.cfg.rvc, () => this.log);
     registerCustomVoiceOptions(() => (this.cfg.voices ?? []).map((v) => {
       // 选项名自带状态、音频文件名与台本片段：下拉每次点开都重新拉取，不看下面字段也能确认配了什么。
       const missing = [!v.audio ? '缺音频' : '', !v.text ? '缺台本' : ''].filter(Boolean);
@@ -802,6 +806,7 @@ export class GptSovitsWorld implements World {
         token: this.cfg.httpToken,
         deps: {
           synthesize: (job, signal) => this.synthesizeForApi(job, signal),
+          post: (wav) => this.rvc.convert(wav),
           ready: () => this.apiReady(),
           stateText: () => this.stateFor(stateWords('en')),
           log: this.log,
@@ -1146,6 +1151,49 @@ export class GptSovitsWorld implements World {
     return { groupId, title: (group.schema as any).title, description: (group.schema as any).description, properties: out, values };
   }
 
+  /** 联动页「检测」：看本机 RVC 插件此刻的健康状态。 */
+  private rvcProbe(): Promise<RvcProbe> {
+    return this.rvc.probe();
+  }
+
+  /** 联动页「试听」：用当前音色合成一句，再过一遍 RVC，回 WAV 给浏览器播放。 */
+  private async rvcTest(said: string): Promise<unknown> {
+    const zh = this.uiLanguage === 'zh' || this.uiLanguage === 'zh-Hant';
+    const text = said.trim() || (zh ? '你好，这是变声试听。' : 'Hello, this is the converted voice.');
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 120_000);
+    timer.unref();
+    try {
+      const wav = await this.synthesizeForApi({ text }, ctrl.signal);
+      const out = await this.rvc.convert(wav);
+      return { $binary: { mime: 'audio/wav', base64: out.toString('base64') } };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** 联动页「一键写入」：把端点 / 超时 / 变调 / 索引率写进配置并启用。 */
+  private rvcWrite(asked: unknown): unknown {
+    const o = (asked && typeof asked === 'object' ? asked : {}) as Record<string, unknown>;
+    const num = (v: unknown, fallback: number, min: number, max: number): number => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+    };
+    const cur = this.rvc.config();
+    const endpoint = typeof o.endpoint === 'string' && o.endpoint.trim() ? o.endpoint.trim().replace(/\/+$/, '') : cur.endpoint;
+    const rvc = {
+      enabled: o.enabled === undefined ? true : o.enabled === true,
+      endpoint,
+      token: typeof o.token === 'string' ? o.token.trim() : cur.token,
+      timeoutMs: Math.round(num(o.timeoutMs, cur.timeoutMs, RVC_TIMEOUT_MIN, RVC_TIMEOUT_MAX)),
+      pitch: Math.round(num(o.pitch, cur.pitch, -24, 24)),
+      indexRate: num(o.indexRate, cur.indexRate, RVC_INDEX_MIN, RVC_INDEX_MAX),
+      protect: num(o.protect, cur.protect, RVC_PROTECT_MIN, RVC_PROTECT_MAX),
+    };
+    this.opts.persist({ rvc });
+    return { ok: true, rvc };
+  }
+
   /** QQ 语音对接：给面板生成要填的值，并读出 QQ 插件当前配置做对照。 */
   private qqGuide(): unknown {
     const zh = this.uiLanguage === 'zh' || this.uiLanguage === 'zh-Hant';
@@ -1239,6 +1287,9 @@ export class GptSovitsWorld implements World {
     if (method === 'setConfigValue') return this.setConfigValue(String(args[0] ?? ''), args[1]);
     if (method === 'qqGuide') return this.qqGuide();
     if (method === 'writeQqVoice') return this.writeQqVoice();
+    if (method === 'rvcProbe') return this.rvcProbe();
+    if (method === 'rvcWrite') return this.rvcWrite(args[0]);
+    if (method === 'rvcTest') return this.rvcTest(String(args[0] ?? ''));
     if (method === 'config') {
       return this.configSchema(String(args[0] ?? ''), String(args[1] ?? ''), args[2] === true);
     }

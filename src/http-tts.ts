@@ -19,6 +19,11 @@ export interface TtsJob {
 export interface HttpTtsDeps {
   /** 合成一句，不播放；失败抛错（回 502）。 */
   synthesize: (job: TtsJob, signal: AbortSignal) => Promise<Buffer>;
+  /**
+   * 出口后处理（如 RVC 变声）。契约：失败必须原样返回入参，不许抛——
+   * 这里再兜一层，抛了也按原音频发出去。
+   */
+  post?: (wav: Buffer) => Promise<Buffer>;
   /** 此刻能不能接活（服务就绪，或休眠但能自己拉起来）。 */
   ready: () => boolean;
   /** 不能接活时的状态说明，用作 503 文案。 */
@@ -99,8 +104,16 @@ export function startHttpTts(opts: { port: number; token?: string; deps: HttpTts
     const at = Date.now();
     try {
       const wav = await run(() => deps.synthesize(job, ctrl.signal));
+      let out = wav;
+      if (deps.post) {
+        try {
+          out = await deps.post(wav);
+        } catch {
+          out = wav;
+        }
+      }
       deps.log.info('HTTP 语音接口合成完', { path, chars: [...said].length, voice: job.voice ?? '', ms: Date.now() - at });
-      send(res, 200, wav, 'audio/wav');
+      send(res, 200, out, 'audio/wav');
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       deps.log.warn('HTTP 语音接口合成失败', { path, err: why });

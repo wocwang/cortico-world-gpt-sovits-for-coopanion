@@ -5,6 +5,7 @@
  */
 import type { WebUiClientBundle, WebUiPanel, WebUiPanelContext } from 'cortico/web/shared/client-panel.ts';
 import { panelText } from '../i18n.ts';
+import type { RvcProbe } from '../rvc-link.ts';
 import type { PanelState } from '../world.ts';
 import type { TrainerState } from '../trainer.ts';
 import './style.css';
@@ -472,6 +473,116 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
 }
 
 /**
+ * 「出口变声（RVC）」子卡：检测 / 端点 / 超时 / 变调 / 索引率 / 一键写入 / 试听。
+ * 检测只读对方 `/health`；一键写入把卡片上的值一次写进 `worlds.gpt-sovits.rvc`；
+ * 试听走 `rvcTest`：整条「合成 → RVC → WAV」都真跑，但只在浏览器里播放。
+ */
+async function mountRvcCard(ctx: WebUiPanelContext, host: HTMLElement, values: Record<string, unknown>): Promise<void> {
+  const { ui } = ctx;
+  const t = panelText(ctx.language);
+  const msg = ui.msgline();
+  const status = ui.h('div', 'gsv-detail');
+  const read = (key: string, fallback: string): string => {
+    const v = values[`worlds.gpt-sovits.rvc.${key}`];
+    return v == null || v === '' ? fallback : String(v);
+  };
+  const enabled = ui.checkbox(t.rvcEnabled, { checked: values['worlds.gpt-sovits.rvc.enabled'] === true });
+  const endpoint = ui.input({ value: read('endpoint', 'http://127.0.0.1:9881') });
+  const timeout = ui.input({ type: 'number', value: read('timeoutMs', '8000') });
+  timeout.min = '500';
+  timeout.max = '60000';
+  timeout.step = '100';
+  const pitch = ui.input({ type: 'number', value: read('pitch', '0') });
+  pitch.min = '-24';
+  pitch.max = '24';
+  pitch.step = '1';
+  const indexRate = ui.input({ type: 'number', value: read('indexRate', '0.3') });
+  indexRate.min = '0';
+  indexRate.max = '1';
+  indexRate.step = '0.05';
+
+  const knobs = ui.h('div', 'gsv-cfg');
+  knobs.style.display = 'grid';
+  knobs.style.gridTemplateColumns = 'repeat(3, minmax(7em, 1fr))';
+  knobs.style.gap = '.6em';
+  knobs.append(ui.field(t.rvcTimeout, timeout), ui.field(t.rvcPitch, pitch), ui.field(t.rvcIndexRate, indexRate));
+  const endpointField = ui.h('div', 'gsv-cfg');
+  endpointField.append(ui.field(t.rvcEndpoint, endpoint));
+
+  const audio = ui.h('audio');
+  audio.controls = true;
+  audio.hidden = true;
+  let url: string | null = null;
+  ctx.own({ dispose: () => { if (url) URL.revokeObjectURL(url); } });
+
+  const probeBtn = ui.button(t.rvcProbe, { size: 'sm', onClick: () => void probe() });
+  const writeBtn = ui.button(t.rvcWrite, { variant: 'primary', size: 'sm', onClick: () => void write() });
+  const testBtn = ui.button(t.rvcTest, { size: 'sm', onClick: () => void test() });
+  const acts = ui.actions();
+  acts.append(probeBtn, writeBtn, testBtn);
+
+  host.append(ui.h('div', 'gsv-detail', t.rvcTestHint), enabled.el, endpointField, knobs, acts, status, audio, msg);
+
+  async function probe(): Promise<void> {
+    probeBtn.disabled = true;
+    try {
+      const r = await ctx.invoke<RvcProbe>('rvcProbe');
+      status.textContent = r.state === 'ready' ? t.rvcProbeReady(r.device ?? '', r.model ?? '')
+        : r.state === 'not-ready' ? t.rvcProbeNotReady
+          : r.state === 'absent' ? t.rvcProbeAbsent
+            : r.state === 'off' ? t.rvcProbeOff
+              : t.rvcProbeError(r.detail);
+    } catch (err) {
+      status.textContent = errText(err);
+    } finally {
+      probeBtn.disabled = false;
+    }
+  }
+
+  async function write(): Promise<void> {
+    msg.textContent = '';
+    msg.classList.remove('bad');
+    try {
+      await ctx.invoke('rvcWrite', [{
+        enabled: enabled.checked,
+        endpoint: endpoint.value.trim(),
+        timeoutMs: Number(timeout.value),
+        pitch: Number(pitch.value),
+        indexRate: Number(indexRate.value),
+      }]);
+      ui.toast(t.rvcWriteOk);
+      await probe();
+    } catch (err) {
+      msg.textContent = errText(err);
+      msg.classList.add('bad');
+    }
+  }
+
+  async function test(): Promise<void> {
+    msg.textContent = '';
+    msg.classList.remove('bad');
+    const busy = ui.busy(t.rvcTest, t.rvcTestBusy);
+    testBtn.disabled = true;
+    try {
+      const blob = await ctx.invokeBinary('rvcTest', []);
+      if (url) URL.revokeObjectURL(url);
+      url = URL.createObjectURL(blob);
+      audio.src = url;
+      audio.hidden = false;
+      void audio.play().catch(() => undefined);
+    } catch (err) {
+      msg.textContent = errText(err);
+      msg.classList.add('bad');
+    } finally {
+      busy.dispose();
+      testBtn.disabled = false;
+    }
+  }
+
+  await probe();
+}
+
+/**
  * 渲染一个配置字段；保存走面板的 `setConfigValue`，和原配置页是同一份值。
  */
 function mountConfigField(ctx: WebUiPanelContext, host: HTMLElement, f: ConfigField, value: unknown): void {
@@ -595,6 +706,9 @@ function linkPanel(): WebUiPanel {
       const legacy = ui.sheet({ title: t.oldQqTitle, en: 'cortico-world-qq', desc: t.oldQqDesc });
       ctx.root.append(legacy.el);
       mount(legacy.body, '.shareAudio');
+      const rvc = ui.sheet({ title: t.rvcTitle, en: 'cortico-world-rvc-for-coopanion', desc: t.rvcDesc });
+      ctx.root.append(rvc.el);
+      await mountRvcCard(ctx, rvc.body, resp.values);
     },
   };
 }

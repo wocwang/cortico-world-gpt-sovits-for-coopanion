@@ -1,6 +1,7 @@
 import type { ConfigGroup } from 'cortico/core/types.ts';
 import { pick, type Language } from 'cortico/core/language.ts';
 import type { CustomVoice } from './custom-voice.ts';
+import type { RvcLinkConfig } from './rvc-link.ts';
 import type { SpeechLang } from './synth.ts';
 import { DEFAULT_PRESET } from './voices.ts';
 
@@ -77,6 +78,11 @@ export interface GptSovitsConfigSection {
   /** 由对方插件自己合成语音的渠道（如 QQ）：开启后提示词让 bot 不为这些回复调用 sovits_speak。 */
   channelVoice: boolean;
   /**
+   * 出口变声：合成完交给本地 RVC 插件（cortico-world-rvc-for-coopanion）再过一遍。
+   * 只影响交给其他插件的音频（HTTP 接口），本机外放不变；RVC 不可用/超时/报错时原样返回原音频。
+   */
+  rvc: RvcLinkConfig;
+  /**
    * 采样种子，对应 api_v2 的 `seed`。`-1` 每次重新采样（同一句每次都不一样），
    * `0` 及以上固定种子（同一句、同一进程内逐字节可复现）。
    */
@@ -90,6 +96,12 @@ export interface GptSovitsConfigSection {
 }
 
 export const SPEED_MIN = .6, SPEED_MAX = 1.6;
+
+/** RVC 插件默认监听的本机地址；超时下限给足一次热态转换（0.3–2 秒）。 */
+export const RVC_DEFAULT_ENDPOINT = 'http://127.0.0.1:9881';
+export const RVC_TIMEOUT_MIN = 500, RVC_TIMEOUT_MAX = 60_000;
+export const RVC_INDEX_MIN = 0, RVC_INDEX_MAX = 1;
+export const RVC_PROTECT_MIN = 0, RVC_PROTECT_MAX = 0.5;
 
 /** api_v2 只接受这个长度区间的参考音频,超出会直接回 400。 */
 export const REF_MIN_SECONDS = 3, REF_MAX_SECONDS = 10;
@@ -121,6 +133,7 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   httpPort: 9880,
   httpToken: '',
   channelVoice: false,
+  rvc: { enabled: false, endpoint: RVC_DEFAULT_ENDPOINT, token: '', timeoutMs: 8000, pitch: 0, indexRate: 0.3, protect: 0.33 },
   seed: SEED_RANDOM,
   volume: 1,
   outputDevice: '',
@@ -167,6 +180,13 @@ const TEXT = {
     httpPort: { title: '语音接口端口', description: '默认 9880。与别的程序冲突时换一个。' },
     httpToken: { title: '语音接口令牌', description: '留空不校验（接口只监听本机回环地址）。填了以后对方请求要带 Authorization: Bearer 或 ?token=。' },
     channelVoice: { title: '其他渠道的语音交给对方插件', description: '开启后提示词会告诉 bot：在由对方插件自己合成语音的渠道（如 QQ）回复时不要调用 sovits_speak，要发语音就在对方工具里打开语音开关（qq-final 的 qq_send 传 voice=true），由对方用本插件的声音合成；本机对话页照常出声。配合「开放本地语音接口」+ QQ 插件自带语音时用。' },
+    rvcEnabled: { title: '出口变声（RVC）', description: '合成完把音频交给本机 RVC 插件再过一遍，再交出去。只影响给其他插件的音频；RVC 没开、超时或报错时原样返回，不会断链路。' },
+    rvcEndpoint: { title: 'RVC 端点', description: '默认 http://127.0.0.1:9881，即 cortico-world-rvc-for-coopanion 的本机接口。' },
+    rvcToken: { title: 'RVC 接口令牌', description: 'RVC 插件配了接口令牌时填同一个值；留空表示对方不校验。' },
+    rvcTimeoutMs: { title: 'RVC 超时（毫秒）', description: '单次变声的上限，默认 8000。超时就放弃这一次变声，原音频照常返回。' },
+    rvcPitch: { title: 'RVC 变调（半音）', description: '0 为原调；男声转女声一般 +12 左右。' },
+    rvcIndexRate: { title: 'RVC 索引率', description: '0..1，越高越贴近音色、但可能带出素材口音。' },
+    rvcProtect: { title: 'RVC 保护清辅音', description: '0..0.5，防止换声后齿音、吸气声被抹掉。' },
     seed: { title: '采样种子', description: '-1 每次重新采样（同一句每次听起来都不同）；填 0 或正整数可固定，同一句每次逐字节一致。' },
     volume: { title: '音量' },
     outputDevice: { title: '输出设备', description: '留空使用系统默认设备。', system: '系统默认' },
@@ -206,6 +226,13 @@ const TEXT = {
     httpPort: { title: 'Voice API port', description: 'Defaults to 9880; change it if something else uses that port.' },
     httpToken: { title: 'Voice API token', description: 'Empty means no check (the server listens on loopback only). When set, callers must send Authorization: Bearer or ?token=.' },
     channelVoice: { title: 'Channel voice comes from the other plugin', description: 'When on, the prompt tells the bot not to call sovits_speak for replies on channels whose plugin synthesizes voice itself (QQ, for example), so the same line is not spoken here too; the chat page keeps its voice. Use it with the local voice API and a voice-capable QQ plugin.' },
+    rvcEnabled: { title: 'Voice conversion (RVC) at the exit', description: 'Hands every finished line to the local RVC plugin once before it goes out. Only affects audio for other plugins; when RVC is off, slow or failing, the original audio is returned and the chain never breaks.' },
+    rvcEndpoint: { title: 'RVC endpoint', description: 'Defaults to http://127.0.0.1:9881, the loopback API of cortico-world-rvc-for-coopanion.' },
+    rvcToken: { title: 'RVC API token', description: 'Fill in the same value when the RVC plugin has a token; empty means it checks nothing.' },
+    rvcTimeoutMs: { title: 'RVC timeout (ms)', description: 'Upper bound for one conversion, 8000 by default. On timeout the conversion is skipped and the original audio goes out.' },
+    rvcPitch: { title: 'RVC pitch (semitones)', description: '0 keeps the original key; a male voice to female is usually around +12.' },
+    rvcIndexRate: { title: 'RVC index rate', description: '0..1; higher sticks closer to the voice but may leak the source accent.' },
+    rvcProtect: { title: 'RVC protect voiceless consonants', description: '0..0.5; keeps sibilants and breaths from being smeared by the conversion.' },
     seed: { title: 'Sampling seed', description: '-1 resamples every time (the same line sounds different each run); 0 or a positive integer fixes it, making the same line byte-identical.' },
     volume: { title: 'Volume' },
     outputDevice: { title: 'Output device', description: 'Empty for the system default.', system: 'System default' },
@@ -293,6 +320,13 @@ export function configGroups(language: Language): ConfigGroup[] {
           [`${K}.httpToken`]: { type: 'string', title: t.httpToken.title, description: t.httpToken.description, 'x-hot': true },
           [`${K}.channelVoice`]: { type: 'boolean', title: t.channelVoice.title, description: t.channelVoice.description, 'x-hot': true },
           [`${K}.shareAudio`]: { type: 'boolean', title: t.shareAudio.title, description: t.shareAudio.description, 'x-hot': true },
+          [`${K}.rvc.enabled`]: { type: 'boolean', title: t.rvcEnabled.title, description: t.rvcEnabled.description, 'x-hot': true },
+          [`${K}.rvc.endpoint`]: { type: 'string', title: t.rvcEndpoint.title, description: t.rvcEndpoint.description, 'x-hot': true },
+          [`${K}.rvc.token`]: { type: 'string', title: t.rvcToken.title, description: t.rvcToken.description, 'x-hot': true },
+          [`${K}.rvc.timeoutMs`]: { type: 'number', title: t.rvcTimeoutMs.title, description: t.rvcTimeoutMs.description, minimum: RVC_TIMEOUT_MIN, maximum: RVC_TIMEOUT_MAX, multipleOf: 100, 'x-hot': true },
+          [`${K}.rvc.pitch`]: { type: 'number', title: t.rvcPitch.title, description: t.rvcPitch.description, minimum: -24, maximum: 24, multipleOf: 1, 'x-hot': true },
+          [`${K}.rvc.indexRate`]: { type: 'number', title: t.rvcIndexRate.title, description: t.rvcIndexRate.description, minimum: RVC_INDEX_MIN, maximum: RVC_INDEX_MAX, multipleOf: 0.05, 'x-hot': true },
+          [`${K}.rvc.protect`]: { type: 'number', title: t.rvcProtect.title, description: t.rvcProtect.description, minimum: RVC_PROTECT_MIN, maximum: RVC_PROTECT_MAX, multipleOf: 0.01, 'x-hot': true },
         },
       },
     },

@@ -17,7 +17,7 @@ afterEach(async () => {
   handle = null;
 });
 
-async function boot(opts: { token?: string; ready?: boolean; slow?: boolean } = {}): Promise<{ base: string; jobs: TtsJob[]; order: string[] }> {
+async function boot(opts: { token?: string; ready?: boolean; slow?: boolean; post?: (wav: Buffer) => Promise<Buffer> } = {}): Promise<{ base: string; jobs: TtsJob[]; order: string[] }> {
   const jobs: TtsJob[] = [];
   const order: string[] = [];
   let busy = false;
@@ -28,6 +28,7 @@ async function boot(opts: { token?: string; ready?: boolean; slow?: boolean } = 
       log,
       ready: () => opts.ready !== false,
       stateText: () => 'starting',
+      post: opts.post,
       synthesize: async (job) => {
         if (busy) order.push('overlap');
         busy = true;
@@ -93,5 +94,20 @@ describe('HTTP 语音接口', () => {
     const { base, order } = await boot({ slow: true });
     await Promise.all(['第一句', '第二句', '第三句'].map((t) => fetch(`${base}/tts`, { method: 'POST', body: JSON.stringify({ text: t }) })));
     expect(order).toEqual([]);
+  });
+
+  it('出口后处理成功时返回替换后的字节', async () => {
+    const replaced = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(16, 0x33)]);
+    const { base } = await boot({ post: async () => replaced });
+    const res = await fetch(`${base}/tts`, { method: 'POST', body: JSON.stringify({ text: '试试' }) });
+    expect(res.status).toBe(200);
+    expect(Buffer.from(await res.arrayBuffer()).equals(replaced)).toBe(true);
+  });
+
+  it('出口后处理抛错时照样回原音频，链路不断', async () => {
+    const { base } = await boot({ post: async () => { throw new Error('rvc broke'); } });
+    const res = await fetch(`${base}/tts`, { method: 'POST', body: JSON.stringify({ text: '试试' }) });
+    expect(res.status).toBe(200);
+    expect(parseWavHeader(Buffer.from(await res.arrayBuffer()))?.sampleRate).toBe(48000);
   });
 });
