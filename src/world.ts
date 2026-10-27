@@ -31,6 +31,8 @@ import { customVoiceOptions, registerCustomVoiceOptions } from './voice-options.
 import { promptLanguageOf, speechText, ttsPlain, ttsSafe } from './speech-text.ts';
 import { synthesize, switchWeights, type SpeechLang, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
+import { TrainerManager } from './trainer.ts';
+import { translateTo } from './translate.ts';
 import { DEFAULT_PRESET, isPreset, presetFileLabel, presetLabel, presetRefId, VOICE_PRESETS, type VoicePreset } from './voices.ts';
 import { installedBaseWeights, officialWeights, resolveTrained, type TrainedResult, type TrainedWeights } from './weights.ts';
 import { readSeconds, staleSavedLine, wavBytes } from './wav.ts';
@@ -127,6 +129,8 @@ export interface GptSovitsWorldOptions {
   runtimesRoot: () => string;
   modelsRoot: () => string;
   persist(patch: DeepPartial<GptSovitsConfigSection>): void;
+  /** 部署级密钥读取器（框架 `WorldContext.secret`，读部署 `.env`）；未注入时翻译模型的密钥读不到。 */
+  secret?: (name: string) => string;
 }
 
 type Backend =
@@ -174,6 +178,8 @@ export class GptSovitsWorld implements World {
   private httpTts: HttpTtsHandle | null = null;
   /** 正在进行的启动+预热，避免休眠唤醒与面板按钮同时启动两次。 */
   private startingServer: Promise<void> | null = null;
+  /** 训练页管理器，懒建；面板点开才起。 */
+  private trainerManager: TrainerManager | null = null;
 
   constructor(private readonly opts: GptSovitsWorldOptions) {
     this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
@@ -277,6 +283,30 @@ export class GptSovitsWorld implements World {
     if (this.cfg.serverUrl.trim()) return { kind: 'remote', url: this.cfg.serverUrl.trim().replace(/\/+$/, '') };
     if (this.cfg.runtimeDir.trim()) return { kind: 'own', dir: this.cfg.runtimeDir.trim() };
     return { kind: 'managed', dir: this.runtime.dir() };
+  }
+
+  /** 训练页管理器，懒建：面板第一次用时才构造。 */
+  private trainer(): TrainerManager {
+    if (!this.trainerManager) {
+      this.trainerManager = new TrainerManager({
+        runtimeDir: () => this.runtime.dir(),
+        weightsDir: () => this.weights.dir(),
+        dataDir: this.opts.dataDir,
+        log: this.log,
+        stopInference: async () => { this.hush(); await this.server.stop(); },
+        modelVersion: () => this.version(),
+      });
+    }
+    return this.trainerManager;
+  }
+
+  /** 训练页的门槛：只有托管安装且运行时就绪才放行，否则把原因直接抛给面板。 */
+  private trainerGate(): TrainerManager {
+    const b = this.backend();
+    if (b.kind === 'remote') throw new Error('当前是「已有服务」模式：训练需要本机运行时。');
+    if (b.kind === 'own') throw new Error('自备运行时目录不支持训练面板，请直接用该目录里的 webui.py。');
+    if (this.runtime.status().phase !== 'ready') throw new Error('运行时还没装好，先到「语音」页安装。');
+    return this.trainer();
   }
 
   /** 能接合成请求的地址;本机服务要预热完。 */
@@ -443,8 +473,12 @@ export class GptSovitsWorld implements World {
     const share = this.cfg.shareAudio
       ? " The result also carries the whole line as an audio attachment: pass that [blob …] handle to another plugin's send tool (the QQ voice parameter, for example) to deliver the same audio. Pass silent: true for a line meant for such a channel, so it is not played on this computer."
       : '';
+    // 开着「其他渠道的语音交给对方插件」时补一句渠道规则：QQ 这类渠道别用本工具，改在对方发送工具里开语音开关。
+    const channel = this.cfg.channelVoice
+      ? " On a channel whose plugin synthesizes voice itself (QQ), do not call this tool: pass voice=true to that plugin\u0027s send tool (qq_send) instead, and it speaks with this same voice. That still holds when the person asks for voice or asks you to try again — do not skip it because you once said that channel was broken."
+      : '';
     return [
-      { ...speak!, description: `${speak!.description} Speech language: ${lang.name} — ${lang.rule}${share}`, handler: (args) => this.speak(String(args.text ?? ''), args.silent === true) },
+      { ...speak!, description: `${speak!.description} Speech language: ${lang.name} — ${lang.rule}${share}${channel}`, handler: (args) => this.speak(String(args.text ?? ''), args.silent === true) },
       { ...hush!, handler: async () => { this.hush(); return 'Stopped.'; } },
     ];
   }
@@ -511,7 +545,8 @@ export class GptSovitsWorld implements World {
     // 落盘或交出去的内容与听到的一致（同一增益）；两者都关时不占内存。
     const archive = this.cfg.saveAudio || this.cfg.shareAudio ? { rate: 0, chunks: [] as Buffer[] } : null;
     let first = 0;
-    for await (const c of synthesize(url, this.request(text, voice), signal)) {
+    const spoken = await this.prepareSpeechText(text, this.cfg.textLang);
+    for await (const c of synthesize(url, this.request(spoken, voice), signal)) {
       if (archive) { archive.rate = c.sampleRate; archive.chunks.push(applyGain(c.pcm, gain)); }
       if (!silent) await this.player.write(c.sampleRate, c.pcm, gain);
       if (!first) { first = Date.now(); onFirst(); }
@@ -663,6 +698,25 @@ export class GptSovitsWorld implements World {
     };
   }
 
+  /**
+   * 合成前的文本准备：`textLang` 选 en/ja/ko 且文字还不是该语言时，先用配置的翻译模型把整段文字
+   * 翻成目标语言再送合成（切句由服务端的 `cut5` 在译文上做）。没配翻译模型或翻译失败时按原文合成。
+   */
+  private async prepareSpeechText(text: string, textLang: SpeechLang): Promise<string> {
+    if (textLang !== 'en' && textLang !== 'ja' && textLang !== 'ko') return text;
+    const src = text.trim();
+    if (!src || promptLanguageOf(src) === textLang) return text;
+    const endpoint = (this.cfg.translateEndpoint ?? '').trim();
+    const model = (this.cfg.translateModel ?? '').trim();
+    if (!endpoint || !model) return text;
+    const keyName = (this.cfg.translateApiKeySecret ?? '').trim();
+    const apiKey = keyName ? this.opts.secret?.(keyName) ?? '' : '';
+    const out = await translateTo(src, textLang, { endpoint, apiKey, model }, this.log);
+    if (!out) return text;
+    this.log.info('GPT-SoVITS 语音先翻译再合成', { to: textLang, inChars: [...src].length, outChars: [...out].length });
+    return out;
+  }
+
   async start(host: WorldHost): Promise<void> {
     this.log = host.log;
     this.host = host;
@@ -778,7 +832,8 @@ export class GptSovitsWorld implements World {
     const url = this.url();
     if (!url) throw new Error(`voice not ready: ${this.stateFor(stateWords('en'))}`);
     const gain = this.backend().kind === 'remote' ? 1 : OUTPUT_GAIN[this.version()];
-    const req = this.request(job.text, voice);
+    const spoken = await this.prepareSpeechText(job.text, this.cfg.textLang);
+    const req = this.request(spoken, voice);
     const chunks: Buffer[] = [];
     let rate = 0;
     const asked: SynthRequest = {
@@ -1009,9 +1064,10 @@ export class GptSovitsWorld implements World {
         { id: 'voice', title: t.panel, description: t.panelHint, getMethods: ['state'] },
         cfgPanel('cfg-voice', `world:${GPT_SOVITS_ID}`),
         cfgPanel('cfg-output', `world:${GPT_SOVITS_ID}:output`),
-        cfgPanel('cfg-link', `world:${GPT_SOVITS_ID}:link`, ['config', 'qqGuide', 'writeQqVoice', 'setJudgeKey']),
+        cfgPanel('cfg-link', `world:${GPT_SOVITS_ID}:link`, ['config', 'qqGuide', 'writeQqVoice']),
         cfgPanel('cfg-service', `world:${GPT_SOVITS_ID}:service`),
         { id: 'voices', title: t.voicesPanel, description: t.voicesPanelHint, getMethods: ['state'] },
+        { id: 'train', title: t.trainPanel, description: t.trainPanelHint, getMethods: ['trainerState'] },
       ],
       invoke: (panel, method, args) => this.invoke(panel, method, args),
       promptDocs: [{
@@ -1098,16 +1154,9 @@ export class GptSovitsWorld implements World {
     const path = join(this.opts.botDir, 'config.json');
     let qq: any = null;
     try { qq = JSON.parse(readFileSync(path, 'utf8'))?.worlds?.qqbot ?? null; } catch { /* 没装或读不到就按未安装处理 */ }
-    const judgeSecret = qq?.voice?.judgeApiKeySecret || 'DEEPSEEK_API_KEY';
-    const judgeEndpoint = qq?.voice?.judgeEndpoint || 'https://api.deepseek.com';
-    const judgeModel = qq?.voice?.judgeModel || 'deepseek-chat';
     const values = [
       { label: zh ? '实现方式' : 'Provider', value: 'local' },
       { label: zh ? '发语音' : 'Send voice', value: 'true' },
-      { label: zh ? '语义判定是否说语音' : 'Judge when to speak', value: 'true' },
-      { label: zh ? '语义判定端点' : 'Judge endpoint', value: judgeEndpoint },
-      { label: zh ? '语义判定模型' : 'Judge model', value: judgeModel },
-      { label: zh ? '判定密钥变量' : 'Judge key variable', value: judgeSecret },
       { label: zh ? '语音模型网址' : 'Voice base URL', value: `http://127.0.0.1:${port}` },
       { label: zh ? '音色' : 'Voice', value: voice },
       { label: zh ? 'TTS 模型名' : 'TTS model', value: 'tts-1' },
@@ -1119,47 +1168,12 @@ export class GptSovitsWorld implements World {
       port,
       voice,
       tokenSet: !!this.cfg.httpToken,
-      judgeSecret,
-      judgeConfigured: this.secretConfigured(judgeSecret),
       path,
       values,
       current: qq?.voice
         ? { enabled: !!qq.voice.enabled, provider: qq.voice.provider ?? '', tts: !!qq.voice.tts, voiceBaseUrl: qq.voice.voiceBaseUrl ?? '', voiceVoice: qq.voice.voiceVoice ?? '' }
         : null,
     };
-  }
-
-  /** 部署 .env 或进程环境里有没有这个密钥变量（只看变量名，不读值）。 */
-  private secretConfigured(name: string): boolean {
-    if (!name) return false;
-    if (process.env[name]) return true;
-    try {
-      const env = readFileSync(join(this.opts.botDir, '.env'), 'utf8');
-      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return new RegExp(`^\\s*${escaped}\\s*=`, 'm').test(env);
-    } catch {
-      return false;
-    }
-  }
-
-  /** 保存语义判定密钥到部署 .env（同名变量覆盖，其他行保留）。 */
-  private setJudgeKey(secret: string): unknown {
-    const value = secret.trim();
-    if (value.length < 8) throw new Error('密钥太短，请粘贴完整的 API Key。');
-    let name = 'DEEPSEEK_API_KEY';
-    try {
-      const raw = JSON.parse(readFileSync(join(this.opts.botDir, 'config.json'), 'utf8'));
-      name = raw?.worlds?.qqbot?.voice?.judgeApiKeySecret || name;
-    } catch { /* 没有 qq 配置就用默认名 */ }
-    const path = join(this.opts.botDir, '.env');
-    let lines: string[] = [];
-    try { lines = readFileSync(path, 'utf8').split(/\r?\n/); } catch { /* 还没有 .env */ }
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const prefix = new RegExp(`^\\s*${escaped}\\s*=`);
-    lines = lines.filter((line) => line.trim() && !prefix.test(line));
-    lines.push(`${name}=${value}`);
-    writeFileSync(path, `${lines.join('\n')}\n`);
-    return { ok: true, name, path };
   }
 
   /** 一键把本地语音接口的参数写进 QQ 插件配置（改完需重启 Coopanion 生效）。 */
@@ -1177,14 +1191,10 @@ export class GptSovitsWorld implements World {
     qq.voice.enabled = true;
     qq.voice.provider = 'local';
     qq.voice.tts = true;
-    qq.voice.semanticJudge = true;
     qq.voice.voiceBaseUrl = `http://127.0.0.1:${port}`;
     qq.voice.voiceVoice = this.cfg.voice.preset || DEFAULT_PRESET;
     qq.voice.voiceTtsModel = 'tts-1';
     qq.voice.voiceTimeout = 120;
-    if (!qq.voice.judgeEndpoint) qq.voice.judgeEndpoint = 'https://api.deepseek.com';
-    if (!qq.voice.judgeModel) qq.voice.judgeModel = 'deepseek-chat';
-    if (!qq.voice.judgeApiKeySecret) qq.voice.judgeApiKeySecret = 'DEEPSEEK_API_KEY';
     const backup = `${path}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
     copyFileSync(path, backup);
     writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`);
@@ -1227,12 +1237,16 @@ export class GptSovitsWorld implements World {
   /** 面板数据面。 */
   async invoke(panel: string, method: string, args: unknown[]): Promise<unknown> {
     if (method === 'setConfigValue') return this.setConfigValue(String(args[0] ?? ''), args[1]);
-    if (method === 'setJudgeKey') return this.setJudgeKey(String(args[0] ?? ''));
     if (method === 'qqGuide') return this.qqGuide();
     if (method === 'writeQqVoice') return this.writeQqVoice();
     if (method === 'config') {
       return this.configSchema(String(args[0] ?? ''), String(args[1] ?? ''), args[2] === true);
     }
+    if (method === 'trainerState') return this.trainerGate().state();
+    if (method === 'installTrainer') { const m = this.trainerGate(); void m.installDeps(); return m.state(); }
+    if (method === 'downloadTrainerAssets') { const m = this.trainerGate(); void m.downloadAssets(); return m.state(); }
+    if (method === 'startTrainer') { const m = this.trainerGate(); void m.start({ stopInference: args[0] === true }); return m.state(); }
+    if (method === 'stopTrainer') { const m = this.trainerGate(); await m.stop(); return m.state(); }
     if (panel === 'voices') {
       switch (method) {
         case 'state': return this.panelState();

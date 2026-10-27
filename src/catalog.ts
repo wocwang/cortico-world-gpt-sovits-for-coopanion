@@ -121,6 +121,11 @@ export const OFFICIAL_VOICES: Readonly<Record<string, OfficialVoice>> = {};
 /** 选中的预设对应的官模；`female` / `male` / 自定义音色返回 null。 */
 export const officialVoice = (preset: string): OfficialVoice | null => OFFICIAL_VOICES[preset] ?? null;
 
+/** 训练用的预训练资源：v5turbo 训练所需文件随推理权重已就位，只差 v2ProPlus 的判别器 s2D。 */
+export const TRAIN_ASSETS: readonly PinnedFile[] = [
+  upstream('v2Pro/s2Dv2ProPlus.pth', 126432639, '635cd84bf6f7f9b8d41c88c7106f81d782c794c61f931845214ea037b0c5bef2'),
+];
+
 export const MODEL_FILES: Readonly<Record<ModelVersion, readonly PinnedFile[]>> = {
   v5turbo: [...SHARED, v5('gsv-v5-pretrained/s2Gv5turbo.pth', 766406144, '287b32a06b7d486f5303ec520468b0728fb01aac8b0f5d86fd5455c9a1d3e022'), v5('gsv-v5-pretrained/vocoder.pth', 57761163, 'b7543c83222aa2105bb4efb56845086bc5f2eeba61243d723ffa062052b3221f')],
   v2ProPlus: [...SHARED, upstream('v2Pro/s2Gv2ProPlus.pth', 200125741, 'd42a22bbbf65fb2bbdd45ad6a66841156977db45c7aabe0a6992ff378d9c7d3b'), upstream('sv/pretrained_eres2netv2w24s4ep4.ckpt', 107528697, '4f5a0bf73c61eb41b174e1bb54e7ee3c83233892be8e0af1f187024e8e581a35')],

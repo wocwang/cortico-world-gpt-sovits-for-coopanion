@@ -129,6 +129,103 @@ export function patchedSource(source: string): string | null {
   return eol === '\n' ? patched : patched.replace(/\n/g, eol);
 }
 
+/** 打在 `webui.py` 里的标记；有它就认为已经打过补丁。 */
+export const TRAINER_PATCH_MARKER = '_coopanion_trainer_patch';
+
+/**
+ * 训练 WebUI 的启动块：上游写死 `0.0.0.0` 且自动开浏览器，这里改成只绑回环、不自动开、
+ * 端口读 `COOPANION_TRAINER_PORT`。`webui.py` 顶部已经 `import os`，不再另插 import。
+ */
+const TRAINER_EDIT: { find: string; replace: string } = {
+  find: [
+    '    app.queue().launch(  # concurrency_count=511, max_size=1022',
+    '        server_name="0.0.0.0",',
+    '        inbrowser=True,',
+    '        share=is_share,',
+    '        server_port=webui_port_main,',
+  ].join('\n'),
+  replace: [
+    '    app.queue().launch(  # concurrency_count=511, max_size=1022  # [coopanion-trainer] _coopanion_trainer_patch',
+    '        server_name="127.0.0.1",  # [coopanion-trainer] 只绑回环',
+    '        inbrowser=False,',
+    '        share=is_share,',
+    '        server_port=int(os.environ.get("COOPANION_TRAINER_PORT", webui_port_main)),',
+  ].join('\n'),
+};
+
+/**
+ * 纯函数：返回打过补丁的训练 WebUI 源码。已经有标记、或锚点对不上时返回 `null`（不改）。
+ * 原文件是 CRLF 时保持 CRLF。
+ */
+export function trainerPatchedSource(source: string): string | null {
+  if (source.includes(TRAINER_PATCH_MARKER)) return null;
+  const eol = source.includes('\r\n') ? '\r\n' : '\n';
+  const text = source.replace(/\r\n/g, '\n');
+  if (!text.includes(TRAINER_EDIT.find)) return null;
+  const patched = text.replace(TRAINER_EDIT.find, TRAINER_EDIT.replace);
+  return eol === '\n' ? patched : patched.replace(/\n/g, eol);
+}
+
+/** 打在 `webui.py` 默认模型版本行上的标记；有它就认为已经打过这处。 */
+export const TRAINER_VERSION_MARKER = '_coopanion_trainer_version';
+
+/**
+ * 默认模型版本：上游写死 `v2Pro`，但本扩展的运行时只带 v5turbo(显卡档)/v2ProPlus(CPU 档) 的底座，
+ * 训练页默认版本跟着推理档走才对得上（v2Pro 训出来的权重本插件也认不了）。
+ * 改成读 `COOPANION_TRAINER_VERSION`（trainer.ts 启动时按档位注入）；没注入时维持上游默认。
+ * 可选补丁：锚点对不上就跳过，不停机。
+ */
+const TRAINER_VERSION_EDIT: { find: string; replace: string } = {
+  find: 'os.environ["version"] = version = "v2Pro"',
+  replace:
+    'os.environ["version"] = version = os.environ.get("COOPANION_TRAINER_VERSION", "v2Pro")  # [coopanion-trainer] _coopanion_trainer_version',
+};
+
+/**
+ * 纯函数：返回改过默认版本的源码。已经有标记、或锚点对不上时返回 `null`（不改）。
+ * 原文件是 CRLF 时保持 CRLF。
+ */
+export function trainerVersionPatchedSource(source: string): string | null {
+  if (source.includes(TRAINER_VERSION_MARKER)) return null;
+  const eol = source.includes('\r\n') ? '\r\n' : '\n';
+  const text = source.replace(/\r\n/g, '\n');
+  if (!text.includes(TRAINER_VERSION_EDIT.find)) return null;
+  const patched = text.replace(TRAINER_VERSION_EDIT.find, TRAINER_VERSION_EDIT.replace);
+  return eol === '\n' ? patched : patched.replace(/\n/g, eol);
+}
+
+/**
+ * 给托管运行时的 `webui.py` 打训练补丁；找不到文件或启动块锚点不匹配时原样返回，不会让启动失败。
+ * 两处独立进行：启动块（端口/回环）打不上按 `unsupported`；默认版本打不上只是静默跳过。
+ */
+export function patchTrainer(runtimeDir: string): PatchResult {
+  const file = join(runtimeDir, 'webui.py');
+  if (!existsSync(file)) return 'missing';
+  const source = readFileSync(file, 'utf8');
+  let text = source;
+  let changed = false;
+  if (!text.includes(TRAINER_PATCH_MARKER)) {
+    const patched = trainerPatchedSource(text);
+    if (!patched) return 'unsupported';
+    text = patched;
+    changed = true;
+  }
+  if (!text.includes(TRAINER_VERSION_MARKER)) {
+    const patched = trainerVersionPatchedSource(text);
+    if (patched) {
+      text = patched;
+      changed = true;
+    }
+  }
+  if (!changed) return 'already';
+  try {
+    writeFileSync(file, text);
+  } catch {
+    return 'unsupported';
+  }
+  return 'patched';
+}
+
 /** 给托管运行时打补丁；找不到文件或锚点不匹配时原样返回，不会让启动失败。 */
 export function patchRuntime(runtimeDir: string): PatchResult {
   const file = join(runtimeDir, PATCH_FILE);

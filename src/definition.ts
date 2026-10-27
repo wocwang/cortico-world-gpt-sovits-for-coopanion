@@ -71,6 +71,8 @@ export const GPT_SOVITS: WorldDefinition<GptSovitsConfigSection> = {
     runtimesRoot,
     modelsRoot,
     persist: (patch) => ctx.persist(patch),
+    // 翻译模型的密钥按 qq-final 的同一规矩走框架：配置里只存部署 .env 的变量名。
+    secret: (name) => ctx.secret(name),
   }),
   describe: DESCRIBE,
 };

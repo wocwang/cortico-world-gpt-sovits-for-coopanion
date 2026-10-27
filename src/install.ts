@@ -58,7 +58,7 @@ async function fetchTo(url: string, dest: string, onBytes: (n: number) => void, 
 }
 
 /** 按顺序试来源，直到下下来的文件大小与 SHA-256 都对。 */
-async function fetchVerified(sources: readonly string[], dest: string, bytes: number, sha256: string, progress: (n: number) => void, signal: AbortSignal): Promise<void> {
+export async function fetchVerified(sources: readonly string[], dest: string, bytes: number, sha256: string, progress: (n: number) => void, signal: AbortSignal): Promise<void> {
   const errors: string[] = [];
   for (const url of sources) {
     let got = 0;

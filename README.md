@@ -55,6 +55,8 @@
 | **`cortico-world-qq-final`**（新，推荐） | 它自己合成语音，所以让它**来取**：打开本插件的「开放本地语音接口」，把它的「语音模型网址」指向本机 | 语音同样是星落落/当前音色的声音；本机不会重复播放 |
 | `cortico-world-qq`（老） | 打开「把整句语音交给其他插件」，模型把回执里的 `[blob …]` 句柄填进 `qq_draft` 的 voice | 也能用，但要求模型每次记得带句柄；老插件已不再维护 |
 
+**版本要求**：qq-final **0.6.29 起**已删除语音语义判定模型，**不需要任何密钥**——是否发语音由主模型在调 `qq_send` 时自己带 `voice=true` 决定。0.6.24 及更早的版本仍要自己配判定密钥（本插件不再代填）。
+
 **接新插件（qq-final）的完整步骤：**
 
 1. 本插件控制台 →「与其他插件联动」：打开**「开放本地语音接口」**（端口默认 9880，可改），再打开**「其他渠道的语音交给对方插件」**（这样 QQ 的回复不会又在本机念一遍；本机对话页照常出声）。
@@ -67,7 +69,10 @@
    TTS 模型名            = tts-1
    请求超时              = 120
    ```
-3. **语义判定密钥（必须）**：qq-final 靠 LLM 判断“这条要不要发语音”，没有密钥就不发（`core.log` 会写「语义判定未配置 judgeApiKey，默认不发语音」）。点「一键写入」会自动填好判定端点 `https://api.deepseek.com`、判定模型 `deepseek-chat`、密钥变量名 `DEEPSEEK_API_KEY`；你只需在本插件「QQ 语音对接」的输入框里**粘贴一次 DeepSeek API Key**并保存（写入部署目录 `.env`，不会上传）。
+3. **不用配判定模型，也不用填 Key**：qq-final 0.6.29 起删掉了语音语义判定（端点/密钥/模型三项都没了），
+   要不要发语音由主模型自己调 `qq_send(voice=true)` 决定；`local` 供应商本来就免 API Key。
+   点「一键写入」只会写实现方式、语音模型网址、音色、超时这几项。旧版 qq-final（< 0.6.29）
+   仍走它自己的判定配置，需要你自行指定密钥变量并在部署 `.env` 里配同名变量。
 4. 两个插件都别忘：本插件的「推理服务」要处于就绪（面板灯绿）。本插件的接口 Token 建议留空；填了 Token 时 qq-final 的 local 方式不会带上它。改完 qq-final 的语音配置后重启 Coopanion。
 
 **能点名哪些音色？** 本地语音接口的 `voice` / `voice_desc` 支持：预设 `xll`（星落落） / `dfy` / `female` / `male`，以及你自己建的自定义音色的**名字或 id**；认不出就用插件当前音色。
@@ -132,6 +137,16 @@
 - `.ckpt` 填 `weights.gpt`（s1 / 文本→语义），`.pth` 填 `weights.sovits`（s2 / 音色与声学），**两个必须来自同一次训练的同一轮**（如 `-e8.ckpt` 配 `_e8_*.pth`）。
 - 版本自动判定：读 `.pth` 头两字节，`08` = v5turbo（显卡档）、`06` = v2ProPlus（CPU 档），其他版本会拦下并说明原因。
 - 服务在跑时改配置会走 `/set_gpt_weights` + `/set_sovits_weights` 就地热换，不打断正在播的句子；清空两个框则换回内置底模。
+
+## 训练自己的音色
+
+想用完全属于自己的声音，可以直接在面板里训练，不必另装一套 GPT-SoVITS：
+
+- 入口在「语音」插件的「训练」页；**训练依赖与训练资源都是可选的、手动触发**，默认不装不下。
+- 显卡档训 **v5turbo（LoRA）**，CPU 档训 **v2ProPlus**；训练很吃显存，建议先勾上**「先停推理服务（释放显存）」**再开训。
+- 步骤：① 点「安装训练依赖」（gradio / tensorboard / funasr / modelscope 等）→ ② 点「下载训练资源」（v2ProPlus 需要判别器 s2D，显卡档通常已就绪）→ ③ 依次「启动训练 WebUI」并「打开浏览器」→ ④ 在上游页面里走完 数据准备 → 训练。
+- 训练产物（`GPT_weights*` / `SoVITS_weights*` 目录里的 `.ckpt` / `.pth`）拿到「音色」页当**「自备权重」成对选用**；v5turbo 的 s2 产物是 LoRA（版本头 `08`），v2ProPlus 是 `06`。
+- 训练 WebUI 只监听 `127.0.0.1`，端口自动挑空闲的，不影响推理服务端口。
 
 ---
 
@@ -215,7 +230,7 @@ worlds.qqbot.voice.provider     = local          # 或 custom（要同时填 API
 worlds.qqbot.voice.voiceBaseUrl = http://127.0.0.1:9880
 worlds.qqbot.voice.voiceVoice   = xll            # 可选：指定音色；不填用插件当前音色
 worlds.qqbot.voice.voiceTimeout = 120            # 本地合成慢，默认值够
-worlds.qqbot.voice.semanticJudge = true          # 由它判断哪些回复用语音
+worlds.qqbot.voice.tts          = true           # 允许主模型把回复发成语音（0.6.29+ 由它自己决定，无需判定模型）
 ```
 
 再把本插件的 `channelVoice` 打开：提示词会告诉 bot 在 QQ 这类渠道不要自己念，避免同一句本地又响一遍。

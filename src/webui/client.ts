@@ -6,6 +6,7 @@
 import type { WebUiClientBundle, WebUiPanel, WebUiPanelContext } from 'cortico/web/shared/client-panel.ts';
 import { panelText } from '../i18n.ts';
 import type { PanelState } from '../world.ts';
+import type { TrainerState } from '../trainer.ts';
 import './style.css';
 
 const MB = (n: number) => Math.round(n / 1048576);
@@ -273,6 +274,119 @@ const voicesPanel: WebUiPanel = {
   },
 };
 
+/**
+ * 「训练」面板：训练依赖、训练资源、训练 WebUI 三行状态，以及启动/停止与日志折叠。
+ * 训练 WebUI 是运行时里的上游 `webui.py`，启动要读模型，慢；这里每 2 秒轮询一次状态。
+ */
+const trainPanel: WebUiPanel = {
+  mount(ctx: WebUiPanelContext) {
+    const { ui } = ctx;
+    const t = panelText(ctx.language);
+    const msg = ui.msgline();
+    let state: TrainerState | null = null;
+    let expanded = false;
+
+    const call = async (method: string, args: unknown[] = []) => {
+      msg.textContent = '';
+      msg.classList.remove('bad');
+      try {
+        render(await ctx.invoke<TrainerState>(method, args));
+      } catch (err) {
+        msg.textContent = errText(err);
+        msg.classList.add('bad');
+      }
+    };
+
+    // ---- 状态三行
+    const status = ui.section(t.trainPanel, t.trainPanelHint);
+    const row = (name: string) => {
+      const el = ui.h('div', 'gsv-row');
+      const label = ui.h('span', 'gsv-name', name);
+      const pill = ui.h('span', 'gsv-pill');
+      const detail = ui.h('span', 'gsv-detail');
+      const acts = ui.h('span', 'gsv-acts');
+      el.append(label, pill, detail, acts);
+      status.append(el);
+      return { pill, detail, acts };
+    };
+    const depsRow = row(t.trainDeps), assetsRow = row(t.trainAssets), serverRow = row(t.trainServer);
+
+    const installBtn = ui.button(t.trainInstallDeps, { size: 'sm', onClick: () => void call('installTrainer') });
+    depsRow.acts.append(installBtn);
+    const downloadBtn = ui.button(t.trainDownloadAssets, { size: 'sm', onClick: () => void call('downloadTrainerAssets') });
+    assetsRow.acts.append(downloadBtn);
+    const stopFirst = ui.checkbox(t.trainStopFirst, { checked: true });
+    const startBtn = ui.button(t.trainStart, { variant: 'primary', size: 'sm', onClick: () => void call('startTrainer', [stopFirst.checked]) });
+    const stopBtn = ui.button(t.stop, { size: 'sm', onClick: () => void call('stopTrainer') });
+    const openBtn = ui.button(t.trainOpen, { size: 'sm', onClick: () => { const url = state?.url; if (url) window.open(url, '_blank', 'noopener'); } });
+    serverRow.acts.append(stopFirst.el, startBtn, stopBtn, openBtn);
+
+    // 首帧状态到位前先禁用/藏起，避免在未知状态上误点；首次成功 render 即解锁。
+    installBtn.disabled = downloadBtn.disabled = openBtn.disabled = true;
+    startBtn.hidden = stopBtn.hidden = stopFirst.el.hidden = true;
+
+    status.append(ui.msgline(t.trainWarn, true));
+    status.append(ui.h('div', 'gsv-detail', t.trainArtifactsTip));
+    const logLabel = ui.h('div', 'gsv-detail', t.trainLog);
+    logLabel.hidden = true;
+    const log = ui.h('pre', 'gsv-output');
+    log.hidden = true;
+    const logToggle = ui.button(t.trainLogToggle, {
+      size: 'sm',
+      onClick: () => {
+        expanded = !expanded;
+        logLabel.hidden = log.hidden = !expanded;
+        if (expanded && state) log.textContent = state.logTail.join('\n');
+      },
+    });
+    const logActs = ui.actions();
+    logActs.append(logToggle);
+    status.append(logActs, logLabel, log);
+
+    const setPill = (el: HTMLElement, label: string, tone: 'on' | 'off' | 'warn') => {
+      el.textContent = label;
+      el.dataset.tone = tone;
+    };
+
+    function render(s: TrainerState): void {
+      state = s;
+      // 训练依赖
+      if (s.deps === 'ready') setPill(depsRow.pill, t.trainDepsReady, 'on');
+      else if (s.deps === 'installing') setPill(depsRow.pill, t.trainDepsInstalling, 'warn');
+      else setPill(depsRow.pill, t.trainDepsMissing, 'off');
+      depsRow.detail.textContent = s.depsError ?? '';
+      installBtn.disabled = s.deps === 'installing';
+      // 训练资源：就位几个/共几个 + 还缺多少 MB（失败原因一并显示）
+      const have = s.assets.filter((a) => a.ready).length;
+      const pendingBytes = s.assets.reduce((sum, a) => (a.ready ? sum : sum + a.bytes), 0);
+      const parts = [t.trainAssetsCount(have, s.assets.length)];
+      if (pendingBytes) parts.push(`${MB(pendingBytes)} MB`);
+      if (s.assetsError) parts.push(s.assetsError);
+      setPill(assetsRow.pill, s.assetsReady ? t.ready : t.absent, s.assetsReady ? 'on' : 'off');
+      assetsRow.detail.textContent = parts.join(' · ');
+      downloadBtn.disabled = s.assetsWorking;
+      // 训练 WebUI
+      if (s.running && !s.starting) setPill(serverRow.pill, t.running, 'on');
+      else if (s.starting) setPill(serverRow.pill, t.starting, 'warn');
+      else setPill(serverRow.pill, t.stopped, 'off');
+      serverRow.detail.textContent = s.url ?? '';
+      startBtn.hidden = stopFirst.el.hidden = s.running || s.starting;
+      stopBtn.hidden = !(s.running || s.starting);
+      openBtn.disabled = !s.url;
+      // 日志：展开时才把尾部刷进去
+      if (expanded) log.textContent = s.logTail.join('\n');
+    }
+
+    const refresh = async () => {
+      try { render(await ctx.invoke<TrainerState>('trainerState')); } catch (err) { if (!state) msg.textContent = errText(err); }
+    };
+    void refresh();
+    ctx.interval(() => void refresh(), 2000);
+
+    ctx.root.append(status, msg);
+  },
+};
+
 type ConfigField = {
   key: string;
   type: string;
@@ -292,7 +406,6 @@ type QqGuide = {
   port: number;
   voice: string;
   tokenSet: boolean;
-  judgeConfigured: boolean;
   path: string;
   values: Array<{ label: string; value: string }>;
   current: { enabled: boolean; provider: string; tts: boolean; voiceBaseUrl: string; voiceVoice: string } | null;
@@ -309,39 +422,10 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
     ui.h('div', 'gsv-detail', `1. ${t.qqStep1}`),
     ui.h('div', 'gsv-detail', `2. ${t.qqStep2}`),
     ui.h('div', 'gsv-detail', `3. ${t.qqStep3}`),
-    ui.h('div', 'gsv-detail', `4. ${t.qqStep4}`),
   );
   const code = ui.h('pre', 'gsv-output');
   const acts = ui.actions();
   const msg = ui.msgline();
-  const judgeRow = ui.actions();
-  const judgeInput = ui.input({ type: 'password', placeholder: t.qqJudgePh });
-  judgeInput.style.flex = '1';
-  const judgeSave = ui.button(t.qqJudgeSave, {
-    size: 'sm',
-    onClick: () => {
-      void (async () => {
-        const key = judgeInput.value.trim();
-        if (!key) {
-          msg.textContent = t.qqJudgePh;
-          msg.classList.add('bad');
-          return;
-        }
-        try {
-          const res = await ctx.invoke<{ ok: boolean; name: string }>('setJudgeKey', [key]);
-          judgeInput.value = '';
-          msg.classList.remove('bad');
-          msg.textContent = `${t.qqJudgeSaved}（${res.name}）`;
-          ui.toast(t.qqJudgeSaved);
-          await load();
-        } catch (err) {
-          msg.textContent = errText(err);
-          msg.classList.add('bad');
-        }
-      })();
-    },
-  });
-  judgeRow.append(judgeInput, judgeSave);
   let guide: QqGuide | null = null;
   const codeText = () => (guide ? guide.values.map((v) => `${v.label} = ${v.value}`).join('\n') : '');
   const copyAll = ui.copyButton(() => codeText(), { label: t.qqCopyAll, size: 'sm' });
@@ -366,7 +450,7 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
     },
   });
   acts.append(copyAll, write);
-  sec.append(status, steps, code, acts, judgeRow, msg);
+  sec.append(status, steps, code, acts, msg);
   host.append(sec);
 
   const load = async () => {
@@ -375,13 +459,11 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
       status.textContent = [
         guide.installed ? t.qqInstalled : t.qqMissing,
         guide.httpApi ? t.qqApiOn : t.qqApiOff,
-        guide.judgeConfigured ? t.qqJudgeOk : t.qqJudgeMissing,
         guide.tokenSet ? t.qqTokenWarn : '',
         guide.current ? `${t.qqCurrent}：${guide.current.provider || '—'} · ${guide.current.voiceBaseUrl || '—'} · ${guide.current.voiceVoice || '—'}` : '',
       ].filter(Boolean).join(' · ');
       code.textContent = guide.values.map((v) => `${v.label}：${v.value}`).join('\n');
       write.disabled = !guide.installed;
-      judgeRow.hidden = guide.judgeConfigured;
     } catch (err) {
       status.textContent = errText(err);
     }
@@ -525,6 +607,7 @@ const bundle: WebUiClientBundle = {
     'cfg-output': configPanel('world:gpt-sovits:output'),
     'cfg-link': linkPanel(),
     'cfg-service': configPanel('world:gpt-sovits:service'),
+    train: trainPanel,
   },
 };
 export default bundle;

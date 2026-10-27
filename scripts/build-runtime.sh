@@ -21,7 +21,9 @@ OUT="$WORK/$NAME"
 git -C "$WORK/upstream" fetch -q origin "$COMMIT" 2>/dev/null || git -C "$WORK/upstream" fetch -q origin
 rm -rf "$OUT" && mkdir -p "$OUT"
 git -C "$WORK/upstream" archive "$COMMIT" | "$TAR" -x -C "$OUT"
-rm -rf "$OUT/docs" "$OUT/Docker" "$OUT"/*.ipynb "$OUT/Dockerfile" "$OUT/docker-compose.yaml" "$OUT/tools/uvr5" "$OUT/tools/asr"
+rm -rf "$OUT/docs" "$OUT/Docker" "$OUT"/*.ipynb "$OUT/Dockerfile" "$OUT/docker-compose.yaml"
+# tools/asr 与 tools/uvr5 保留:训练面板要起 WebUI,webui.py 启动即 import tools.asr(缺了直接退)。
+# 两边的大权重都不在 git 归档里,无需另删。
 
 # 独立 CPython:._pth 把运行时根(..)放进 sys.path,因为 -I 下脚本目录不在里面
 uv python install 3.12 --no-bin --install-dir "$WORK/python" >/dev/null

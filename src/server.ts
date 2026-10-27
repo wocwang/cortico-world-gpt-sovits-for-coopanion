@@ -42,7 +42,7 @@ const READY_TIMEOUT_MS = 300_000;
 const POLL_MS = 500;
 const TAIL_LINES = 40;
 
-async function freePort(): Promise<number> {
+export async function freePort(): Promise<number> {
   return new Promise((done, fail) => {
     const srv = createServer();
     srv.once('error', fail);

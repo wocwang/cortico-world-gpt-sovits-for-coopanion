@@ -44,6 +44,14 @@ export interface GptSovitsConfigSection {
    * `zh` 直接照读聊天文字；`en` / `ja` 先把聊天文字翻译成该语言再念；`auto` 跟随原文。
    */
   textLang: SpeechLang;
+  /**
+   * 翻译模型（OpenAI 兼容 `POST {endpoint}/chat/completions`）：`textLang` 选 en/ja/ko 时，
+   * 先把文字整段翻译成该语言再送合成（切句由服务端的 `cut5` 在译文上做）。
+   * 三项任一留空就不翻译、按原文合成；密钥写部署 `.env` 里的变量名，运行时经框架读取。
+   */
+  translateEndpoint: string;
+  translateApiKeySecret: string;
+  translateModel: string;
   /** 每句合成完另存一个 WAV，供其他程序（如 QQ 机器人）取用。 */
   saveAudio: boolean;
   /** 语音保存目录；空为 `<data>/gpt-sovits/out`。 */
@@ -101,6 +109,9 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   weights: { gpt: '', sovits: '' },
   speed: 1,
   textLang: 'zh',
+  translateEndpoint: '',
+  translateApiKeySecret: '',
+  translateModel: '',
   saveAudio: false,
   saveDir: '',
   saveKeepHours: 0,
@@ -144,6 +155,9 @@ const TEXT = {
       description: '与界面语言无关。中文：直接照读聊天框里的这句文字；English / 日本語：先把聊天文字翻译成该语言再念（气泡文字不变）。',
       auto: '跟随原文（不翻译）', zh: '中文（直接照读）', en: 'English（先翻译）', ja: '日本語（先翻译）',
     },
+    translateEndpoint: { title: '翻译模型地址', description: 'OpenAI 兼容接口的基址（如 https://api.deepseek.com/v1）。语音语言选「先翻译」时，聊天文字会先译成目标语言再念；留空则按原文念。' },
+    translateApiKeySecret: { title: '翻译模型密钥变量名', description: '部署 .env 里的变量名（如 DEEPSEEK_API_KEY），不是密钥本身；留空表示接口不需要鉴权。' },
+    translateModel: { title: '翻译模型名称', description: '如 deepseek-chat。地址、变量名、模型名凑齐才启用翻译。' },
     saveAudio: { title: '把语音保存成文件', description: '每句合成完另存一个 WAV，方便交给其他程序（如 QQ 机器人）发送。' },
     saveDir: { title: '语音保存目录', description: '留空为插件数据目录下的 gpt-sovits\\out。' },
     saveKeepHours: { title: '语音文件保留时长（小时）', description: '只清理本插件写出的 line-*.wav，别的文件不动；保存新语音时顺手清理过期的。0 为一直留着。' },
@@ -152,7 +166,7 @@ const TEXT = {
     httpApi: { title: '开放本地语音接口', description: '给其他插件取音频用：QQ 插件（cortico-world-qq-final 等）把「语音模型网址」填成本机地址，就能用这个声音合成并发到 QQ。只监听 127.0.0.1，开关与端口改动需重挂扩展（重启 World）生效。' },
     httpPort: { title: '语音接口端口', description: '默认 9880。与别的程序冲突时换一个。' },
     httpToken: { title: '语音接口令牌', description: '留空不校验（接口只监听本机回环地址）。填了以后对方请求要带 Authorization: Bearer 或 ?token=。' },
-    channelVoice: { title: '其他渠道的语音交给对方插件', description: '开启后提示词会告诉 bot：在由对方插件自己合成语音的渠道（如 QQ）回复时不要调用 sovits_speak，免得同一句在本机又念一遍；本机对话页照常出声。配合「开放本地语音接口」+ QQ 插件自带语音时用。' },
+    channelVoice: { title: '其他渠道的语音交给对方插件', description: '开启后提示词会告诉 bot：在由对方插件自己合成语音的渠道（如 QQ）回复时不要调用 sovits_speak，要发语音就在对方工具里打开语音开关（qq-final 的 qq_send 传 voice=true），由对方用本插件的声音合成；本机对话页照常出声。配合「开放本地语音接口」+ QQ 插件自带语音时用。' },
     seed: { title: '采样种子', description: '-1 每次重新采样（同一句每次听起来都不同）；填 0 或正整数可固定，同一句每次逐字节一致。' },
     volume: { title: '音量' },
     outputDevice: { title: '输出设备', description: '留空使用系统默认设备。', system: '系统默认' },
@@ -180,6 +194,9 @@ const TEXT = {
       description: 'Independent of the UI language. Chinese: reads the chat line as-is; English / Japanese: translates the chat line into that language first (the bubble text stays unchanged).',
       auto: 'Follow the text (no translation)', zh: 'Chinese (read as-is)', en: 'English (translate first)', ja: '日本語 (translate first)',
     },
+    translateEndpoint: { title: 'Translation API URL', description: 'Base URL of an OpenAI-compatible API (e.g. https://api.deepseek.com/v1). Used to translate the chat line before speaking when the speech language asks for translation; empty reads the text as-is.' },
+    translateApiKeySecret: { title: 'Translation key variable', description: 'Name of the variable in the deployment .env (e.g. DEEPSEEK_API_KEY), not the key itself; empty sends no auth header.' },
+    translateModel: { title: 'Translation model', description: 'e.g. deepseek-chat. Translation turns on when the URL, variable and model are all set.' },
     saveAudio: { title: 'Save the speech to files', description: 'Also writes every synthesized line to a WAV file, so other programs (a QQ bot, for example) can send it.' },
     saveDir: { title: 'Speech folder', description: 'Empty uses gpt-sovits\\out under the plugin data folder.' },
     saveKeepHours: { title: 'Keep speech files (hours)', description: 'Only removes line-*.wav files written by this plugin, nothing else; expired ones are swept whenever a new line is saved. 0 keeps everything.' },
@@ -237,6 +254,9 @@ export function configGroups(language: Language): ConfigGroup[] {
           [`${K}.weights.gpt`]: { type: 'string', title: t.gptWeights.title, description: t.gptWeights.description, 'x-path': { kind: 'file', extensions: ['.ckpt'] }, 'x-hot': true },
           [`${K}.weights.sovits`]: { type: 'string', title: t.sovitsWeights.title, description: t.sovitsWeights.description, 'x-path': { kind: 'file', extensions: ['.pth'] }, 'x-hot': true },
           [`${K}.textLang`]: { type: 'string', title: t.textLang.title, description: t.textLang.description, 'x-options': TEXT_LANGUAGE_OPTIONS, 'x-hot': true },
+          [`${K}.translateEndpoint`]: { type: 'string', title: t.translateEndpoint.title, description: t.translateEndpoint.description, 'x-hot': true },
+          [`${K}.translateApiKeySecret`]: { type: 'string', title: t.translateApiKeySecret.title, description: t.translateApiKeySecret.description, 'x-hot': true },
+          [`${K}.translateModel`]: { type: 'string', title: t.translateModel.title, description: t.translateModel.description, 'x-hot': true },
           [`${K}.speed`]: { type: 'number', title: t.speed.title, description: t.speed.description, minimum: SPEED_MIN, maximum: SPEED_MAX, multipleOf: .05, 'x-hot': true },
           [`${K}.seed`]: { type: 'number', title: t.seed.title, description: t.seed.description, minimum: SEED_RANDOM, multipleOf: 1, 'x-hot': true },
           [`${K}.promptLanguage`]: { type: 'string', title: t.promptLanguage.title, 'x-options': PROMPT_LANGUAGE_OPTIONS, 'x-hot': true },

@@ -1,6 +1,6 @@
 {
     "name":  "@wocwang/cortico-world-gpt-sovits-for-coopanion",
-    "version":  "0.5.10",
+    "version":  "0.5.12",
     "type":  "module",
     "description":  "Cortico World for Coopanion: speaks the pet\u0027s lines aloud with GPT-SoVITS (V5 on NVIDIA GPUs, a CPU tier otherwise; AMD GPU users can use the CPU tier), installing a portable runtime and weights in one click",
     "author":  "wocwang",
@@ -41,11 +41,11 @@
                     "locales":  {
                                     "zh":  {
                                                "displayName":  "更好的GPTSovits 语音—大肥鱼来咯",
-                                               "description":  "支持星落落语音包！欢迎来尝试！给桌宠配上真实的 GPT-SoVITS 语音：全程在本机合成、从声卡出声，不上传任何录音，一键装好运行时与模型。内置「大肥鱼_星落落版本」参考音色（官方底模零样本）与日中英三种参考；支持自定义音色（参考音频+台本+可选自备权重）。自带闲置停服（省显存）、按需加载（最多省约 810 MB 显存）、语音落盘与保留期。还能把声音交给 QQ 插件：新版 cortico-world-qq-final 直接取本机语音接口，老版 cortico-world-qq 走句柄，QQ 语音就是桌宠的声音。AMD 显卡用户可使用 CPU 推理档（速度较慢但可用）。"
+                                               "description":  "支持星落落语音包！欢迎来尝试！给桌宠配上真实的 GPT-SoVITS 语音：全程在本机合成、从声卡出声，不上传任何录音，一键装好运行时与模型。内置「大肥鱼_星落落版本」参考音色（官方底模零样本）与日中英三种参考；支持自定义音色（参考音频+台本+可选自备权重）。自带闲置停服（省显存）、按需加载（最多省约 810 MB 显存）、语音落盘与保留期。还能把声音交给 QQ 插件：新版 cortico-world-qq-final 直接取本机语音接口，老版 cortico-world-qq 走句柄，QQ 语音就是桌宠的声音。新版 QQ 插件（0.6.29 起）已移除语音判定模型，不需要任何密钥，是否发语音由主模型自己决定。AMD 显卡用户可使用 CPU 推理档（速度较慢但可用）。"
                                            },
                                     "en":  {
                                                "displayName":  "Better GPTSovits Voice — Fatfish",
-                                               "description":  "Supports the Xll voice pack! Come and try it! Gives the desktop pet a real GPT-SoVITS voice: synthesized on your own machine, nothing uploaded, one-click runtime and weights. Ships the \"Fatfish Xll\" reference voice (zero-shot base model) plus Chinese/English/Japanese references, and supports custom voices (reference audio + transcript + optional own weights). Includes stop-when-idle, on-demand model loading (up to ~810 MB VRAM saved), speech files with a retention window, and a local voice API so QQ plugins (cortico-world-qq-final / cortico-world-qq) can send voice in the pet\u0027s own voice. AMD GPU users can use the CPU inference tier (slower but works)."
+                                               "description":  "Supports the Xll voice pack! Come and try it! Gives the desktop pet a real GPT-SoVITS voice: synthesized on your own machine, nothing uploaded, one-click runtime and weights. Ships the \"Fatfish Xll\" reference voice (zero-shot base model) plus Chinese/English/Japanese references, and supports custom voices (reference audio + transcript + optional own weights). Includes stop-when-idle, on-demand model loading (up to ~810 MB VRAM saved), speech files with a retention window, and a local voice API so QQ plugins (cortico-world-qq-final / cortico-world-qq) can send voice in the pet\u0027s own voice. Newer QQ plugins (0.6.29+) need no key at all: the main model decides when to speak. AMD GPU users can use the CPU inference tier (slower but works)."
                                            }
                                 },
                     "tags":  [
