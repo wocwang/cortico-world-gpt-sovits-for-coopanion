@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.16
+
+- **修复「下载解压后缺 AR」→ `ModuleNotFoundError: No module named 'AR'`**：运行时解压不完整时
+  `GPT_SoVITS/AR` 没落地，`api_v2.py` 一启动就退出。现在拉起推理前会检查，缺了就用包内自带的一份
+  （上游同 commit、49 个文件、约 390 KB）自动补上，不用重装几 GB 的运行时。
+- `scripts/build-runtime.sh` 同时加了归档校验：打运行时包时缺 `GPT_SoVITS/AR` 直接失败，并在根目录
+  补一份 `AR`，兼容按顶层 `from AR…` 导入的入口；以后重打的运行时不会再缺。
+
 ## 0.5.15
 
 - **修复默认输出设备切换后不跟随**（issue #3）：以前只在「配置里指定的设备名」变化时重开音频流，

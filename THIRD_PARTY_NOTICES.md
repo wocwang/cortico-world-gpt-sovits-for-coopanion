@@ -18,6 +18,8 @@
 
 `vendor/audify/` 是 [audify](https://github.com/almoghamdani/audify) 1.10.1 官方发布的 napi-v10 win32-x64 预编译件(`audify.node`、`rtaudio.dll`、`opus.dll`),原样随包，用来放声。许可：audify MIT(`LICENSE`)、[RtAudio](https://github.com/thestk/rtaudio) MIT 式(`LICENSE.rtaudio`)、[Opus](https://opus-codec.org/) BSD-3-Clause(`COPYING.opus`)。
 
+`vendor/ar/` 是 [RVC-Boss/GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) `e91506f` 的 `GPT_SoVITS/AR/` 原样副本（49 个文件，约 390 KB，MIT），只在运行时解压不完整、缺 `GPT_SoVITS/AR` 时由插件补到运行时目录，平时不参与推理。
+
 除此之外本包不含第三方代码与权重。托管安装时下载：
 
 | 内容 | 来源 | 许可 |

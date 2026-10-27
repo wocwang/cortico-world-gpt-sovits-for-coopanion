@@ -4,9 +4,10 @@
  * 托管运行时的 `GPT_SoVITS/pretrained_models` 在启动前接成指向权重目录的目录联接;自备目录原样使用。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Logger } from 'cortico/core/types.ts';
 import { weightPaths, type ModelVersion } from './catalog.ts';
 import type { Tier } from './config.ts';
@@ -65,6 +66,26 @@ export function linkWeights(link: string, target: string): void {
 
 function isLink(path: string): boolean {
   try { return lstatSync(path).isSymbolicLink(); } catch { return false; }
+}
+
+/**
+ * 运行时解压不完整时会缺 `GPT_SoVITS/AR`：`TTS_infer_pack/TTS.py` 的 `from AR...` 依赖它，
+ * 缺了 `api_v2.py` 一启动就 `ModuleNotFoundError: No module named 'AR'`。
+ * 这里在拉起服务前检查，缺了就从包内 `vendor/ar` 补一份（上游同 commit 的 49 个文件，约 390 KB）。
+ */
+export function ensureRuntimeAr(runtimeDir: string, log: Logger): boolean {
+  const target = join(runtimeDir, 'GPT_SoVITS', 'AR');
+  const marker = join(target, 'models', 't2s_lightning_module.py');
+  if (existsSync(marker)) return false;
+  const source = fileURLToPath(new URL('../vendor/ar', import.meta.url));
+  if (!existsSync(join(source, 'models', 't2s_lightning_module.py'))) {
+    log.warn('运行时缺 GPT_SoVITS/AR，包内也没有可补的副本', { runtimeDir });
+    return false;
+  }
+  mkdirSync(dirname(target), { recursive: true });
+  cpSync(source, target, { recursive: true });
+  log.warn('运行时缺 GPT_SoVITS/AR，已用包内副本补齐', { runtimeDir });
+  return true;
 }
 
 /**
@@ -149,6 +170,7 @@ export class SovitsServer {
       if (result === 'patched') this.log.info('已给托管运行时打上按需加载补丁', { dir: spec.runtimeDir });
       else if (result !== 'already') this.log.warn('托管运行时没能打上按需加载补丁，按原样启动', { result, dir: spec.runtimeDir });
     }
+    ensureRuntimeAr(spec.runtimeDir, this.log);
     if (spec.weightsDir) linkWeights(join(spec.runtimeDir, 'GPT_SoVITS', 'pretrained_models'), spec.weightsDir);
     mkdirSync(spec.dataDir, { recursive: true });
     const yaml = join(spec.dataDir, `tts_infer.${spec.tier}.yaml`);

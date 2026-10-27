@@ -22,6 +22,14 @@ git -C "$WORK/upstream" fetch -q origin "$COMMIT" 2>/dev/null || git -C "$WORK/u
 rm -rf "$OUT" && mkdir -p "$OUT"
 git -C "$WORK/upstream" archive "$COMMIT" | "$TAR" -x -C "$OUT"
 rm -rf "$OUT/docs" "$OUT/Docker" "$OUT"/*.ipynb "$OUT/Dockerfile" "$OUT/docker-compose.yaml"
+# 上游这个 commit 把 AR 放在 GPT_SoVITS/AR：运行时靠 sys.path 里的 GPT_SoVITS 找到它，
+# 但打包后仍要求归档里确实有这一份；缺了就说明归档不完整，直接失败。
+if [ ! -f "$OUT/GPT_SoVITS/AR/models/t2s_lightning_module.py" ]; then
+  echo "archive is missing GPT_SoVITS/AR" >&2
+  exit 1
+fi
+# 根目录再放一份，兼容其他按顶层 `from AR...` 导入的入口。
+[ -d "$OUT/AR" ] || cp -r "$OUT/GPT_SoVITS/AR" "$OUT/AR"
 # tools/asr 与 tools/uvr5 保留:训练面板要起 WebUI,webui.py 启动即 import tools.asr(缺了直接退)。
 # 两边的大权重都不在 git 归档里,无需另删。
 
