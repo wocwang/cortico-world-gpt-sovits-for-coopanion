@@ -827,7 +827,10 @@ export class GptSovitsWorld implements World {
    * 服务在休眠就先叫醒；失败抛错，由接口回 502。
    */
   private async synthesizeForApi(job: TtsJob, signal: AbortSignal): Promise<Buffer> {
-    const voice = this.voiceByName(job.voice) ?? this.voice();
+    // `voice` 是调用方明确点名；`voice_desc`（VoxCPM 形状）只是描述，能对上已知音色才采用。
+    const voice = this.voiceByName(job.voice)
+      ?? (job.voiceHint ? this.voiceByName(job.voiceHint, false) : null)
+      ?? this.voice();
     if (!voice) throw new Error(this.voiceIssue ?? 'no reference audio is set');
     if (!this.url() && this.sleeping && this.canStart()) {
       this.sleeping = false;
@@ -854,21 +857,23 @@ export class GptSovitsWorld implements World {
     return wavBytes(Buffer.concat(chunks), rate);
   }
 
-  /** 接口点名的音色：自定义音色的 id 或名字、预设 id（xll/dfy/female/male）；认不出返回 null。 */
-  private voiceByName(name?: string): { audio: string; text: string } | null {
+  /** 接口点名的音色：自定义音色的 id 或名字、预设 id（xll/dfy/female/male）；认不出返回 null。
+   *  `warn` 为 false 用于 `voice_desc` 这种描述性文字：对不上就安静地用当前音色。 */
+  private voiceByName(name?: string, warn = true): { audio: string; text: string } | null {
     const want = (name ?? '').trim().toLowerCase();
     if (!want) return null;
     const custom = (this.cfg.voices ?? []).find((v) => v.id === name || v.name.toLowerCase() === want);
     if (custom?.audio) {
-      if (!existsSync(custom.audio)) this.log.warn('HTTP 语音接口点名的自定义音色缺参考音频，用当前音色', { voice: name });
-      else if (!referenceIssue(custom.audio)) return { audio: custom.audio, text: custom.text };
+      if (!existsSync(custom.audio)) {
+        if (warn) this.log.warn('HTTP 语音接口点名的自定义音色缺参考音频，用当前音色', { voice: name });
+      } else if (!referenceIssue(custom.audio)) return { audio: custom.audio, text: custom.text };
     }
     const preset = VOICE_PRESETS.find((p) => p === want);
     if (preset) {
       const f = presetFiles(preset, this.cfg.textLang);
       if (existsSync(f.audio) && existsSync(f.text)) return { audio: f.audio, text: readText(f.text) };
     }
-    this.log.warn('HTTP 语音接口点名的音色认不出，用当前音色', { voice: name });
+    if (warn) this.log.warn('HTTP 语音接口点名的音色认不出，用当前音色', { voice: name });
     return null;
   }
 

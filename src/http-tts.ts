@@ -12,6 +12,8 @@ import type { Logger } from 'cortico/core/types.ts';
 export interface TtsJob {
   text: string;
   voice?: string;
+  /** VoxCPM 形状里的 `voice_desc`：只在能匹配已知音色时采用，认不出不算调用方点名。 */
+  voiceHint?: string;
   speed?: number;
   seed?: number;
 }
@@ -93,9 +95,11 @@ export function startHttpTts(opts: { port: number; token?: string; deps: HttpTts
     const said = text(body.input) ?? text(body.text); // OpenAI 用 input，VoxCPM 用 text
     if (!said) { json(res, 400, { error: 'missing text' }); return; }
     if (!deps.ready()) { json(res, 503, { error: `voice not ready: ${deps.stateText()}` }); return; }
+    const hint = text(body.voice_desc);
     const job: TtsJob = {
       text: said,
-      voice: text(body.voice) ?? text(body.voice_desc),
+      voice: text(body.voice),
+      ...(hint ? { voiceHint: hint } : {}),
       speed: num(body.speed) ?? num(body.speed_factor),
       seed: num(body.seed),
     };
@@ -128,6 +132,11 @@ export function startHttpTts(opts: { port: number; token?: string; deps: HttpTts
     if (!authorized(req, url)) { json(res, 401, { error: 'bad token' }); return; }
     if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/healthz')) {
       json(res, 200, { ready: deps.ready(), state: deps.stateText() });
+      return;
+    }
+    // OpenAI 兼容客户端（qq-final / QQ-ProMAX 的 local 供应商等）会先探 /models 判断服务活着。
+    if (req.method === 'GET' && /\/models\/?$/.test(url.pathname)) {
+      json(res, 200, { object: 'list', data: [{ id: 'gpt-sovits', object: 'model', created: 0, owned_by: 'coopanion' }] });
       return;
     }
     // VoxCPM 的 /tts 与 OpenAI 的 /audio/speech（调用方的 base 可能带 /v1）。

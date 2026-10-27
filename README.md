@@ -75,9 +75,9 @@
    仍走它自己的判定配置，需要你自行指定密钥变量并在部署 `.env` 里配同名变量。
 4. 两个插件都别忘：本插件的「推理服务」要处于就绪（面板灯绿）。本插件的接口 Token 建议留空；填了 Token 时 qq-final 的 local 方式不会带上它。改完 qq-final 的语音配置后重启 Coopanion。
 
-**能点名哪些音色？** 本地语音接口的 `voice` / `voice_desc` 支持：预设 `xll`（星落落） / `dfy` / `female` / `male`，以及你自己建的自定义音色的**名字或 id**；认不出就用插件当前音色。
+**能点名哪些音色？** 本地语音接口的 `voice` 支持：预设 `xll`（星落落） / `dfy` / `female` / `male`，以及你自己建的自定义音色的**名字或 id**；认不出就用插件当前音色。
 
-**注意**：`provider = custom` 也能用（同协议，但要同时填 API Key）；`native`（NapCat 自带 TTS）和 `voxcpm`（本地 VoxCPM2 服务）拿到的是**别的声音**，不是本插件的音色。
+**注意**：`provider = custom` 也能用（同协议，但要同时填 API Key）；`native`（NapCat 自带 TTS）拿到的是**别的声音**。`voxcpm` 协议与本插件一致：把「VoxCPM 服务地址」填成 `http://127.0.0.1:9880`，用的就是本插件的声音（`/health` 探活 + `/tts` 合成，无需 API Key）。
 
 ---
 
@@ -217,13 +217,17 @@ Owner: `src/world.ts`
 | 路由 | 用途 |
 |---|---|
 | `GET /health` | 就绪状态：`{"ready":true,"state":"available"}` |
+| `GET /models`（或 `/v1/models`） | OpenAI 兼容探活：返回一个模型列表，`qq-final` / `QQ-ProMAX` 的 `local` 供应商据此判断服务活着 |
 | `POST /audio/speech` | OpenAI 兼容：`{model?, voice?, input, speed?}` → `audio/wav` 字节 |
-| `POST /tts` | VoxCPM 形状：`{text, voice_desc?, speed?, seed?}` → 48 kHz `audio/wav` 字节 |
+| `POST /tts` | VoxCPM 形状：`{text, voice_desc?, speed?, seed?}` → `48 kHz audio/wav` 字节 |
 
-`voice` / `voice_desc` 可以点名音色（预设 `xll` / `dfy` / `female` / `male`，或自定义音色的名字/id），不填就用插件当前音色。
+`voice` 可以点名音色（预设 `xll` / `dfy` / `female` / `male`，或自定义音色的名字/id），不填就用插件当前音色；
+`voice_desc` 是 VoxCPM 的音色描述，只在能对上已知音色时采用，对不上不会告警。
 合成不经过播放器，本机不会出声；多个请求自动排队，一次只合成一句。
 
-配合 `cortico-world-qq-final`（它的语音是自己合成的）时的填法：
+配合 `cortico-world-qq-final`（它的语音是自己合成的）时的两种填法，二选一：
+
+**方式 A：OpenAI 兼容（可点名音色）**
 
 ```
 worlds.qqbot.voice.provider     = local          # 或 custom（要同时填 API Key）
@@ -232,6 +236,16 @@ worlds.qqbot.voice.voiceVoice   = xll            # 可选：指定音色；不�
 worlds.qqbot.voice.voiceTimeout = 120            # 本地合成慢，默认值够
 worlds.qqbot.voice.tts          = true           # 允许主模型把回复发成语音（0.6.29+ 由它自己决定，无需判定模型）
 ```
+
+**方式 B：VoxCPM 形状（不需 API Key，但不能点名音色）**
+
+```
+worlds.qqbot.voice.provider  = voxcpm
+worlds.qqbot.voice.voxcpmUrl = http://127.0.0.1:9880
+worlds.qqbot.voice.tts       = true
+```
+
+`QQ-ProMAX` 的语音供应商与 qq-final 同源，以上两种填法同样适用。
 
 再把本插件的 `channelVoice` 打开：提示词会告诉 bot 在 QQ 这类渠道不要自己念，避免同一句本地又响一遍。
 老插件 `cortico-world-qq`（用 `[blob …]` 句柄的 `qq_draft`）继续走 `shareAudio`，两条路别同时开。

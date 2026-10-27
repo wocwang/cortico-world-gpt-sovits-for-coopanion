@@ -68,7 +68,21 @@ describe('HTTP 语音接口', () => {
     });
     expect(res.status).toBe(200);
     expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
-    expect(jobs[0]).toMatchObject({ text: '念这一句', voice: '大肥鱼', speed: 0.95 });
+    // voice_desc 是描述而不是点名：只作为 hint 交给世界层，避免把「温柔女声」当音色名告警。
+    expect(jobs[0]?.voice).toBeUndefined();
+    expect(jobs[0]?.voiceHint).toBe('大肥鱼');
+    expect(jobs[0]?.speed).toBe(0.95);
+  });
+
+  it('OpenAI 模型列表：GET /models 与 /v1/models 都能探活', async () => {
+    const { base } = await boot();
+    for (const path of ['/models', '/v1/models']) {
+      const res = await fetch(`${base}${path}`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { object: string; data: Array<{ id: string }> };
+      expect(body.object).toBe('list');
+      expect(body.data.length).toBeGreaterThan(0);
+    }
   });
 
   it('缺文本 400、没就绪 503、别的路由 404', async () => {

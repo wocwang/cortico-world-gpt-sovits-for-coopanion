@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.14
+
+- **本地语音接口补 OpenAI 探活**：新增 `GET /models`（含 `/v1/models`），qq-final / QQ-ProMAX 的
+  `local` 供应商能判断「服务活着」，不再把可用的本机语音误判成未就绪而回退文字。
+- **`voice_desc` 不再当音色名**：VoxCPM 形状里的 `voice_desc` 是一句描述，只在能对上已知音色时采用，
+  对不上安静地用当前音色；要指定音色请用 `voice`（OpenAI 形状）。
+- **README 补两种对接填法**：`local`（可点名音色、需 `/models`）与 `voxcpm`（免 Key，地址填 9880），
+  并说明 QQ-ProMAX 与 qq-final 同源、填法通用。
+
 ## 0.5.13
 
 - **出口接上 RVC 变声**：开着「出口变声」时，交给其他插件（QQ 等）的音频合成完会再过一遍本机
