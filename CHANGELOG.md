@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.18
+
+- **训练依赖与模型下载全面走国内可达源**：训练依赖 pip 先走阿里云镜像、失败再回官方 PyPI（清华源对 pip
+  的 UA 返回 403，不能当主力；网络参数收紧，不再无谓重试卡住面板）；训练 WebUI 注入
+  `HF_ENDPOINT=https://hf-mirror.com`，faster-whisper 缺模型时从镜像拉取。语音权重（s1v3 / hubert /
+  roberta / fast_langdetect / V5 底模）下载源顺序改为「魔搭 → hf-mirror → huggingface」，
+  国内直连 huggingface 不通的机器不再白等超时。
+
 ## 0.5.17
 
 - **配置与训练页补显存/内存占用**：推理档说明里写清显卡档约 2–3 GB 显存（按需加载后约 1.5–2.5 GB）、

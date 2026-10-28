@@ -37,6 +37,17 @@ export interface TrainerState {
  */
 const TRAIN_PACKAGES = ['gradio<5', 'tensorboard', 'funasr>=1.3.7', 'modelscope', 'ctranslate2>=4.0,<5', 'fastapi==0.115.2', 'starlette==0.40.0', 'faster-whisper==1.2.1'];
 
+/**
+ * 训练依赖先走阿里云镜像（国内直连 PyPI 下几十到几百 MB 的包经常卡住；清华源对 pip 的 UA 返回 403，
+ * 不能当主力），镜像失败再回官方 PyPI；网络参数收紧，免得默认重试把面板卡在「安装中」。
+ */
+const PIP_MIRROR = 'https://mirrors.aliyun.com/pypi/simple/';
+const PIP_OFFICIAL = 'https://pypi.org/simple';
+const PIP_NET_ARGS = ['--timeout', '30', '--retries', '2'];
+
+/** faster-whisper 的模型托管在 Hugging Face；训练 WebUI 里指向国内镜像，缺模型时才下得动。 */
+const HF_ENDPOINT_MIRROR = 'https://hf-mirror.com';
+
 /** 依赖装好的标记文件，放在数据目录。 */
 const DEPS_FILE = 'trainer-deps.json';
 
@@ -190,6 +201,8 @@ export class TrainerManager {
           PATH: `${runtimeBin};${process.env.PATH ?? ''}`,
           COOPANION_TRAINER_PORT: String(port),
           COOPANION_TRAINER_VERSION: this.opts.modelVersion(),
+          // faster-whisper 缺模型时会从 Hugging Face 拉；国内直连不通，统一指向镜像。
+          HF_ENDPOINT: HF_ENDPOINT_MIRROR,
         },
       });
       this.child = child;
@@ -276,13 +289,36 @@ export class TrainerManager {
     await TrainerManager.kill(child);
   }
 
-  /** 跑 pip 装依赖；退出码非 0 就把尾部日志当失败原因。 */
-  private runInstall(): Promise<void> {
-    return new Promise<void>((done) => {
+  /** 跑 pip 装依赖；镜像失败回官方，退出码非 0 就把尾部日志当失败原因。 */
+  private async runInstall(): Promise<void> {
+    this.push(`pip install ${TRAIN_PACKAGES.join(' ')}`);
+    const base = ['-I', '-X', 'utf8', '-u', '-m', 'pip', 'install', '--no-warn-script-location', ...PIP_NET_ARGS, ...TRAIN_PACKAGES];
+    this.push(`装训练依赖走镜像：${PIP_MIRROR}`);
+    let code = await this.pip([...base, '-i', PIP_MIRROR]);
+    if (code !== 0) {
+      this.push('镜像源没装成，改用官方 PyPI 重试');
+      this.opts.log.warn('训练依赖镜像源失败，改走官方 PyPI', { tail: this.tail.slice(-5) });
+      code = await this.pip([...base, '-i', PIP_OFFICIAL]);
+    }
+    if (code === 0) {
+      mkdirSync(this.opts.dataDir, { recursive: true });
+      writeFileSync(join(this.opts.dataDir, DEPS_FILE), JSON.stringify({ runtime: RUNTIME_VERSION, revision: DEPS_REVISION, at: new Date().toISOString() }, null, 2));
+      this.depsError = null;
+      this.push('训练依赖装好了');
+      this.opts.log.info('训练依赖安装完成', { packages: TRAIN_PACKAGES });
+    } else {
+      this.depsError = this.tail.slice(-LOG_TAIL).join('\n') || `pip 退出码 ${code}`;
+      this.push(`装训练依赖失败，退出码 ${code}`);
+      this.opts.log.warn('训练依赖安装失败', { code, tail: this.tail.slice(-10) });
+    }
+  }
+
+  /** 跑一次 pip，输出进日志尾巴；返回退出码。 */
+  private pip(args: string[]): Promise<number> {
+    return new Promise((done) => {
       const runtimeDir = this.opts.runtimeDir();
       const runtimeBin = join(runtimeDir, 'runtime');
-      this.push(`pip install ${TRAIN_PACKAGES.join(' ')}`);
-      const child = spawn(join(runtimeBin, 'python.exe'), ['-I', '-X', 'utf8', '-u', '-m', 'pip', 'install', '--no-warn-script-location', ...TRAIN_PACKAGES], {
+      const child = spawn(join(runtimeBin, 'python.exe'), args, {
         cwd: runtimeDir,
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -292,24 +328,10 @@ export class TrainerManager {
       child.stdout!.on('data', onLine);
       child.stderr!.on('data', onLine);
       child.on('error', (err) => {
-        this.depsError = err.message;
-        this.push(`装训练依赖失败：${err.message}`);
-        done();
+        this.push(`pip 启动失败：${err.message}`);
+        done(-1);
       });
-      child.on('exit', (code) => {
-        if (code === 0) {
-          mkdirSync(this.opts.dataDir, { recursive: true });
-          writeFileSync(join(this.opts.dataDir, DEPS_FILE), JSON.stringify({ runtime: RUNTIME_VERSION, revision: DEPS_REVISION, at: new Date().toISOString() }, null, 2));
-          this.depsError = null;
-          this.push('训练依赖装好了');
-          this.opts.log.info('训练依赖安装完成', { packages: TRAIN_PACKAGES });
-        } else {
-          this.depsError = this.tail.slice(-LOG_TAIL).join('\n') || `pip 退出码 ${code}`;
-          this.push(`装训练依赖失败，退出码 ${code}`);
-          this.opts.log.warn('训练依赖安装失败', { code, tail: this.tail.slice(-10) });
-        }
-        done();
-      });
+      child.on('exit', (code) => done(code ?? -1));
     });
   }
 

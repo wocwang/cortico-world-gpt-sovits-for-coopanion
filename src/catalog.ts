@@ -79,11 +79,12 @@ export const OUTPUT_GAIN: Readonly<Record<ModelVersion, number>> = {
 };
 
 const MS_UP = 'https://www.modelscope.cn/models/XXXXRT/GPT-SoVITS-Pretrained/resolve/master/pretrained_models';
+const HF_MIRROR_UP = 'https://hf-mirror.com/lj1995/GPT-SoVITS/resolve/main';
 const HF_UP = 'https://huggingface.co/lj1995/GPT-SoVITS/resolve/main';
 
-/** 上游两个仓库里同一路径的文件。 */
+/** 上游两个仓库里同一路径的文件：魔搭优先，其次 hf-mirror，最后官方 HF（国内多半不通，只当兜底）。 */
 const upstream = (path: string, bytes: number, sha256: string): PinnedFile => ({
-  path, bytes, sha256, sources: [`${MS_UP}/${path}`, `${HF_UP}/${path}`],
+  path, bytes, sha256, sources: [`${MS_UP}/${path}`, `${HF_MIRROR_UP}/${path}`, `${HF_UP}/${path}`],
 });
 
 /** 两个版本共用的文本与参考音频特征模型。 */
@@ -98,9 +99,9 @@ const SHARED: readonly PinnedFile[] = [
   upstream('fast_langdetect/lid.176.bin', 131266198, '7e69ec5451bc261cc7844e49e4792a85d7f09c06789ec800fc4a44aec362764e'),
 ];
 
-/** 上游魔搭仓库还没有 V5 权重：先试本扩展的魔搭仓库，再试上游 Hugging Face。 */
+/** 上游魔搭仓库还没有 V5 权重：先试本扩展的魔搭仓库，再 hf-mirror，最后上游 Hugging Face。 */
 const v5 = (path: string, bytes: number, sha256: string): PinnedFile => ({
-  path, bytes, sha256, sources: [`${MS_OWN}/pretrained_models/${path}`, `${HF_UP}/${path}`],
+  path, bytes, sha256, sources: [`${MS_OWN}/pretrained_models/${path}`, `${HF_MIRROR_UP}/${path}`, `${HF_UP}/${path}`],
 });
 
 /** 随包官模的权重与下载清单。都是 v5turbo 的 LoRA 增量，CPU 档用不了，退回底模。 */
