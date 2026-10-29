@@ -21,4 +21,19 @@ describe('removeTreeSafely', () => {
     expect(existsSync(runtime)).toBe(false);
     rmSync(root, { recursive: true, force: true });
   });
+
+  it('联接藏在 GPT_SoVITS 里、目标已被删掉时也能删干净', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gpt-sovits-'));
+    const weights = join(root, 'models', 'pretrained_models');
+    const runtime = join(root, 'runtimes', 'cuda');
+    mkdirSync(weights, { recursive: true });
+    mkdirSync(join(runtime, 'GPT_SoVITS'), { recursive: true });
+    writeFileSync(join(runtime, 'GPT_SoVITS', 'TTS.py'), 'x');
+    symlinkSync(weights, join(runtime, 'GPT_SoVITS', 'pretrained_models'), 'junction');
+    rmSync(weights, { recursive: true, force: true });
+
+    expect(() => removeTreeSafely(runtime)).not.toThrow();
+    expect(existsSync(runtime)).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
 });

@@ -6,7 +6,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, renameSync, rmSync, rmdirSync, statSync, statfsSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -28,6 +28,32 @@ export async function sha256File(file: string): Promise<string> {
   return hash.digest('hex');
 }
 
+/** 是不是目录联接/符号链接：lstat 说是就算，老 Node 把联接当目录报时再用 readlink 兜底。 */
+export function isLinkEntry(path: string): boolean {
+  try {
+    if (lstatSync(path).isSymbolicLink()) return true;
+  } catch {
+    return false;
+  }
+  try { readlinkSync(path); return true; } catch { return false; }
+}
+
+/**
+ * 只删联接本身，绝不递归跟着目标走。
+ * Windows 上对目录联接 `unlink` 会 EPERM/EISDIR（有的 Node/Electron 版本直接报「Path is a directory」），
+ * 这时退到 `rmdir`——RemoveDirectory 只摘掉重解析点，权重目录原地不动。
+ */
+export function removeLink(path: string): void {
+  try {
+    unlinkSync(path);
+    return;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EISDIR' && code !== 'EBUSY' && code !== 'ENOTEMPTY') throw err;
+  }
+  rmdirSync(path);
+}
+
 /**
  * 删目录但绝不跟着联接走。Windows 上 `rmSync(dir, { recursive: true })` 会进入目录联接
  * (运行时的 `GPT_SoVITS/pretrained_models` 就是指向权重目录的 junction)，把目标里的权重一起删掉。
@@ -38,9 +64,7 @@ export function removeTreeSafely(dir: string): void {
   try { entries = readdirSync(dir, { withFileTypes: true }); } catch { /* 目录不存在 */ }
   for (const entry of entries) {
     const path = join(dir, entry.name);
-    let link = false;
-    try { link = lstatSync(path).isSymbolicLink(); } catch { continue; }
-    if (link) { rmSync(path, { force: true }); continue; }
+    if (isLinkEntry(path)) { removeLink(path); continue; }
     if (entry.isDirectory()) removeTreeSafely(path);
   }
   rmSync(dir, { recursive: true, force: true });
@@ -239,8 +263,17 @@ export class RuntimeJob extends Job {
     }
     writeFileSync(join(partial, 'cortico-runtime.json'), JSON.stringify({ id: 'gpt-sovits', version: RUNTIME_VERSION, upstream: UPSTREAM_COMMIT, tier: this.tier() }, null, 2));
     this.state.detail = '正在替换运行时目录';
+    let stale: string | null = null;
     try {
-      removeTreeSafely(dir);
+      try {
+        removeTreeSafely(dir);
+      } catch {
+        // 旧目录里有删不掉的东西（多半是被占用的目录联接）：改名不需要删除权限，先整个挪开，装完再清。
+        if (existsSync(dir)) {
+          stale = `${dir}.old-${Date.now()}`;
+          renameSync(dir, stale);
+        }
+      }
       renameSync(partial, dir);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -248,6 +281,9 @@ export class RuntimeJob extends Job {
         throw new Error('替换运行时目录失败：推理服务还在占用文件。请先在「语音」页停止推理服务，再重装运行时。');
       }
       throw err;
+    }
+    if (stale) {
+      try { removeTreeSafely(stale); } catch { /* 清不掉就留着，不影响这次安装 */ }
     }
   }
 

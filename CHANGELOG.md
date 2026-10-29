@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.25
+
+- **修「重装运行时卡在最后一步：`Path is a directory: ...\GPT_SoVITS\pretrained_models`」**：旧运行时里的
+  `pretrained_models` 是指向权重目录的目录联接，部分 Node/Electron 版本对联接执行 `unlink` 会直接报
+  「Path is a directory」，于是下载解压全部成功、最后替换目录时失败（重试多少次都一样）。现在拆联接
+  走 `unlink` → `rmdir` 两级兜底（只摘联接、绝不删权重），拆不掉时先把旧目录改名挪开再落新目录，
+  装完再尽力清理，安装不再卡在这一步。
+- 顺手修「启动服务时重建联接」的同类问题：已有联接改用同样的安全删除，避免个别机器上报同样的错。
+
 ## 0.5.24
 
 - **训练 WebUI 不再卡在「运行时不完整，缺少 tools/asr、tools/uvr5」**：运行时包只打进了推理要用的

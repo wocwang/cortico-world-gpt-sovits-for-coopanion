@@ -4,13 +4,14 @@
  * 托管运行时的 `GPT_SoVITS/pretrained_models` 在启动前接成指向权重目录的目录联接;自备目录原样使用。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { cpSync, existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Logger } from 'cortico/core/types.ts';
 import { weightPaths, type ModelVersion } from './catalog.ts';
 import type { Tier } from './config.ts';
+import { isLinkEntry, removeLink } from './install.ts';
 import { patchRuntime } from './runtime-patch.ts';
 import type { TrainedWeights } from './weights.ts';
 
@@ -57,15 +58,12 @@ export async function freePort(): Promise<number> {
 /** 让 `link` 成为指向 `target` 的目录联接;已是同一目标时不动。 */
 export function linkWeights(link: string, target: string): void {
   mkdirSync(target, { recursive: true });
-  if (existsSync(link) || isLink(link)) {
-    if (isLink(link) && resolve(readlinkSync(link)) === resolve(target)) return;
-    rmSync(link, { recursive: !isLink(link), force: true });
+  if (existsSync(link) || isLinkEntry(link)) {
+    if (isLinkEntry(link) && resolve(readlinkSync(link)) === resolve(target)) return;
+    if (isLinkEntry(link)) removeLink(link);
+    else rmSync(link, { recursive: true, force: true });
   }
   symlinkSync(target, link, 'junction');
-}
-
-function isLink(path: string): boolean {
-  try { return lstatSync(path).isSymbolicLink(); } catch { return false; }
 }
 
 /**
