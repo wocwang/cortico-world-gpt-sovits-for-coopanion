@@ -1,6 +1,6 @@
 {
     "name":  "@wocwang/cortico-world-gpt-sovits-for-coopanion",
-    "version":  "0.5.23",
+    "version":  "0.5.24",
     "type":  "module",
     "description":  "Cortico World for Coopanion: speaks the pet\u0027s lines aloud with GPT-SoVITS (V5 on NVIDIA GPUs, a CPU tier otherwise; AMD GPU users can use the CPU tier), installing a portable runtime and weights in one click",
     "author":  "wocwang",

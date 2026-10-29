@@ -8,11 +8,11 @@
  * 装依赖与下资源都是长任务：方法立刻返回，面板轮询 `state()` 看进度；同一时间只跑一份(重复调用拿同一个 promise)。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from 'cortico/core/types.ts';
 import { RUNTIME_VERSION, TRAIN_ASSETS, type ModelVersion, type PinnedFile } from './catalog.ts';
-import { fetchVerified } from './install.ts';
+import { extract, fetchVerified } from './install.ts';
 import { patchTrainer, TRAINER_PATCH_MARKER } from './runtime-patch.ts';
 import { freePort } from './server.ts';
 
@@ -59,6 +59,25 @@ const DEPS_REVISION = 2;
 
 /** 上游 `webui.py` 写死的默认端口；补丁没生效时才用它兜底。 */
 const UPSTREAM_PORT = 9874;
+
+/**
+ * 训练 WebUI 要的工具目录。老运行时包只打进了推理要用的东西，这两个目录不在里面，
+ * 而 `webui.py` 一启动就 `from tools.asr.config import asr_dict`——缺了就是一句 ModuleNotFoundError 后静默退出。
+ */
+const TOOL_DIRS = ['asr', 'uvr5'];
+
+/**
+ * 补齐用的上游整包：只有六兆多，缺哪个目录就下一份整包、解出目录复制过去。
+ * 整包跟着上游 main 变，没有固定大小与 SHA-256，所以下载只做续传重试，成不成看能不能解出目录。
+ */
+const UPSTREAM_ZIP = 'gpt-sovits-upstream.zip';
+const UPSTREAM_SOURCES = [
+  'https://ghfast.top/https://github.com/RVC-Boss/GPT-SoVITS/archive/refs/heads/main.zip',
+  'https://gh-proxy.com/https://github.com/RVC-Boss/GPT-SoVITS/archive/refs/heads/main.zip',
+  'https://github.com/RVC-Boss/GPT-SoVITS/archive/refs/heads/main.zip',
+];
+/** 实测 6,874,704 字节，只用来算进度百分比。 */
+const UPSTREAM_APPROX_BYTES = 6_874_704;
 
 /** 首次加载要读模型进内存，慢的机器上要一两分钟。 */
 const READY_TIMEOUT_MS = 300_000;
@@ -175,15 +194,21 @@ export class TrainerManager {
       if (opts.stopInference) await this.opts.stopInference();
       const runtimeDir = this.opts.runtimeDir();
       // webui.py 启动即 `from tools.asr.config import asr_dict`；老运行时包不带这两个目录，
-      // 不先拦一下就是一句 ModuleNotFoundError 后静默退出，日志很难看懂。
-      const missingTools = ['asr', 'uvr5'].filter((d) => !existsSync(join(runtimeDir, 'tools', d)));
+      // 直接起就是一句 ModuleNotFoundError 后静默退出，日志很难看懂。缺了就先从上游补。
+      const missingTools = TOOL_DIRS.filter((d) => !existsSync(join(runtimeDir, 'tools', d)));
       if (missingTools.length) {
-        const message = `运行时不完整，缺少 tools/${missingTools.join('、tools/')}；重装运行时，或从上游整包把这两个目录复制到运行时根再试`;
-        this.push(message);
-        this.opts.log.warn('训练 WebUI 未启动：运行时不完整', { missing: missingTools });
-        this.running = false;
-        this.starting = false;
-        return;
+        try {
+          await this.repairTools(runtimeDir, missingTools);
+        } catch (err) {
+          const why = err instanceof Error ? err.message : String(err);
+          this.push(`运行时不完整，缺少 tools/${missingTools.join('、tools/')}，自动补齐失败：${why}`);
+          this.opts.log.warn('训练 WebUI 缺工具目录且补齐失败', { missing: missingTools, error: why });
+          this.running = false;
+          this.starting = false;
+          return;
+        }
+        // 补齐期间可能被 stop() 叫停。
+        if (!this.starting) return;
       }
       const port = await freePort();
       const result = patchTrainer(runtimeDir);
@@ -273,6 +298,49 @@ export class TrainerManager {
       const message = err instanceof Error ? err.message : String(err);
       this.push(`启动训练 WebUI 失败：${message}`);
       this.opts.log.warn('启动训练 WebUI 失败', { error: message });
+    }
+  }
+
+  /**
+   * 缺的工具目录从上游整包补：解开后是一层 `GPT-SoVITS-main/`，把缺的目录整个复制进运行时根。
+   * 解不出来或里面没有该目录都算失败，让调用方把原因说清楚。
+   */
+  private async repairTools(runtimeDir: string, dirs: string[]): Promise<void> {
+    const cache = join(this.opts.dataDir, 'cache');
+    const archive = join(cache, UPSTREAM_ZIP);
+    const unpack = join(cache, 'upstream');
+    const label = `tools/${dirs.join('、tools/')}`;
+    mkdirSync(cache, { recursive: true });
+    this.push(`缺少 ${label}，正在从上游整包补齐（约 ${Math.round(UPSTREAM_APPROX_BYTES / 1024 ** 2)} MB）`);
+    let got = 0;
+    let shown = 0;
+    const signal = new AbortController().signal;
+    try {
+      await fetchVerified(UPSTREAM_SOURCES, archive, 0, '', (n) => {
+        got += n;
+        // 每过 25% 报一次，别把日志尾巴刷满。
+        const step = Math.floor((got / UPSTREAM_APPROX_BYTES) * 4);
+        if (step > shown) {
+          shown = step;
+          this.push(`上游整包 ${Math.min(step * 25, 100)}%`);
+        }
+      }, signal, { resume: true, onStart: (size) => { got = size; } });
+      rmSync(unpack, { recursive: true, force: true });
+      mkdirSync(unpack, { recursive: true });
+      await extract(archive, unpack);
+      const root = readdirSync(unpack, { withFileTypes: true })
+        .find((e) => e.isDirectory() && existsSync(join(unpack, e.name, 'tools', 'asr')));
+      if (!root) throw new Error('解出来的整包里没有 tools/asr');
+      for (const dir of dirs) {
+        const from = join(unpack, root.name, 'tools', dir);
+        if (!existsSync(from)) throw new Error(`整包里没有 tools/${dir}`);
+        cpSync(from, join(runtimeDir, 'tools', dir), { recursive: true, force: true });
+      }
+      this.push(`已补齐 ${label}`);
+      this.opts.log.info('训练 WebUI 缺的工具目录已从上游补齐', { dirs, zipBytes: got });
+    } finally {
+      rmSync(unpack, { recursive: true, force: true });
+      rmSync(archive, { force: true });
     }
   }
 

@@ -141,7 +141,7 @@ export function assertFreeSpace(dir: string, needBytes: number): void {
 }
 
 /** Windows 10 起自带 bsdtar,能解 zip;PATH 上靠前的 Git tar 不认 zip,所以写全路径。 */
-function extract(archive: string, into: string): Promise<void> {
+export function extract(archive: string, into: string): Promise<void> {
   const tar = process.platform === 'win32' ? resolve(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
   return new Promise((done, fail) => {
     const child = spawn(tar, ['-xf', archive, '-C', into], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
