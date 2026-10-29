@@ -22,7 +22,7 @@ import { nowIso } from 'cortico/core/util.ts';
 import { officialVoice, OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
 import { configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, RVC_INDEX_MAX, RVC_INDEX_MIN, RVC_PROTECT_MAX, RVC_PROTECT_MIN, RVC_TIMEOUT_MAX, RVC_TIMEOUT_MIN, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
-import { startHttpTts, type HttpTtsHandle, type TtsJob } from './http-tts.ts';
+import { startHttpTts, SING_MARK, type HttpTtsHandle, type TtsJob } from './http-tts.ts';
 import { channelWords, languageWords, panelText, shareWords, stateWords } from './i18n.ts';
 import { isRuntimeDir, RuntimeJob, WeightsJob, type JobState } from './install.ts';
 import { Player, applyGain, listOutputDevices } from './player.ts';
@@ -30,7 +30,7 @@ import { RvcLink, type RvcProbe } from './rvc-link.ts';
 import { SovitsServer, type ServerState } from './server.ts';
 import { customVoiceOptions, registerCustomVoiceOptions } from './voice-options.ts';
 import { promptLanguageOf, speechText, ttsPlain, ttsSafe } from './speech-text.ts';
-import { synthesize, switchWeights, type SpeechLang, type SynthRequest } from './synth.ts';
+import { parseWavHeader, synthesize, switchWeights, type SpeechLang, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { TrainerManager } from './trainer.ts';
 import { translateTo } from './translate.ts';
@@ -78,6 +78,9 @@ const SPEAK_WAIT_MAX_MS = 3000;
 
 /** 开着「交给其他插件」时等整句音频的上限；超过就只回执文字，不附音频。 */
 const SHARE_WAIT_MAX_MS = 45_000;
+
+/** 本机点歌（`sovits_speak` 带 `【唱】`）等唱歌插件的上限：它要跑五段扩散。 */
+const SING_PLAY_TIMEOUT_MS = 180_000;
 
 /** 等 `ms` 毫秒后给出 `null`，给一段等待加个上限。 */
 const delayed = (ms: number): Promise<null> => new Promise((resolve) => {
@@ -493,6 +496,32 @@ export class GptSovitsWorld implements World {
   /** 排进队列，等这一句开始出声(或失败、被清空、超时)再返回。 */
   private async speak(script: string, silent = false): Promise<ToolOutcome> {
     this.syncLanguage();
+    // 以 `【唱】` 开头：这句不当台词念，交给唱歌插件唱出来并直接写进本机播放器（桌宠/对话页）。
+    // 唱不出来（插件没装、引擎没就绪）就退回去念歌词，不影响正常出声。
+    const song = SING_MARK.exec(script);
+    if (song && !silent) {
+      const lyrics = script.slice(song[0].length).trim();
+      if (lyrics) {
+        try {
+          const wav = await this.singViaSinger(lyrics, AbortSignal.timeout(SING_PLAY_TIMEOUT_MS));
+          const head = parseWavHeader(wav);
+          if (!head) throw new Error('sing returned no WAV header');
+          const pcm = wav.subarray(head.dataStart);
+          if (!pcm.length) throw new Error('sing returned empty audio');
+          const seconds = pcm.length / 2 / head.sampleRate;
+          if (this.cfg.playLocally) {
+            await this.player.write(head.sampleRate, pcm, 1);
+            this.player.flush();
+          }
+          if (this.cfg.saveAudio) this.saveLine(pcm, head.sampleRate);
+          this.log.info('唱了一句', { chars: [...lyrics].length, seconds: Number(seconds.toFixed(2)), played: this.cfg.playLocally });
+          return { text: `Sang one line (${seconds.toFixed(1)} s)${this.cfg.playLocally ? ' on this computer' : ''}.` };
+        } catch (err) {
+          this.log.warn('点歌没唱成，这句改用普通语音念', { err: err instanceof Error ? err.message : String(err), lyrics });
+          script = lyrics;
+        }
+      }
+    }
     const text = ttsSafe(speechText(script));
     if (!text) return { text: 'Nothing to say: the text has only markup.' };
     if (!this.voice()) return { text: `Voice unavailable: ${this.voiceIssue ?? 'no reference audio is set'}.`, failed: true };
@@ -811,6 +840,7 @@ export class GptSovitsWorld implements World {
         token: this.cfg.httpToken,
         deps: {
           synthesize: (job, signal) => this.synthesizeForApi(job, signal),
+          sing: (lyrics, signal) => this.singViaSinger(lyrics, signal),
           post: (wav) => this.rvc.convert(wav),
           ready: () => this.apiReady(),
           stateText: () => this.stateFor(stateWords('en')),
@@ -822,14 +852,14 @@ export class GptSovitsWorld implements World {
     }
   }
 
-  /** 接口此刻能不能接活：服务就绪，或休眠中但能自己拉起来。 */
+  /** 接口此刻能不能接活：服务已经起来，或者运行时就绪、能自己拉起来（含冷启动）。 */
   private apiReady(): boolean {
-    return !!this.url() || (this.sleeping && this.canStart());
+    return !!this.url() || this.canStart();
   }
 
   /**
    * HTTP 接口要的一句音频：用点名或当前的音色合成，只回 WAV —— 不播放、不进播放队列。
-   * 服务在休眠就先叫醒；失败抛错，由接口回 502。
+   * 服务没起（冷启动）或睡着了都先拉起来；失败抛错，由接口回 502。
    */
   private async synthesizeForApi(job: TtsJob, signal: AbortSignal): Promise<Buffer> {
     // `voice` 是调用方明确点名；`voice_desc`（VoxCPM 形状）只是描述，能对上已知音色才采用。
@@ -837,9 +867,11 @@ export class GptSovitsWorld implements World {
       ?? (job.voiceHint ? this.voiceByName(job.voiceHint, false) : null)
       ?? this.voice();
     if (!voice) throw new Error(this.voiceIssue ?? 'no reference audio is set');
-    if (!this.url() && this.sleeping && this.canStart()) {
+    // 「其他插件来取音频」不该挑时间：没起就起，睡着就叫醒。以前只在休眠时唤醒，
+    // 进程刚起来、引擎还没起过的冷启动场景（autoStart 关着）会一直回 503。
+    if (!this.url() && this.canStart()) {
       this.sleeping = false;
-      this.log.info('推理服务在休眠，这次取音频会叫醒它');
+      this.log.info('语音接口来人取音频，这就把推理服务拉起来');
       await this.startServer();
     }
     const url = this.url();
@@ -860,6 +892,28 @@ export class GptSovitsWorld implements World {
     }
     if (!chunks.length) throw new Error('synthesized nothing');
     return wavBytes(Buffer.concat(chunks), rate);
+  }
+
+  /**
+   * 把一句歌词交给 DiffSinger 唱歌插件（默认 127.0.0.1:9882），只回 WAV。
+   * 没配地址、插件没装、引擎没就绪都直接抛错，由 HTTP 接口退回普通语音。
+   */
+  private async singViaSinger(lyrics: string, signal: AbortSignal): Promise<Buffer> {
+    const base = (this.cfg.singUrl ?? '').trim().replace(/\/+$/, '');
+    if (!base) throw new Error('sing endpoint is not configured');
+    const res = await fetch(`${base}/sing`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ lyrics }),
+      signal,
+    });
+    if (!res.ok) {
+      const why = await res.text().catch(() => '');
+      throw new Error(`sing HTTP ${res.status}${why ? `: ${why.slice(0, 160)}` : ''}`);
+    }
+    const audio = Buffer.from(await res.arrayBuffer());
+    if (!audio.length) throw new Error('sing returned empty audio');
+    return audio;
   }
 
   /** 接口点名的音色：自定义音色的 id 或名字、预设 id（xll/dfy/female/male）；认不出返回 null。

@@ -78,6 +78,11 @@ export interface GptSovitsConfigSection {
   /** 由对方插件自己合成语音的渠道（如 QQ）：开启后提示词让 bot 不为这些回复调用 sovits_speak。 */
   channelVoice: boolean;
   /**
+   * 唱歌插件（DiffSinger）地址：QQ 的语音通道里，正文以 `【唱】` 开头的句子会转给这里唱。
+   * 留空则不转，带标记的正文按普通台词念出来。默认指向唱歌插件 9882。
+   */
+  singUrl: string;
+  /**
    * 出口变声：合成完交给本地 RVC 插件（cortico-world-rvc-for-coopanion）再过一遍。
    * 只影响交给其他插件的音频（HTTP 接口），本机外放不变；RVC 不可用/超时/报错时原样返回原音频。
    */
@@ -99,6 +104,8 @@ export const SPEED_MIN = .6, SPEED_MAX = 1.6;
 
 /** RVC 插件默认监听的本机地址；超时下限给足一次热态转换（0.3–2 秒）。 */
 export const RVC_DEFAULT_ENDPOINT = 'http://127.0.0.1:9881';
+/** 唱歌插件默认监听的本机地址；配了别的端口就跟着改。 */
+export const SING_DEFAULT_ENDPOINT = 'http://127.0.0.1:9882';
 export const RVC_TIMEOUT_MIN = 500, RVC_TIMEOUT_MAX = 60_000;
 export const RVC_INDEX_MIN = 0, RVC_INDEX_MAX = 1;
 export const RVC_PROTECT_MIN = 0, RVC_PROTECT_MAX = 0.5;
@@ -133,6 +140,7 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   httpPort: 9880,
   httpToken: '',
   channelVoice: false,
+  singUrl: SING_DEFAULT_ENDPOINT,
   rvc: { enabled: false, endpoint: RVC_DEFAULT_ENDPOINT, token: '', timeoutMs: 8000, pitch: 0, indexRate: 0.3, protect: 0.33 },
   seed: SEED_RANDOM,
   volume: 1,
@@ -180,6 +188,7 @@ const TEXT = {
     httpPort: { title: '语音接口端口', description: '默认 9880。与别的程序冲突时换一个。' },
     httpToken: { title: '语音接口令牌', description: '留空不校验（接口只监听本机回环地址）。填了以后对方请求要带 Authorization: Bearer 或 ?token=。' },
     channelVoice: { title: '其他渠道的语音交给对方插件', description: '开启后提示词会告诉 bot：在由对方插件自己合成语音的渠道（如 QQ）回复时不要调用 sovits_speak，要发语音就在对方工具里打开语音开关（qq-final 的 qq_send 传 voice=true），由对方用本插件的声音合成；本机对话页照常出声。配合「开放本地语音接口」+ QQ 插件自带语音时用。' },
+    singUrl: { title: '唱歌插件地址', description: 'DiffSinger 唱歌插件（cortico-world-singer-for-coopanion）的地址，默认 http://127.0.0.1:9882。QQ 的语音通道里正文以「【唱】」开头的句子会转给它唱出来；留空则不转，带标记的正文按普通台词念。唱不出来（插件没装、引擎没就绪）时也会自动退回普通语音，不影响正常语音回复。' },
     rvcEnabled: { title: '出口变声（RVC）', description: '合成完把音频交给本机 RVC 插件再过一遍，再交出去。只影响给其他插件的音频；RVC 没开、超时或报错时原样返回，不会断链路。' },
     rvcEndpoint: { title: 'RVC 端点', description: '默认 http://127.0.0.1:9881，即 cortico-world-rvc-for-coopanion 的本机接口。' },
     rvcToken: { title: 'RVC 接口令牌', description: 'RVC 插件配了接口令牌时填同一个值；留空表示对方不校验。' },
@@ -226,6 +235,7 @@ const TEXT = {
     httpPort: { title: 'Voice API port', description: 'Defaults to 9880; change it if something else uses that port.' },
     httpToken: { title: 'Voice API token', description: 'Empty means no check (the server listens on loopback only). When set, callers must send Authorization: Bearer or ?token=.' },
     channelVoice: { title: 'Channel voice comes from the other plugin', description: 'When on, the prompt tells the bot not to call sovits_speak for replies on channels whose plugin synthesizes voice itself (QQ, for example), so the same line is not spoken here too; the chat page keeps its voice. Use it with the local voice API and a voice-capable QQ plugin.' },
+    singUrl: { title: 'Singing plugin endpoint', description: 'Address of the DiffSinger singing plugin (cortico-world-singer-for-coopanion), http://127.0.0.1:9882 by default. On the QQ voice channel, a line starting with 【唱】 is handed to it and sung; empty disables the hand-off and the line is read as normal speech. If singing fails (plugin missing, engine not ready) the line falls back to normal speech.' },
     rvcEnabled: { title: 'Voice conversion (RVC) at the exit', description: 'Hands every finished line to the local RVC plugin once before it goes out. Only affects audio for other plugins; when RVC is off, slow or failing, the original audio is returned and the chain never breaks.' },
     rvcEndpoint: { title: 'RVC endpoint', description: 'Defaults to http://127.0.0.1:9881, the loopback API of cortico-world-rvc-for-coopanion.' },
     rvcToken: { title: 'RVC API token', description: 'Fill in the same value when the RVC plugin has a token; empty means it checks nothing.' },
@@ -319,6 +329,7 @@ export function configGroups(language: Language): ConfigGroup[] {
           [`${K}.httpPort`]: { type: 'number', title: t.httpPort.title, description: t.httpPort.description, minimum: 1, maximum: 65535, multipleOf: 1, 'x-hot': true },
           [`${K}.httpToken`]: { type: 'string', title: t.httpToken.title, description: t.httpToken.description, 'x-hot': true },
           [`${K}.channelVoice`]: { type: 'boolean', title: t.channelVoice.title, description: t.channelVoice.description, 'x-hot': true },
+          [`${K}.singUrl`]: { type: 'string', title: t.singUrl.title, description: t.singUrl.description, 'x-hot': true },
           [`${K}.shareAudio`]: { type: 'boolean', title: t.shareAudio.title, description: t.shareAudio.description, 'x-hot': true },
           [`${K}.rvc.enabled`]: { type: 'boolean', title: t.rvcEnabled.title, description: t.rvcEnabled.description, 'x-hot': true },
           [`${K}.rvc.endpoint`]: { type: 'string', title: t.rvcEndpoint.title, description: t.rvcEndpoint.description, 'x-hot': true },

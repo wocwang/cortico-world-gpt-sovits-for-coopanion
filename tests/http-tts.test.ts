@@ -17,9 +17,10 @@ afterEach(async () => {
   handle = null;
 });
 
-async function boot(opts: { token?: string; ready?: boolean; slow?: boolean; post?: (wav: Buffer) => Promise<Buffer> } = {}): Promise<{ base: string; jobs: TtsJob[]; order: string[] }> {
+async function boot(opts: { token?: string; ready?: boolean; slow?: boolean; post?: (wav: Buffer) => Promise<Buffer>; sing?: (lyrics: string) => Promise<Buffer> } = {}): Promise<{ base: string; jobs: TtsJob[]; order: string[]; sang: string[] }> {
   const jobs: TtsJob[] = [];
   const order: string[] = [];
+  const sang: string[] = [];
   let busy = false;
   handle = await startHttpTts({
     port: 0,
@@ -29,6 +30,7 @@ async function boot(opts: { token?: string; ready?: boolean; slow?: boolean; pos
       ready: () => opts.ready !== false,
       stateText: () => 'starting',
       post: opts.post,
+      sing: opts.sing && (async (lyrics) => { sang.push(lyrics); return opts.sing!(lyrics); }),
       synthesize: async (job) => {
         if (busy) order.push('overlap');
         busy = true;
@@ -39,7 +41,7 @@ async function boot(opts: { token?: string; ready?: boolean; slow?: boolean; pos
       },
     },
   });
-  return { base: `http://127.0.0.1:${handle.port}`, jobs, order };
+  return { base: `http://127.0.0.1:${handle.port}`, jobs, order, sang };
 }
 
 describe('HTTP 语音接口', () => {
@@ -123,5 +125,44 @@ describe('HTTP 语音接口', () => {
     const res = await fetch(`${base}/tts`, { method: 'POST', body: JSON.stringify({ text: '试试' }) });
     expect(res.status).toBe(200);
     expect(parseWavHeader(Buffer.from(await res.arrayBuffer()))?.sampleRate).toBe(48000);
+  });
+
+  it('点歌标记：正文以【唱】开头时交给唱歌插件，不走 TTS', async () => {
+    const sung = wavBytes(Buffer.alloc(4410 * 2), 44100);
+    const { base, jobs, sang } = await boot({ sing: async () => sung });
+    const res = await fetch(`${base}/v1/audio/speech`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ input: '【唱】晚风吹过旧时光', voice: 'dfy' }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-sovits-sing')).toBe('1');
+    expect(parseWavHeader(Buffer.from(await res.arrayBuffer()))?.sampleRate).toBe(44100);
+    // 只有标记后面那段是歌词，标记与「语音」参数都不进合成。
+    expect(sang).toEqual(['晚风吹过旧时光']);
+    expect(jobs).toEqual([]);
+  });
+
+  it('唱歌插件失败时退回普通语音，正文去掉标记', async () => {
+    const { base, jobs } = await boot({ sing: async () => { throw new Error('singer down'); } });
+    const res = await fetch(`${base}/v1/audio/speech`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ input: '[sing]晚风吹过旧时光' }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-sovits-sing')).toBeNull();
+    expect(jobs.map((j) => j.text)).toEqual(['晚风吹过旧时光']);
+  });
+
+  it('只写标记不写歌词：400', async () => {
+    const { base, sang } = await boot({ sing: async () => fakeWav() });
+    const res = await fetch(`${base}/v1/audio/speech`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ input: '【唱】' }),
+    });
+    expect(res.status).toBe(400);
+    expect(sang).toEqual([]);
   });
 });

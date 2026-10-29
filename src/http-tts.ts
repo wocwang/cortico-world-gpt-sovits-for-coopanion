@@ -22,6 +22,11 @@ export interface HttpTtsDeps {
   /** 合成一句，不播放；失败抛错（回 502）。 */
   synthesize: (job: TtsJob, signal: AbortSignal) => Promise<Buffer>;
   /**
+   * 把一句歌词交给唱歌插件（DiffSinger）。不提供时带唱标记的正文照普通语音念。
+   * 失败抛错即可，这里会退回普通语音，不影响调用方。
+   */
+  sing?: (lyrics: string, signal: AbortSignal) => Promise<Buffer>;
+  /**
    * 出口后处理（如 RVC 变声）。契约：失败必须原样返回入参，不许抛——
    * 这里再兜一层，抛了也按原音频发出去。
    */
@@ -41,8 +46,15 @@ export interface HttpTtsHandle {
 
 /** 单次合成上限；本地推理慢，给足时间。 */
 const SYNTH_TIMEOUT_MS = 120_000;
+/** 唱一句的上限：CPU 上多段扩散比 TTS 慢，给得更宽。 */
+const SING_TIMEOUT_MS = 180_000;
 /** 请求体上限：就一句台词，64 KB 足够。 */
 const BODY_MAX = 64 * 1024;
+/**
+ * 点歌标记：正文以 `【唱】`（或 `[唱]` / `[sing]`）开头时，这句不当台词念，交给唱歌插件唱。
+ * 调用方（QQ 的语音通道）只传一句正文，所以标记必须在最前面。
+ */
+export const SING_MARK = /^\s*[【\[]\s*(?:唱|sing)\s*[】\]]\s*/i;
 
 function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
@@ -94,10 +106,33 @@ export function startHttpTts(opts: { port: number; token?: string; deps: HttpTts
   const synthesize = async (res: ServerResponse, path: string, body: Record<string, unknown>): Promise<void> => {
     const said = text(body.input) ?? text(body.text); // OpenAI 用 input，VoxCPM 用 text
     if (!said) { json(res, 400, { error: 'missing text' }); return; }
+    // 点歌：正文以 `【唱】` 开头时交给唱歌插件。唱歌不依赖本插件的 TTS 是否已加载，
+    // 所以这一段放在 ready() 检查之前；唱不出来才退回普通语音。
+    const mark = SING_MARK.exec(said);
+    const lyrics = mark ? said.slice(mark[0].length).trim() : '';
+    if (lyrics && deps.sing) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), SING_TIMEOUT_MS);
+      const at = Date.now();
+      try {
+        const wav = await run(() => deps.sing!(lyrics, ctrl.signal));
+        deps.log.info('HTTP 语音接口唱完', { path, chars: [...lyrics].length, bytes: wav.length, ms: Date.now() - at });
+        res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': wav.length, 'x-sovits-sing': '1' });
+        res.end(wav);
+        return;
+      } catch (err) {
+        deps.log.warn('点歌没唱成，这句改用普通语音念', { err: err instanceof Error ? err.message : String(err), lyrics });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    // 标记后面没写歌词，或没有唱歌插件：把标记去掉，按普通台词语气念出来。
+    const spoken = mark ? said.slice(mark[0].length).trim() : said;
+    if (!spoken) { json(res, 400, { error: 'nothing to sing after the 【唱】 mark' }); return; }
     if (!deps.ready()) { json(res, 503, { error: `voice not ready: ${deps.stateText()}` }); return; }
     const hint = text(body.voice_desc);
     const job: TtsJob = {
-      text: said,
+      text: spoken,
       voice: text(body.voice),
       ...(hint ? { voiceHint: hint } : {}),
       speed: num(body.speed) ?? num(body.speed_factor),
@@ -116,7 +151,7 @@ export function startHttpTts(opts: { port: number; token?: string; deps: HttpTts
           out = wav;
         }
       }
-      deps.log.info('HTTP 语音接口合成完', { path, chars: [...said].length, voice: job.voice ?? '', ms: Date.now() - at });
+      deps.log.info('HTTP 语音接口合成完', { path, chars: [...spoken].length, voice: job.voice ?? '', ms: Date.now() - at });
       send(res, 200, out, 'audio/wav');
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
