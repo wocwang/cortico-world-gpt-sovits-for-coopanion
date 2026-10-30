@@ -156,6 +156,8 @@ export class GptSovitsWorld implements World {
   private warmed = false;
   private lastError: string | null = null;
   private cuda: boolean | null = null;
+  /** 没检测到 NVIDIA 时的显卡厂商，只用来把「为什么走 CPU 档」说清楚（AMD 不支持 CUDA）。 */
+  private gpu: GpuVendor | null = null;
   private stopped = false;
   private host: WorldHost | null = null;
   /** World 启动后到本机服务第一次就绪或失败之间。 */
@@ -498,8 +500,10 @@ export class GptSovitsWorld implements World {
     this.syncLanguage();
     // 以 `【唱】` 开头：这句不当台词念，交给唱歌插件唱出来并直接写进本机播放器（桌宠/对话页）。
     // 唱不出来（插件没装、引擎没就绪）就退回去念歌词，不影响正常出声。
+    // `silent: true` 只合成不本机外放（给 QQ 等渠道用），但仍把 WAV 作为附件交出去——
+    // 那些渠道只认 `[blob …]` / `log:` 句柄，读不到本机路径。
     const song = SING_MARK.exec(script);
-    if (song && !silent) {
+    if (song) {
       const lyrics = script.slice(song[0].length).trim();
       if (lyrics) {
         try {
@@ -509,13 +513,23 @@ export class GptSovitsWorld implements World {
           const pcm = wav.subarray(head.dataStart);
           if (!pcm.length) throw new Error('sing returned empty audio');
           const seconds = pcm.length / 2 / head.sampleRate;
-          if (this.cfg.playLocally) {
+          const played = !silent && this.cfg.playLocally;
+          if (played) {
             await this.player.write(head.sampleRate, pcm, 1);
             this.player.flush();
           }
           if (this.cfg.saveAudio) this.saveLine(pcm, head.sampleRate);
-          this.log.info('唱了一句', { chars: [...lyrics].length, seconds: Number(seconds.toFixed(2)), played: this.cfg.playLocally });
-          return { text: `Sang one line (${seconds.toFixed(1)} s)${this.cfg.playLocally ? ' on this computer' : ''}.` };
+          this.log.info('唱了一句', { chars: [...lyrics].length, seconds: Number(seconds.toFixed(2)), played });
+          const outcome: ToolOutcome = { text: `Sang one line (${seconds.toFixed(1)} s)${played ? ' on this computer' : ''}.` };
+          if (this.cfg.shareAudio || silent) {
+            outcome.blobs = [{
+              bytes: wav,
+              mime: 'audio/wav',
+              name: 'song.wav',
+              fallbackText: 'This song as an audio file; hand this handle to another plugin (the QQ voice parameter, for example) to send it.',
+            }];
+          }
+          return outcome;
         } catch (err) {
           this.log.warn('点歌没唱成，这句改用普通语音念', { err: err instanceof Error ? err.message : String(err), lyrics });
           script = lyrics;
@@ -769,6 +783,8 @@ export class GptSovitsWorld implements World {
     this.weightsFailed = '';
     this.launching = this.cfg.autoStart && this.backend().kind !== 'remote';
     this.cuda = await detectCuda();
+    if (!this.cuda) this.gpu = await detectGpuVendor();
+    if (this.cfg.tier === 'cuda' && !this.cuda) this.log.warn('配置的是显卡档，但没检测到 NVIDIA 显卡（AMD/Intel 不支持 CUDA）', { gpu: this.gpu });
     // 启动即把当前音色的音频/台本镜像进配置字段：配置页一打开就能看到实际用的文件。
     this.settlePreset();
     this.appliedTextLang = null;
@@ -1433,6 +1449,7 @@ export class GptSovitsWorld implements World {
       tierSetting: this.cfg.tier,
       tier: this.tier(),
       cudaFound: this.cuda === true,
+      gpu: this.gpu,
       version: this.version(),
       runtime: { ...this.runtime.status(), dir: b.kind === 'remote' ? b.url : b.dir, published: this.runtime.published(), bytes: this.runtime.bytes(), own: b.kind === 'own' && isRuntimeDir(b.dir) },
       weights: { ...this.weights.status(), dir: this.weights.dir(), bytes: this.weights.bytes() },
@@ -1448,11 +1465,16 @@ export class GptSovitsWorld implements World {
   }
 }
 
+/** 没检测到 NVIDIA 时的显卡厂商。 */
+export type GpuVendor = 'amd' | 'intel' | 'other';
+
 export interface PanelState {
   backend: Backend['kind'];
   tierSetting: GptSovitsConfigSection['tier'];
   tier: Tier;
   cudaFound: boolean;
+  /** 没有 NVIDIA 时的显卡厂商；用来解释为什么用 CPU 档。 */
+  gpu: GpuVendor | null;
   version: ModelVersion;
   runtime: JobState & { dir: string; published: boolean; bytes: number; own: boolean };
   weights: JobState & { dir: string; bytes: number };
@@ -1474,5 +1496,23 @@ const readText = (file: string): string => readFileSync(file, 'utf8').trim();
 function detectCuda(): Promise<boolean> {
   return new Promise((done) => {
     execFile('nvidia-smi', ['-L'], { windowsHide: true, timeout: 5000 }, (err, stdout) => done(!err && /GPU \d+:/.test(stdout)));
+  });
+}
+
+/** 没有 NVIDIA 时查一下显卡厂商：AMD 没有 CUDA，面板和日志里要把「为什么用 CPU 档」说清楚。 */
+function detectGpuVendor(): Promise<GpuVendor | null> {
+  return new Promise((done) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join ';'"],
+      { windowsHide: true, timeout: 8000 },
+      (err, stdout) => {
+        if (err) return done(null);
+        const names = stdout.toLowerCase();
+        if (/amd|radeon/.test(names)) done('amd');
+        else if (/intel/.test(names)) done('intel');
+        else done(names.trim() ? 'other' : null);
+      },
+    );
   });
 }

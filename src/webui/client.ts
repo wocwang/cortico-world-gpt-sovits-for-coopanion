@@ -80,7 +80,10 @@ const voicePanel: WebUiPanel = {
       state = s;
       // 推理档
       setPill(tierRow.pill, s.tier === 'cuda' ? t.tierCuda : t.tierCpu, 'on');
-      tierRow.detail.textContent = s.tierSetting === 'auto' ? t.tierAuto(s.cudaFound) : '';
+      // 自动档说明为什么走 CPU；显式选了显卡档但机器没有 NVIDIA 时提前警告，别等下了 4 GB 运行时才失败。
+      tierRow.detail.textContent = s.tierSetting === 'auto'
+        ? (s.cudaFound ? t.tierAuto(true) : (s.gpu === 'amd' ? t.tierAutoAmd : t.tierAuto(false)))
+        : (s.tier === 'cuda' && !s.cudaFound ? t.tierCudaMissing(s.gpu) : '');
       // 运行时与权重
       const managed = s.backend === 'managed';
       runtimeRow.acts.hidden = !managed;

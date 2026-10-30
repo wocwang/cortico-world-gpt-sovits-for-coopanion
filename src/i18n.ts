@@ -17,6 +17,10 @@ const PANEL = {
     tierCuda: '显卡(V5 turbo)',
     tierCpu: 'CPU(v2ProPlus)',
     tierAuto: (found: boolean): string => (found ? '自动：检测到 NVIDIA 显卡' : '自动：没有检测到 NVIDIA 显卡'),
+    tierAutoAmd: '自动：检测到 AMD 显卡（没有 CUDA），使用 CPU 档',
+    tierCudaMissing: (vendor: string | null): string => (vendor === 'amd'
+      ? '本机是 AMD 显卡，没有 CUDA 加速，显卡档起不来；请改回「自动」或「CPU」'
+      : '没有检测到 NVIDIA 显卡，显卡档可能起不来；请改回「自动」或「CPU」'),
     runtime: '运行时',
     weights: '权重',
     trained: '权重来源',
@@ -150,6 +154,10 @@ const PANEL = {
     tierCuda: 'GPU (V5 turbo)',
     tierCpu: 'CPU (v2ProPlus)',
     tierAuto: (found: boolean) => (found ? 'Auto: NVIDIA GPU found' : 'Auto: no NVIDIA GPU found'),
+    tierAutoAmd: 'Auto: AMD GPU found (no CUDA); using the CPU tier',
+    tierCudaMissing: (vendor: string | null) => (vendor === 'amd'
+      ? 'This machine has an AMD GPU, which cannot use CUDA; the GPU tier will not start — switch to Auto or CPU'
+      : 'No NVIDIA GPU found; the GPU tier may fail to start — switch to Auto or CPU'),
     runtime: 'Runtime',
     weights: 'Weights',
     trained: 'Weights in use',
@@ -297,8 +305,8 @@ export const stateWords = (language: 'zh' | 'en'): StateWords => STATE[language]
  * 没开就留空——那一行提示词会变成空行，不影响其余内容。
  */
 const SHARE = {
-  zh: '想把同一句话发到 QQ 等消息渠道时，用这次 `sovits_speak` 回执里的 `[blob …]` 音频句柄作为发送工具的音频来源（例如 `qq_draft` 的 voice 参数），不要再合成一遍；这一句是发给那种渠道、不想在对方电脑外放时，给这次 `sovits_speak` 带上 `silent: true`。',
-  en: 'To send the same line to a chat channel such as QQ, use the audio `[blob …]` handle from this `sovits_speak` result as the audio for that send tool (the `qq_draft` voice parameter, for example) instead of synthesizing it again; when the line is meant for such a channel and should not be played on this computer, pass `silent: true` to that `sovits_speak`.',
+  zh: '想把同一句话发到 QQ 等消息渠道时，用这次 `sovits_speak` 回执里的 `[blob …]` 音频句柄作为发送工具的音频来源（例如 `qq_draft` 的 voice 参数），不要再合成一遍；这一句是发给那种渠道、不想在对方电脑外放时，给这次 `sovits_speak` 带上 `silent: true`。带 `【唱】` 的歌词同理：唱歌的回执也带音频句柄，QQ 里照样发语音条。',
+  en: 'To send the same line to a chat channel such as QQ, use the audio `[blob …]` handle from this `sovits_speak` result as the audio for that send tool (the `qq_draft` voice parameter, for example) instead of synthesizing it again; when the line is meant for such a channel and should not be played on this computer, pass `silent: true` to that `sovits_speak`. A 【唱】 lyric works the same way: a sung line also comes back with an audio handle, so it can be sent as a QQ voice message.',
 };
 
 export const shareWords = (language: 'zh' | 'en', on: boolean): string => (on ? SHARE[language] : '');

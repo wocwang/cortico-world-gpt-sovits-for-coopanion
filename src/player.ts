@@ -33,8 +33,11 @@ interface AudifyModule {
   RtAudioApi: { WINDOWS_WASAPI: number };
 }
 
-/** 每次写入的帧长:20 ms。 */
-const FRAME_MS = 20;
+/**
+ * 每次写入的帧长:40 ms。原来是 20 ms，合成稍慢或网络抖一下就会出现「写不进去 → 空一段 → 再续上」的断续，
+ * 听起来像按标点卡顿；40 ms 的缓冲只多 40 ms 延迟，换来的连续性好很多。
+ */
+const FRAME_MS = 40;
 
 /** 软限幅的拐点：绝对值超过它的样本按 tanh 压到满幅以内。 */
 const KNEE = 24000;
