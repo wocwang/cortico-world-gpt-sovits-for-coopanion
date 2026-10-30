@@ -2,7 +2,7 @@
   "tools": [
     {
       "name": "sovits_speak",
-      "description": "Say a line aloud in your voice, after any line still playing. Emit it in the same reply as the pet_say it voices, immediately followed by that pet_say, without waiting for this result: tools run in order, so the bubble appears as the voice begins. Bubble markup (【…】 and <…>) is skipped, so the text can be the pet_say script verbatim.",
+      "description": "Say a line aloud in your voice, after any line still playing. Emit it in the same reply as the pet_say it voices, immediately followed by that pet_say, without waiting for this result: tools run in order, so the bubble appears as the voice begins. Bubble markup (【…】 and <…>) is skipped, so the text can be the pet_say script verbatim. If the text starts with 【唱】 (also [唱] or [sing]), the rest is treated as a lyric line and sung in your voice by the DiffSinger singing plugin instead of being spoken; if that plugin is missing or not ready the line is simply spoken, so it is always safe to try.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -11,6 +11,10 @@
             "type": "string",
             "maxLength": 2000,
             "description": "The line to say."
+          },
+          "silent": {
+            "type": "boolean",
+            "description": "true synthesizes the line without playing it on this computer: use it for a line meant for another channel (a QQ voice message, for example) that should not be heard here."
           }
         },
         "required": [
