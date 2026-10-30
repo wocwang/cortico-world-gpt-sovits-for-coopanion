@@ -6,11 +6,13 @@
 import type { WebUiClientBundle, WebUiPanel, WebUiPanelContext } from 'cortico/web/shared/client-panel.ts';
 import { panelText } from '../i18n.ts';
 import type { RvcProbe } from '../rvc-link.ts';
-import type { PanelState } from '../world.ts';
+import type { PanelState, UsageItem, UsageState } from '../world.ts';
 import type { TrainerState } from '../trainer.ts';
 import './style.css';
 
 const MB = (n: number) => Math.round(n / 1048576);
+/** 面板里显示体积：过 1 GB 用 GB，否则 MB。 */
+const sizeText = (n: number) => (n >= 1073741824 ? `${(n / 1073741824).toFixed(2)} GB` : `${Math.max(1, MB(n))} MB`);
 const pct = (done: number, total: number) => (total ? `${Math.round((done / total) * 100)}%` : `${MB(done)} MB`);
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
@@ -36,14 +38,14 @@ const voicePanel: WebUiPanel = {
 
     // ---- 状态四行
     const status = ui.section(t.panel, t.panelHint);
-    const row = (name: string) => {
+    const row = (name: string, parent: HTMLElement = status) => {
       const el = ui.h('div', 'gsv-row');
       const label = ui.h('span', 'gsv-name', name);
       const pill = ui.h('span', 'gsv-pill');
       const detail = ui.h('span', 'gsv-detail');
       const acts = ui.h('span', 'gsv-acts');
       el.append(label, pill, detail, acts);
-      status.append(el);
+      parent.append(el);
       return { pill, detail, acts };
     };
     const tierRow = row(t.tier), runtimeRow = row(t.runtime), weightsRow = row(t.weights), trainedRow = row(t.trained), serverRow = row(t.server);
@@ -57,6 +59,58 @@ const voicePanel: WebUiPanel = {
     const output = ui.h('pre', 'gsv-output');
     status.append(output);
 
+    // ---- 已安装模型：手动统计（不跟每秒轮询），卸载前弹确认
+    const models = ui.section(t.models, t.modelsHint);
+    const modelList = ui.h('div');
+    const modelFoot = ui.actions();
+    const modelTotal = ui.h('span', 'gsv-detail', t.modelsScan);
+    modelFoot.append(ui.button(t.modelsRefresh, { size: 'sm', onClick: () => void loadUsage(true) }), modelTotal);
+    models.append(modelList, modelFoot);
+
+    const labelOf = (item: UsageItem) => (item.kind === 'weights' ? t.weightsBase
+      : item.kind === 'partial' ? t.runtimePartial
+        : item.kind === 'stale' ? t.runtimeStale
+          : item.id === 'cuda' ? t.runtimeCuda : t.runtimeCpu);
+
+    const itemSize = (item: UsageItem) => `${item.estimated ? '≈' : ''}${sizeText(item.bytes)}`;
+
+    const renderUsage = (u: UsageState) => {
+      modelList.replaceChildren();
+      const approx = u.items.some((item) => item.estimated) ? '≈' : '';
+      modelTotal.textContent = u.items.length ? t.modelsCleanable(`${approx}${sizeText(u.total)}`) : t.modelsEmpty;
+      for (const item of u.items) {
+        const r = row(labelOf(item), modelList);
+        const shared = item.kind === 'runtime';
+        setPill(r.pill, shared ? t.sharedRuntime : t.ready, shared ? 'warn' : 'on');
+        r.detail.textContent = item.dir;
+        r.acts.append(
+          ui.h('span', 'gsv-detail', itemSize(item)),
+          ui.button(t.uninstall, { size: 'sm', onClick: () => void removeModel(item) }),
+        );
+      }
+    };
+
+    const loadUsage = async (refresh = false) => {
+      modelTotal.textContent = t.modelsScan;
+      try { renderUsage(await ctx.invoke<UsageState>('usage', refresh ? ['refresh'] : [])); }
+      catch (err) { modelTotal.textContent = errText(err); }
+    };
+
+    const removeModel = async (item: UsageItem) => {
+      const name = labelOf(item);
+      if (!(await ui.confirm({ title: t.uninstall, body: t.uninstallConfirm(name, `${item.estimated ? '≈' : ''}${sizeText(item.bytes)}`) }))) return;
+      try {
+        const res = await ctx.invoke<{ usage: UsageState; removed: { id: string; bytes: number } }>('uninstall', [item.id]);
+        msg.textContent = t.uninstalled(name, sizeText(res.removed.bytes));
+        msg.classList.remove('bad');
+        renderUsage(res.usage);
+        void refresh();
+      } catch (err) {
+        msg.textContent = errText(err);
+        msg.classList.add('bad');
+      }
+    };
+
     // ---- 试听
     const test = ui.section(t.test);
     const line = ui.input({});
@@ -69,7 +123,7 @@ const voicePanel: WebUiPanel = {
     const queue = ui.h('span', 'gsv-detail');
     test.append(line, testActs, queue);
 
-    ctx.root.append(status, test, msg);
+    ctx.root.append(status, models, test, msg);
 
     const setPill = (el: HTMLElement, label: string, tone: 'on' | 'off' | 'warn' | 'bad') => {
       el.textContent = label;
@@ -136,6 +190,7 @@ const voicePanel: WebUiPanel = {
       try { render(await ctx.invoke<PanelState>('state')); } catch (err) { if (!state) msg.textContent = errText(err); }
     };
     void refresh();
+    void loadUsage();
     ctx.interval(() => void refresh(), 1000);
   },
 };

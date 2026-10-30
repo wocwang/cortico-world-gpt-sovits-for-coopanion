@@ -68,6 +68,12 @@ export const TIER_MODEL: Readonly<Record<Tier, ModelVersion>> = {
 
 export type ModelVersion = 'v5turbo' | 'v2ProPlus';
 
+/** 运行时解压后大约占多少字节（实测），面板上估算可释放空间用；精确值要递归扫几万个文件，太慢。 */
+export const RUNTIME_EXTRACT_BYTES: Readonly<Record<Tier, number>> = {
+  cuda: 11_300_000_000,
+  cpu: 2_210_000_000,
+};
+
 /**
  * 播放时乘的增益。实测 v2ProPlus 经 api_v2 出来的峰值约 −7~−8 dBFS，乘 2 倍（+6 dB）
  * 仍留约 1 dB 余量；以前按「−27 dBFS」乘 8 倍，会把两成以上样本压进软限幅，听起来发糊。

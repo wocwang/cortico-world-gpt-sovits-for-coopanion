@@ -19,12 +19,13 @@ import type { Language } from 'cortico/core/language.ts';
 import type { Logger, ToolDef, ToolOutcome, World, WorldHost, WorldLamp, WorldWebUiDecl } from 'cortico/core/types.ts';
 import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
-import { officialVoice, OUTPUT_GAIN, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
+import { officialVoice, OUTPUT_GAIN, RUNTIME_EXTRACT_BYTES, RUNTIME_VERSION, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
+import { dirBytes, topLevelBytes } from './disk.ts';
 import { configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, RVC_INDEX_MAX, RVC_INDEX_MIN, RVC_PROTECT_MAX, RVC_PROTECT_MIN, RVC_TIMEOUT_MAX, RVC_TIMEOUT_MIN, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
 import { startHttpTts, SING_MARK, type HttpTtsHandle, type TtsJob } from './http-tts.ts';
 import { channelWords, languageWords, panelText, shareWords, stateWords } from './i18n.ts';
-import { isRuntimeDir, RuntimeJob, WeightsJob, type JobState } from './install.ts';
+import { isLinkEntry, isRuntimeDir, removeTreeSafely, RuntimeJob, WeightsJob, type JobState } from './install.ts';
 import { Player, applyGain, listOutputDevices } from './player.ts';
 import { RvcLink, type RvcProbe } from './rvc-link.ts';
 import { SovitsServer, type ServerState } from './server.ts';
@@ -158,6 +159,8 @@ export class GptSovitsWorld implements World {
   private cuda: boolean | null = null;
   /** 没检测到 NVIDIA 时的显卡厂商，只用来把「为什么走 CPU 档」说清楚（AMD 不支持 CUDA）。 */
   private gpu: GpuVendor | null = null;
+  /** 「已安装模型」的体积扫描结果；面板不是每秒都量，1 分钟内的重复请求直接复用。 */
+  private usageCache: { at: number; data: UsageState } | null = null;
   private stopped = false;
   private host: WorldHost | null = null;
   /** World 启动后到本机服务第一次就绪或失败之间。 */
@@ -1414,6 +1417,7 @@ export class GptSovitsWorld implements World {
       case 'restart': void this.restartServer(); return this.panelState();
       case 'test': return this.speak(String(args[0] ?? ''));
       case 'hush': this.hush(); return this.panelState();
+      case 'usage': return this.usage(args[0] === 'refresh');
       case 'setVoice': this.saveVoice(String(args[0] ?? ''), String(args[1] ?? ''), String(args[2] ?? '')); return this.panelState();
       case 'resetVoice': this.opts.persist({ voice: { preset: DEFAULT_PRESET, audio: '', text: '' } }); return this.panelState();
       case 'addVoice': return this.addCustomVoice(args);
@@ -1428,6 +1432,7 @@ export class GptSovitsWorld implements World {
         return this.panelState();
       }
       case 'removeVoice': this.removeCustomVoice(String(args[0] ?? '')); return this.panelState();
+      case 'uninstall': return this.uninstall(String(args[0] ?? ''));
       case 'useVoice': {
         const id = String(args[0] ?? '');
         if (id && !selectedCustomVoice(this.cfg.voices ?? [], id)) throw new Error('找不到这个自定义音色。');
@@ -1463,10 +1468,79 @@ export class GptSovitsWorld implements World {
       output: this.server.output().slice(-12),
     };
   }
+
+  /** 扫描已安装的运行时与权重，给出体积；`refresh` 跳过 10 分钟缓存。 */
+  async usage(refresh = false): Promise<UsageState> {
+    const now = Date.now();
+    if (!refresh && this.usageCache && now - this.usageCache.at < 600_000) return this.usageCache.data;
+    const items: UsageItem[] = [];
+    const root = join(this.opts.runtimesRoot(), 'gpt-sovits', RUNTIME_VERSION);
+    let entries: import('node:fs').Dirent[] = [];
+    try { entries = readdirSync(root, { withFileTypes: true }); } catch { /* 还没装过 */ }
+    for (const entry of entries) {
+      const path = join(root, entry.name);
+      if (!entry.isDirectory() || isLinkEntry(path)) continue;
+      const kind: UsageKind | null = entry.name.endsWith('.partial') ? 'partial'
+        : /\.old-\d+$/.test(entry.name) ? 'stale'
+          : (entry.name === 'cuda' || entry.name === 'cpu') ? 'runtime'
+            : null;
+      if (!kind) continue;
+      // 运行时是几万个文件，递归量要几十秒；面板用解压后的实测估算，标 ≈。
+      const tier: Tier | null = entry.name.startsWith('cuda') ? 'cuda' : entry.name.startsWith('cpu') ? 'cpu' : null;
+      const bytes = kind === 'partial' ? topLevelBytes(path) : tier ? RUNTIME_EXTRACT_BYTES[tier] : 0;
+      items.push({ id: entry.name, kind, dir: path, bytes, estimated: true });
+    }
+    const weightsDir = this.weights.dir();
+    // 权重只有几十个文件，递归量很快，给准确值。
+    if (existsSync(weightsDir)) items.push({ id: 'weights', kind: 'weights', dir: weightsDir, bytes: dirBytes(weightsDir) });
+    items.sort((a, b) => b.bytes - a.bytes);
+    const data: UsageState = { items, total: items.reduce((n, item) => n + item.bytes, 0), scannedAt: nowIso(this.opts.timezone) };
+    this.usageCache = { at: now, data };
+    return data;
+  }
+
+  /** 删掉一项：先停服务（Windows 上服务开着时删文件会被占用），再按联接安全的方式整目录删除。 */
+  private async uninstall(id: string): Promise<{ usage: UsageState; removed: { id: string; bytes: number } }> {
+    const current = await this.usage(true);
+    const item = current.items.find((i) => i.id === id);
+    if (!item) throw new Error(`没有可卸载的「${id}」`);
+    this.hush();
+    await this.server.stop();
+    try {
+      removeTreeSafely(item.dir);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EBUSY') throw new Error('文件仍被占用：请先停止推理服务再试一次。');
+      throw err;
+    }
+    this.usageCache = null;
+    this.log.info('已卸载模型文件', { id, dir: item.dir, bytes: item.bytes });
+    return { usage: await this.usage(true), removed: { id: item.id, bytes: item.bytes } };
+  }
 }
 
 /** 没检测到 NVIDIA 时的显卡厂商。 */
 export type GpuVendor = 'amd' | 'intel' | 'other';
+
+/** 「已安装模型」里的一项：运行时档、没下完的运行时、旧运行时残留，或 GPT-SoVITS 权重。 */
+export type UsageKind = 'runtime' | 'partial' | 'stale' | 'weights';
+
+export interface UsageItem {
+  /** 目录名：`cuda` / `cpu` / `cuda.partial` / `cuda.old-…` / `weights`。 */
+  id: string;
+  kind: UsageKind;
+  dir: string;
+  bytes: number;
+  /** 运行时目录太大没法每次递归量，`bytes` 是解压后的实测估算值。 */
+  estimated?: boolean;
+}
+
+export interface UsageState {
+  items: UsageItem[];
+  /** 全部卸载后可释放的字节数。 */
+  total: number;
+  scannedAt: string;
+}
 
 export interface PanelState {
   backend: Backend['kind'];
