@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { INLINE_TAG_MAX, promptLanguageOf, speechText, ttsPlain, ttsSafe } from '../src/speech-text.ts';
 import { parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth.ts';
 import { applyGain, upmix } from '../src/player.ts';
@@ -192,6 +193,19 @@ describe('sovits_speak 声明', () => {
     expect(params.properties.silent?.type).toBe('boolean');
     expect(params.additionalProperties).toBe(false);
     expect(params.required).toEqual(['text']);
+  });
+
+  // issue #538：说明与提示词的顺序必须一致——先 sovits_speak、紧跟 pet_say，同一回复连发不等回执。
+  it('说明与中英提示词都是先语音、紧跟 pet_say', () => {
+    const speak = SOVITS_TOOL_DECLS.find((t) => t.name === 'sovits_speak')!;
+    expect(speak.description).toContain('immediately followed by that pet_say');
+    expect(speak.description).toContain('without waiting for this result');
+    const zh = readFileSync(new URL('../src/ENV_PROMPT.md', import.meta.url), 'utf8');
+    expect(zh).toContain('先调用 `sovits_speak`');
+    expect(zh).toContain('紧接着调用 `pet_say`');
+    const en = readFileSync(new URL('../src/ENV_PROMPT.en.md', import.meta.url), 'utf8');
+    expect(en).toContain('call `sovits_speak` first in the same reply');
+    expect(en).toContain('then call `pet_say` with that same text right after it');
   });
 });
 

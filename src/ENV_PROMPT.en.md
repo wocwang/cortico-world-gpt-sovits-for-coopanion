@@ -4,7 +4,7 @@
 
 Speech language: {{sovits.language}} (this overrides your old habits or memories; later switches arrive as `[gpt-sovits.language]` events)
 
-When you have a line to say, call `pet_say` first so the bubble shows up, then call `sovits_speak` in the same reply to speak that same text (written per the speech-language rule above). The bubble text is independent of the speech language. Emit both calls in the same reply without waiting for `sovits_speak`'s result: tools run in order and `sovits_speak` only returns after the first audio chunk, so calling `pet_say` first is what makes the text appear before the voice. Questions from `pet_ask` are not read out.
+When you have a line to say, call `sovits_speak` first in the same reply to speak the text (written per the speech-language rule above), then call `pet_say` with that same text right after it. Emit both calls back-to-back without waiting for `sovits_speak`'s result: tools run in order, so the bubble appears as the voice begins. The bubble text is independent of the speech language. Questions from `pet_ask` are not read out.
 
 {{sovits.share}}
 

@@ -3,7 +3,7 @@
  * `sovits_hush` 停下当前一句并清空队列。
  *
  * `sovits_speak` 等这一句的第一块音频写进声卡才返回(至多 SPEAK_WAIT_MAX_MS)。主循环按顺序执行同一次回复里的
- * 工具调用，所以提示词要求先 `pet_say` 再 `sovits_speak`：气泡先出现，声音随后响起。
+ * 工具调用，所以提示词要求先 `sovits_speak`、紧跟 `pet_say`：气泡在声音响起时出现，不用任何时序接口。
  *
  * 推理后端三选一，优先级从高到低：配置的已有服务地址、配置的自备运行时目录、托管安装的运行时与权重。
  * 后两种由本 World 起子进程(见 server.ts),就绪后用中英日各一句预热，预热完才算可用。
@@ -493,7 +493,7 @@ export class GptSovitsWorld implements World {
     ];
   }
 
-  /** 排进队列，等这一句开始出声(或失败、被清空、超时)再返回。 */
+  /** 排进队列，等这一句开始出声(或失败、被清空、超时)再返回；不外放的句子没有声音要对齐，直接返回。 */
   private async speak(script: string, silent = false): Promise<ToolOutcome> {
     this.syncLanguage();
     // 以 `【唱】` 开头：这句不当台词念，交给唱歌插件唱出来并直接写进本机播放器（桌宠/对话页）。
@@ -545,7 +545,9 @@ export class GptSovitsWorld implements World {
       timer = setTimeout(done, SPEAK_WAIT_MAX_MS);
     });
     if (ready) void this.pump();
-    await started;
+    // 提示词现在是先 `sovits_speak` 再 `pet_say`，回执早晚决定气泡出现的时间：有声音的句子等第一块
+    // 音频写进声卡（至多 SPEAK_WAIT_MAX_MS）；不外放的句子没有声音要对齐，直接回执，免得气泡白等 3 秒。
+    if (!silent && this.cfg.playLocally) await started;
     clearTimeout(timer);
     const said = ahead ? `Queued after ${ahead} line(s).` : 'Speaking.';
     if (!finished) return { text: said };
