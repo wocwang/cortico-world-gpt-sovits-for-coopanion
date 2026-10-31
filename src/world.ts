@@ -1285,12 +1285,12 @@ export class GptSovitsWorld implements World {
     const port = this.cfg.httpPort || 9880;
     const voice = this.cfg.voice.preset || DEFAULT_PRESET;
     const values = [
-      { label: zh ? '实现方式' : 'Provider', value: 'local' },
-      { label: zh ? '发语音' : 'Send voice', value: 'true' },
-      { label: zh ? '语音模型网址' : 'Voice base URL', value: `http://127.0.0.1:${port}` },
-      { label: zh ? '音色' : 'Voice', value: voice },
-      { label: zh ? 'TTS 模型名' : 'TTS model', value: 'tts-1' },
-      { label: zh ? 'TTS 请求超时(秒)' : 'TTS timeout (s)', value: '120' },
+      { label: zh ? '实现方式' : 'Provider', value: 'local', copyable: false },
+      { label: zh ? '发语音' : 'Send voice', value: 'true', copyable: false },
+      { label: zh ? '语音模型网址' : 'Voice base URL', value: `http://127.0.0.1:${port}`, copyable: true },
+      { label: zh ? '音色' : 'Voice', value: voice, copyable: true },
+      { label: zh ? 'TTS 模型名' : 'TTS model', value: 'tts-1', copyable: true },
+      { label: zh ? 'TTS 请求超时(秒)' : 'TTS timeout (s)', value: '120', copyable: true },
     ];
     return { httpApi: !!this.cfg.httpApi, port, voice, tokenSet: !!this.cfg.httpToken, values };
   }
