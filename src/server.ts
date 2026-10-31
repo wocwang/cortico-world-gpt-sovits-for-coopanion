@@ -2,6 +2,7 @@
  * 本机 GPT-SoVITS 推理服务：在运行时目录里以 `runtime/python.exe -I -X utf8 -u api_v2.py` 起子进程(`-I` 下环境变量不生效，编码与无缓冲只能走参数)，监听 127.0.0.1 的空闲端口。
  * 启动方式与上游整合包的 go-webui.bat 一致(工作目录为运行时根,`runtime/` 在 PATH 最前)。
  * 托管运行时的 `GPT_SoVITS/pretrained_models` 在启动前接成指向权重目录的目录联接;自备目录原样使用。
+ * macOS 上解释器是 `runtime/bin/python3`、PATH 里加的是 `runtime/bin`；停服务时按进程组收，别留孤儿进程占端口。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -12,6 +13,7 @@ import type { Logger } from 'cortico/core/types.ts';
 import { weightPaths, type ModelVersion } from './catalog.ts';
 import type { Tier } from './config.ts';
 import { isLinkEntry, removeLink } from './install.ts';
+import { envWithRuntime, pythonInRuntime } from './platform.ts';
 import { patchRuntime } from './runtime-patch.ts';
 import type { TrainedWeights } from './weights.ts';
 
@@ -63,7 +65,8 @@ export function linkWeights(link: string, target: string): void {
     if (isLinkEntry(link)) removeLink(link);
     else rmSync(link, { recursive: true, force: true });
   }
-  symlinkSync(target, link, 'junction');
+  // Windows 用 junction；其它平台建普通目录符号链接（Node 在 POSIX 上不认 junction）。
+  symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
 }
 
 /**
@@ -149,7 +152,11 @@ export class SovitsServer {
     const done = new Promise<void>((finish) => {
       child.once('exit', () => finish());
       if (process.platform === 'win32') spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-      else child.kill('SIGTERM');
+      else if (process.platform === 'darwin') {
+        // macOS：子进程在独立进程组里（见 launch 的 detached），按组收，别留 python 子进程占端口。
+        try { process.kill(-child.pid!, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
+        setTimeout(() => { try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* 已经退出 */ } }, 4000).unref();
+      } else child.kill('SIGTERM');
       setTimeout(finish, 5000).unref();
     });
     this.stopping = done;
@@ -175,12 +182,13 @@ export class SovitsServer {
     writeFileSync(yaml, infererYaml(spec.tier, spec.version, spec.trained));
     const port = await freePort();
     const url = `http://127.0.0.1:${port}`;
-    const runtimeBin = join(spec.runtimeDir, 'runtime');
-    const child = spawn(join(runtimeBin, 'python.exe'), ['-I', '-X', 'utf8', '-u', 'api_v2.py', '-a', '127.0.0.1', '-p', String(port), '-c', yaml], {
+    const child = spawn(pythonInRuntime(spec.runtimeDir), ['-I', '-X', 'utf8', '-u', 'api_v2.py', '-a', '127.0.0.1', '-p', String(port), '-c', yaml], {
       cwd: spec.runtimeDir,
       windowsHide: true,
+      // macOS：放进独立进程组，停服务时按组收（api_v2 自己也会起子进程）。
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, PATH: `${runtimeBin};${process.env.PATH ?? ''}` },
+      env: envWithRuntime(spec.runtimeDir),
     });
     this.child = child;
     this.st = { phase: 'starting', url, pid: child.pid ?? null, detail: null, startMs: null };

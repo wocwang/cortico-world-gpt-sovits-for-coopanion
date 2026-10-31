@@ -3,9 +3,18 @@
  * 设备有两个以上输出声道时开双声道流，每个样本复制到左右两路;只开一个声道时 RtAudio 只送进左声道。
  * audify 的输出队列无界、`write()` 不阻塞，所以排队即顺序;`cut()` 关流丢弃队列里没播的部分。
  * 播完时刻按写入的帧数换算墙钟，只用来报「正在说」。
+ *
+ * macOS 上没有随包的 audify 预编译件：改成「每次 `flush()` 把这段 PCM 落成临时 WAV，交给系统自带的 `afplay` 依次播」，
+ * `cut()` 把正在播的和队列一起停掉。增益与软限幅仍在 Player 里做，afplay 只负责出声。
  */
+import { spawn, type ChildProcess } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Logger } from 'cortico/core/types.ts';
+import { useSystemPlayer } from './platform.ts';
+import { wavBytes } from './wav.ts';
 
 interface RtAudioLike {
   openStream(
@@ -85,6 +94,8 @@ function loadAudify(): AudifyModule {
 export interface OutputDevice { id: number; name: string; isDefault: boolean }
 
 export function listOutputDevices(): OutputDevice[] {
+  // macOS 用 afplay 出声，没有可枚举的设备：面板只留「系统默认」。
+  if (useSystemPlayer()) return [];
   const audify = loadAudify();
   const rt = new audify.RtAudio(apiOf(audify));
   const def = rt.getDefaultOutputDevice();
@@ -113,17 +124,31 @@ export class Player {
   private carry = Buffer.alloc(0);
   /** 写进去的音频预计播完的墙钟时刻。 */
   private endsAt = 0;
+  /** macOS：临时 WAV 的目录（用到时才建）。 */
+  private afplayDir: string | null = null;
+  /** macOS：正在播的那一条 afplay。 */
+  private afplayChild: ChildProcess | null = null;
+  /** macOS：排着的临时 WAV 与它的时长。 */
+  private afplayQueue: Array<{ file: string; ms: number }> = [];
+  private afplaySeq = 0;
 
   constructor(private readonly opts: PlayerOptions) {}
 
   /** 正在出声(按写入量估算)。 */
   get playing(): boolean {
+    if (useSystemPlayer()) return this.afplayChild !== null || this.afplayQueue.length > 0;
     return this.rt !== null && Date.now() < this.endsAt;
   }
 
   /** 排在已写入的音频后面播放。采样率或设备变了时等前面播完再重开流。 */
   async write(sampleRate: number, raw: Buffer, gain = 1): Promise<void> {
     const pcm = applyGain(raw, gain);
+    // macOS：先攒着，`flush()` 时整段落盘给 afplay，避免几十毫秒一个进程。
+    if (useSystemPlayer()) {
+      this.rate = sampleRate;
+      this.carry = Buffer.from(this.carry.length ? Buffer.concat([this.carry, pcm]) : pcm);
+      return;
+    }
     const device = this.opts.device();
     if (this.rt && (sampleRate !== this.rate || device !== this.openedDevice || this.defaultMoved())) {
       await this.drain();
@@ -142,6 +167,12 @@ export class Player {
 
   /** 一句写完：把不足一帧的尾巴补静音写出去。 */
   flush(): void {
+    if (useSystemPlayer()) {
+      const pcm = this.carry;
+      this.carry = Buffer.alloc(0);
+      if (pcm.length) this.enqueueAfplay(pcm, this.rate);
+      return;
+    }
     if (!this.rt || !this.carry.length) return;
     const frame = Buffer.alloc(this.frameBytes);
     this.carry.copy(frame);
@@ -152,15 +183,78 @@ export class Player {
 
   /** 立刻停下，丢掉没播的部分。 */
   cut(): void {
+    if (useSystemPlayer()) {
+      this.stopAfplay();
+      this.carry = Buffer.alloc(0);
+      return;
+    }
     this.close();
     this.endsAt = 0;
   }
 
   close(): void {
+    if (useSystemPlayer()) {
+      this.stopAfplay();
+      this.carry = Buffer.alloc(0);
+      this.removeAfplayDir();
+      return;
+    }
     this.carry = Buffer.alloc(0);
     if (!this.rt) return;
     try { if (this.rt.isStreamOpen()) this.rt.closeStream(); } catch (err) { this.opts.log.warn('关闭输出流失败', { err: String(err) }); }
     this.rt = null;
+  }
+
+  /** macOS：把一段 PCM 落成临时 WAV 排进播放队列。 */
+  private enqueueAfplay(pcm: Buffer, sampleRate: number): void {
+    try {
+      this.afplayDir ??= mkdtempSync(join(tmpdir(), 'cortico-gpt-sovits-'));
+      const file = join(this.afplayDir, `line-${Date.now()}-${this.afplaySeq++}.wav`);
+      writeFileSync(file, wavBytes(pcm, sampleRate));
+      this.afplayQueue.push({ file, ms: (pcm.length / 2 / sampleRate) * 1000 });
+      this.pumpAfplay();
+    } catch (err) {
+      this.opts.log.warn('macOS 播放：临时 WAV 写不出来', { err: String(err) });
+    }
+  }
+
+  /** macOS：当前没在播就取队列里的下一条，用系统 `afplay` 播。 */
+  private pumpAfplay(): void {
+    if (this.afplayChild || !this.afplayQueue.length) return;
+    const item = this.afplayQueue.shift()!;
+    const volume = Math.max(0, Math.min(1, this.opts.volume()));
+    const child = spawn('/usr/bin/afplay', ['-v', volume.toFixed(2), item.file], { stdio: 'ignore' });
+    this.afplayChild = child;
+    this.endsAt = Date.now() + item.ms;
+    const finish = (): void => {
+      rmSync(item.file, { force: true });
+      if (this.afplayChild !== child) return;
+      this.afplayChild = null;
+      this.pumpAfplay();
+    };
+    child.once('exit', finish);
+    child.once('error', (err) => {
+      this.opts.log.warn('macOS 播放：afplay 起不来', { err: String(err) });
+      finish();
+    });
+  }
+
+  /** macOS：停掉正在播的一条，清空队列与没写出的缓冲。 */
+  private stopAfplay(): void {
+    const child = this.afplayChild;
+    this.afplayChild = null;
+    if (child && child.exitCode === null) {
+      try { child.kill('SIGTERM'); } catch { /* 已经退出 */ }
+    }
+    for (const item of this.afplayQueue) rmSync(item.file, { force: true });
+    this.afplayQueue = [];
+    this.endsAt = 0;
+  }
+
+  private removeAfplayDir(): void {
+    const dir = this.afplayDir;
+    this.afplayDir = null;
+    if (dir) rmSync(dir, { recursive: true, force: true });
   }
 
   private drain(): Promise<void> {

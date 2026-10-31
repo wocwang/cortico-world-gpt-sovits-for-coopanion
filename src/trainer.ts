@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import type { Logger } from 'cortico/core/types.ts';
 import { RUNTIME_VERSION, TRAIN_ASSETS, type ModelVersion, type PinnedFile } from './catalog.ts';
 import { extract, fetchVerified } from './install.ts';
+import { envWithRuntime, pythonInRuntime } from './platform.ts';
 import { patchTrainer, TRAINER_PATCH_MARKER } from './runtime-patch.ts';
 import { freePort } from './server.ts';
 
@@ -215,15 +216,14 @@ export class TrainerManager {
       const patched = result === 'patched' || result === 'already';
       if (result === 'patched') this.opts.log.info('训练 WebUI 已打补丁', { marker: TRAINER_PATCH_MARKER, port });
       else if (result !== 'already') this.opts.log.warn('训练 WebUI 补丁未生效，改用上游默认端口探测', { result });
-      const runtimeBin = join(runtimeDir, 'runtime');
       this.push(`启动训练 WebUI，期望端口 ${port}`);
-      child = spawn(join(runtimeBin, 'python.exe'), ['-I', '-X', 'utf8', '-u', 'webui.py'], {
+      child = spawn(pythonInRuntime(runtimeDir), ['-I', '-X', 'utf8', '-u', 'webui.py'], {
         cwd: runtimeDir,
         windowsHide: true,
+        detached: process.platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
-          ...process.env,
-          PATH: `${runtimeBin};${process.env.PATH ?? ''}`,
+          ...envWithRuntime(runtimeDir),
           COOPANION_TRAINER_PORT: String(port),
           COOPANION_TRAINER_VERSION: this.opts.modelVersion(),
           // faster-whisper 缺模型时会从 Hugging Face 拉；国内直连不通，统一指向镜像。
@@ -385,12 +385,11 @@ export class TrainerManager {
   private pip(args: string[]): Promise<number> {
     return new Promise((done) => {
       const runtimeDir = this.opts.runtimeDir();
-      const runtimeBin = join(runtimeDir, 'runtime');
-      const child = spawn(join(runtimeBin, 'python.exe'), args, {
+      const child = spawn(pythonInRuntime(runtimeDir), args, {
         cwd: runtimeDir,
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, PATH: `${runtimeBin};${process.env.PATH ?? ''}` },
+        env: envWithRuntime(runtimeDir),
       });
       const onLine = (chunk: Buffer) => this.pushLines(chunk.toString('utf8'));
       child.stdout!.on('data', onLine);
@@ -444,7 +443,10 @@ export class TrainerManager {
       if (!child.pid || child.exitCode !== null) { done(); return; }
       child.once('exit', () => done());
       if (process.platform === 'win32') spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-      else child.kill('SIGTERM');
+      else if (process.platform === 'darwin') {
+        try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
+        setTimeout(() => { try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* 已经退出 */ } }, 4000).unref();
+      } else child.kill('SIGTERM');
       setTimeout(done, 5000).unref();
     });
   }

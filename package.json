@@ -27,6 +27,7 @@
                      "gpt-sovits"
                  ],
     "os":  [
+               "darwin",
                "win32"
            ],
     "engines":  {
