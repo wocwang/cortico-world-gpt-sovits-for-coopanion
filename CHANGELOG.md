@@ -1,5 +1,13 @@
 # Changelog
 
+## 未发布
+
+- **macOS 支持（自备运行时）**：`package.json` 的 `os` 加上 `darwin`，插件能在 macOS 上安装与启用；播放改走系统自带
+  的 `afplay`（不再要求随包的 win32-x64 audify 预编译件，`cut()` 会停掉正在播的那段并清空队列）；推理服务按平台选
+  解释器（Windows `runtime/python.exe` / macOS `runtime/bin/python3`）、PATH 取对应目录，停服务与停训练按进程组收，
+  不留孤儿进程；权重目录联接在非 Windows 上用普通目录符号链接。内置运行时包仍只有 win-x64，macOS 在配置里填
+  「自备运行时目录」即可用（README 有布局说明与实测速度）。平台差异集中在 `src/platform.ts`，有单测覆盖。
+
 ## 0.5.28
 
 - **新增「已安装模型」与一键卸载**：语音面板列出已安装的运行时（CUDA / CPU / 未完成的下载 / 旧运行时残留）

@@ -15,7 +15,7 @@ export type Tier = Exclude<TierSetting, 'auto'>;
 export interface GptSovitsConfigSection {
   enabled: boolean;
   tier: TierSetting;
-  /** 自备的 GPT-SoVITS 根目录(含 `runtime/python.exe` 与 `api_v2.py`);填了就不下载运行时。 */
+  /** 自备的 GPT-SoVITS 根目录(含 `runtime/` 与 `api_v2.py`);填了就不下载运行时。Windows 的 Python 在 runtime/python.exe，macOS 在 runtime/bin/python3。 */
   runtimeDir: string;
   /** 已在运行的 GPT-SoVITS api_v2 地址;填了就不启动本机运行时，也不下载。 */
   serverUrl: string;
@@ -202,7 +202,7 @@ const TEXT = {
     autoStart: { title: '随 Cortico 启动推理服务' },
     idle: { title: '闲置停服', description: '多久不说话就停掉本机推理服务，把显存和内存让出来；下一句会自动重新加载（显卡档通常十几秒）。0 为不停。只对本机服务生效。' },
     serverUrl: { title: '已有的 GPT-SoVITS 地址', description: '填写后连接这个 api_v2 服务，不在本机启动，也不下载运行时。' },
-    runtimeDir: { title: '自备运行时目录', description: '含 runtime/python.exe 与 api_v2.py 的 GPT-SoVITS 目录；填写后不下载运行时。' },
+    runtimeDir: { title: '自备运行时目录', description: '含 runtime/ 与 api_v2.py 的 GPT-SoVITS 目录（Windows 的 Python 在 runtime\\python.exe，macOS 在 runtime/bin/python3）；填写后不下载运行时。' },
     promptLanguage: { title: '提示词语言' },
   },
   en: {
@@ -249,7 +249,7 @@ const TEXT = {
     autoStart: { title: 'Start the inference server with Cortico' },
     idle: { title: 'Stop when idle', description: 'Stops the local inference server after this many minutes without speech, freeing VRAM and RAM; the next line reloads it (usually ten-odd seconds on GPU). 0 keeps it running. Local server only.' },
     serverUrl: { title: 'Existing GPT-SoVITS address', description: 'Connects to this api_v2 server instead of starting one here; nothing is downloaded.' },
-    runtimeDir: { title: 'Own runtime directory', description: 'A GPT-SoVITS directory with runtime/python.exe and api_v2.py; the runtime is not downloaded.' },
+    runtimeDir: { title: 'Own runtime directory', description: 'A GPT-SoVITS directory with runtime/ and api_v2.py (Python at runtime\\python.exe on Windows, runtime/bin/python3 on macOS); the runtime is not downloaded.' },
     promptLanguage: { title: 'Prompt language' },
   },
 };

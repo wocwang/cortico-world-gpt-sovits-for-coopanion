@@ -59,6 +59,15 @@
 **需要什么硬件？**
 有 NVIDIA 显卡自动走显卡档（V5 turbo，又快又好）；没有就自动走 CPU 档（v2ProPlus），能出声但慢一些。
 
+**macOS 上能用吗？**
+能，但内置运行时包只有 Windows 版（`runtime/python.exe` 那种整包），macOS 需要自备一份 GPT-SoVITS 运行时：
+
+1. 拉一份上游 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)（本插件钉的提交见 `src/catalog.ts` 的 `UPSTREAM_COMMIT`），把 Python 环境建在这个目录的 `runtime/` 下——`python3 -m venv runtime` 生成的就是 `runtime/bin/python3`，插件的平台适配按这个布局找解释器；
+2. 让目录结构是 `runtime/bin/python3` + `api_v2.py` + `GPT_SoVITS/`（按上游说明装好推理依赖），然后在插件配置里把「自备运行时目录」填成它，推理档选 CPU（Apple 芯片没有 CUDA）；
+3. 播放交给系统自带的 `afplay`，不依赖随包的 audify 预编译件；macOS 下不枚举输出设备，只用系统默认输出。
+
+CPU 推理在 Apple 芯片上能用但慢：M3 实测 11 字约 4.6 秒、25 字约 16 秒（同机 Windows + RTX 3090 是秒级）。训练面板在 macOS 上还没验证。
+
 **会联网吗？会泄露隐私吗？**
 联网只发生在**下载**运行时与模型的时候；之后所有语音合成都在你电脑上完成，**不上传任何录音与文本**。
 
