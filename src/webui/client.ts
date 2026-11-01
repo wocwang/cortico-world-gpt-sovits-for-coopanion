@@ -464,7 +464,7 @@ type QqGuide = {
   port: number;
   voice: string;
   tokenSet: boolean;
-  values: Array<{ label: string; value: string; copyable: boolean }>;
+  values: Array<{ label: string; value: string }>;
 };
 
 /** 「与其他插件联动」页底部的 QQ 对接说明：展示要填的值，由使用者去 QQ 插件页面里填。 */
@@ -482,7 +482,7 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
   const list = ui.h('div');
   const acts = ui.actions();
   let guide: QqGuide | null = null;
-  const codeText = () => (guide ? guide.values.filter((v) => v.copyable).map((v) => `${v.label} = ${v.value}`).join('\n') : '');
+  const codeText = () => (guide ? guide.values.map((v) => `${v.label} = ${v.value}`).join('\n') : '');
   const copyAll = ui.copyButton(() => codeText(), { label: t.qqCopyAll, size: 'sm' });
   acts.append(copyAll);
   sec.append(status, steps, list, acts);
@@ -499,8 +499,7 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
       for (const v of guide.values) {
         const line = ui.h('div', 'gsv-row');
         const copy = ui.actions();
-        // 「实现方式」「发语音」是 QQ 插件页面上的开关，不用复制；其余四项逐个给复制按钮。
-        if (v.copyable) copy.append(ui.copyButton(() => v.value, { label: t.copy, size: 'sm' }));
+        copy.append(ui.copyButton(() => v.value, { label: t.copy, size: 'sm' }));
         line.append(ui.h('span', 'gsv-name', v.label), ui.h('span', 'gsv-detail', v.value), copy);
         list.append(line);
       }
