@@ -479,13 +479,13 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
     ui.h('div', 'gsv-detail', `2. ${t.qqStep2}`),
     ui.h('div', 'gsv-detail', `3. ${t.qqStep3}`),
   );
-  const list = ui.h('div');
+  const code = ui.h('pre', 'gsv-output');
   const acts = ui.actions();
   let guide: QqGuide | null = null;
   const codeText = () => (guide ? guide.values.map((v) => `${v.label} = ${v.value}`).join('\n') : '');
   const copyAll = ui.copyButton(() => codeText(), { label: t.qqCopyAll, size: 'sm' });
   acts.append(copyAll);
-  sec.append(status, steps, list, acts);
+  sec.append(status, steps, code, acts);
   host.append(sec);
 
   const load = async () => {
@@ -495,14 +495,7 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
         guide.httpApi ? t.qqApiOn : t.qqApiOff,
         guide.tokenSet ? t.qqTokenWarn : '',
       ].filter(Boolean).join(' · ');
-      list.replaceChildren();
-      for (const v of guide.values) {
-        const line = ui.h('div', 'gsv-row');
-        const copy = ui.actions();
-        copy.append(ui.copyButton(() => v.value, { label: t.copy, size: 'sm' }));
-        line.append(ui.h('span', 'gsv-name', v.label), ui.h('span', 'gsv-detail', v.value), copy);
-        list.append(line);
-      }
+      code.textContent = guide.values.map((v) => `${v.label}：${v.value}`).join('\n');
     } catch (err) {
       status.textContent = errText(err);
     }
