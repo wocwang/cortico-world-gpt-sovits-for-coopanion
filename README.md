@@ -2,7 +2,7 @@
 
 `@wocwang/cortico-world-gpt-sovits-for-coopanion`
 
-给 Coopanion 桌宠配上真实的 GPT-SoVITS 语音：桌宠每次说话，插件就在**你自己的电脑上**把这句话合成出来、从声卡播出。全程本机运行，不上传任何录音。NVIDIA 显卡走 V5 turbo；AMD 显卡分两路——官方支持的型号走 ROCm 档（V5 turbo），其余用 CPU 档（v2ProPlus，速度较慢但可用）。
+给 Coopanion 桌宠配上真实的 GPT-SoVITS 语音：桌宠每次说话，插件就在**你自己的电脑上**把这句话合成出来、从声卡播出。全程本机运行，不上传任何录音。NVIDIA 显卡走 V5 turbo；**AMD 显卡已支持（实验性功能，欢迎反馈）**——官方名单内的型号自动走 ROCm 档（同为 V5 turbo），名单外会提示「当前显卡不在支持名单内」，没有独立显卡或 Intel 显卡走 CPU 档（v2ProPlus，慢一些但能用）。
 
 ## 和另外两个声音插件一起用
 

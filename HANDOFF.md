@@ -13,7 +13,7 @@
 - **一句话目标**：让 Coopanion 桌宠用自己的声音说话——本机 GPT-SoVITS 合成、从声卡播出；现在再加一档：官方支持的 AMD 显卡用 ROCm 跑 V5 turbo，其余 AMD 继续 CPU 档。
 - **本轮已完成**：按主人要求把 0.5.29（认证整改）整体回退，恢复到 0.5.28 的「一键写入 QQ 配置」；在这条线上实现 `rocm` 推理档（代码与测试完成，运行时包未构建）。
 - **验收标准**：
-  - 包内：`pnpm typecheck` 通过、`pnpm test` 全绿（当前 14 文件 148 例）、`pnpm build` 产出 `dist/webui.js`；
+  - 包内：`pnpm typecheck` 通过、`pnpm test` 全绿（当前 14 文件 150 例）、`pnpm build` 产出 `dist/webui.js`；
   - 二级：Cortico checkout 里 `describe:extension` + `check:extension` 通过（本轮已过，见 §2）；
   - 三级：由有 A 卡的人按 [docs/rocm-acceptance.md](docs/rocm-acceptance.md) 实测并在 #228 回帖；
   - 发布：ROCm 运行时包上传后回填 `catalog.ts` 的 bytes/SHA-256/分片，再 `npm publish`。
@@ -29,7 +29,7 @@
   - 加上原 `75a5792`/`962bf9e`/`8ed1d42`/`e683abc`/`ff19b29`，全部只在本地；**0.5.29 不推送、不发布、#542 不回帖**（主人决定）。
 - **按 #228 最新评论做的修正**：@goumo514 报「语音说的话和气泡里的不一样，大肥鱼意识不到」。现在 `sovits_speak` 的回执带 `Said: "…"`（翻译模式注明是译文），提示词要求中文/自动模式下 text 必须是这次 `pet_say` 的逐字副本、翻译模式气泡保持原文；面板「试听」下方显示最近念的一句。翻译从 `pump` 提前到入队前，回执与合成用的是同一份文字。
 - **实测数据（本轮）**：
-  - `pnpm typecheck` 通过；`pnpm test` **14 文件 148 例全过**；`pnpm build` 产出 `dist/webui.js` 36.2 KB、`dist/webui.css` 0.9 KB。
+  - `pnpm typecheck` 通过；`pnpm test` **14 文件 150 例全过**；`pnpm build` 产出 `dist/webui.js` 36.5 KB、`dist/webui.css` 0.9 KB。
   - **ROCm 运行时包已在本机打出**：`gpt-sovits-e91506f-1-win-x64-rocm.zip` **3,140,067,689 B**，
     SHA-256 `0b3f7f709f7f5f7f0dde62488a7bcab0a4d31dce46d1cf53ecc0e6bbbdccc945`，解压 **7,077 MiB**，共 42,396 个条目；
     分片 `.part0` 1,992,294,400 B、`.part1` 1,147,773,289 B。包内 `torch 2.14.0+rocm10.1.0`、`torchaudio 2.11.0.3`、
@@ -112,7 +112,7 @@
 
 ## 7. 交接说明
 
-- **接手方先做**：跑 §6 的 `typecheck`/`test` 核对 148 例；`git log --oneline -8` 核对 §2 的提交；确认 `package.json` 版本是 `0.6.0`、本机安装是 `0.5.28`。
+- **接手方先做**：跑 §6 的 `typecheck`/`test` 核对 150 例；`git log --oneline -8` 核对 §2 的提交；确认 `package.json` 版本是 `0.6.0`、本机安装是 `0.5.28`。
 - **下一步**：按 §4 第 1 条找一台有 `uv` + Git Bash 的机器打 ROCm 包，再回填 catalog。
 - **可以直接发给下一个接手方的提示词**：
 

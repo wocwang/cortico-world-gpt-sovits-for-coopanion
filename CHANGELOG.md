@@ -16,8 +16,10 @@
   避免双显卡机器上第一个卷积就 `hipErrorInvalidKernelFile`；探针结果缓存 7 天。
 - **torchaudio 解码兜底**：ROCm 版 torchaudio 的 `load` 只走 TorchCodec，运行时里用 soundfile 顶上
   （构建期写进 `sitecustomize.py`，不是运行期改包）。
-- 面板新增「AMD ROCm」档位标签，以及「检测到 A 卡但不在官方列表 / ROCm 运行时还没发布 / 路径太长」三类说明；
-  「已安装模型」里能单独看到并卸载 ROCm 运行时。
+- 面板新增「AMD ROCm」档位标签，以及「当前显卡不在支持名单内 / 没检测到支持的独立显卡 / ROCm 运行时还没发布 /
+  路径太长」四类说明；核显不再被说成「显卡不在支持名单」。「已安装模型」里能单独看到并卸载 ROCm 运行时。
+- **「自动」档有保险**：ROCm 推理服务起不来时，把 `worlds.gpt-sovits.tier` 写回 CPU 并在日志与面板说明，
+  A 卡第一次真机跑不会卡在一个起不来的档上；显式选了 ROCm 的不动，照实报错。AMD 支持整体标为实验性。
 - **模型版本可以单挑了**：新增「模型版本」选项（跟随推理档 / V5 turbo / V2 Pro Plus）。显卡与 ROCm 档默认还是 V5 turbo，
   嫌它音色偏「电」的可以选 V2 Pro Plus——慢一些、首次切换多下约 300 MB 权重，但自备的 V2 Pro Plus（`06` 头）LoRA
   在显卡档不再被「版本与推理档不符」挡住；CPU 档仍只能用 V2 Pro Plus。换版本会重启一次推理服务。
