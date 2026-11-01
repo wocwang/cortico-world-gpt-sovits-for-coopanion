@@ -141,7 +141,9 @@ const voicePanel: WebUiPanel = {
         ? (s.cudaFound ? t.tierAuto(true)
           : s.amd.kind === 'supported'
             ? (s.tier === 'rocm' ? t.tierAutoRocm(s.amd.gpu.gfx) : t.tierRocmUnpublished(s.amd.gpu.gfx))
-            : s.gpu === 'amd' ? t.tierAmdUnsupported : t.tierAuto(false))
+            : s.gpu === 'amd'
+              ? (s.amd.kind === 'unsupported' && s.amd.integrated ? t.tierNoDiscrete : t.tierAmdUnsupported(s.amd.kind === 'unsupported' ? s.amd.name : ''))
+              : t.tierAuto(false))
         : s.tier === 'cuda' && !s.cudaFound ? t.tierCudaMissing(s.gpu)
           : s.tier === 'rocm' && s.amd.kind !== 'supported' ? t.tierRocmMissing(s.amd.kind === 'unsupported' ? s.amd.name : null)
             : '';

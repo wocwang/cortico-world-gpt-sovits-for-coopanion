@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { amdProbeFrom, buildFromRelease, parseHipProbe, pathTooLong, pickHipDevice, pickTier } from '../src/gpu.ts';
+import { amdProbeFrom, buildFromRelease, fallbackToCpu, parseHipProbe, pathTooLong, pickHipDevice, pickTier } from '../src/gpu.ts';
 
 const supported = (name: string) => amdProbeFrom([name]);
 
@@ -34,6 +34,21 @@ describe('AMD 显卡识别', () => {
   it('驱动版本按同名下标带上，缺的给 null', () => {
     const probe = amdProbeFrom(['Intel(R) UHD Graphics', 'AMD Radeon RX 9070'], [null, '32.0.32015.7029']);
     expect(probe).toEqual({ kind: 'supported', gpu: { name: 'Radeon RX 9070', gfx: 'gfx1201' }, driver: '32.0.32015.7029' });
+  });
+});
+
+describe('核显与回落', () => {
+  it('只有核显时标成 integrated，面板不该说「显卡不在支持名单」', () => {
+    expect(supported('AMD Radeon(TM) Graphics')).toMatchObject({ kind: 'unsupported', integrated: true });
+    expect(supported('AMD Radeon 780M Graphics')).toMatchObject({ kind: 'unsupported', integrated: true });
+    expect(supported('AMD Radeon RX 6600')).toMatchObject({ kind: 'unsupported', integrated: false });
+  });
+
+  it('只有「自动」选出来的 ROCm 会回落 CPU，显式选择不动', () => {
+    expect(fallbackToCpu('auto', 'rocm')).toBe(true);
+    expect(fallbackToCpu('rocm', 'rocm')).toBe(false);
+    expect(fallbackToCpu('auto', 'cuda')).toBe(false);
+    expect(fallbackToCpu('auto', 'cpu')).toBe(false);
   });
 });
 

@@ -18,11 +18,14 @@ export interface AmdGpu {
   gfx: AmdGfx;
 }
 
-/** AMD 显卡的探测结果：官方支持、有 A 卡但不在列表、没有 A 卡。 */
+/** AMD 显卡的探测结果：官方支持、有 A 卡但不在列表（再分独显 / 核显）、没有 A 卡。 */
 export type AmdProbe =
   | { kind: 'supported'; gpu: AmdGpu; driver: string | null }
-  | { kind: 'unsupported'; name: string; driver: string | null }
+  | { kind: 'unsupported'; name: string; driver: string | null; integrated: boolean }
   | { kind: 'none' };
+
+/** 核显的名字：只有核显的机器不该被提示「显卡不在支持名单」，那会让人以为买错了卡。 */
+const AMD_IGPU = /radeon\(tm\) graphics|radeon graphics|vega\s*\d|radeon\s+\d{3}m\b|ryzen.*graphics|raphael|renoir|cezanne|rembrandt|phoenix|hawk point|strix|granite ridge|mendocino|barcelo|lucienne|picasso|raven/i;
 
 export interface GpuInfo {
   nvidia: boolean;
@@ -47,7 +50,7 @@ const AMD_CARDS: ReadonlyArray<{ re: RegExp; name: string; gfx: AmdGfx }> = [
 
 /** 从显卡名与驱动版本里挑出官方支持的那张；两个数组一一对应，缺驱动时传 null。 */
 export function amdProbeFrom(names: readonly string[], drivers: readonly (string | null)[] = []): AmdProbe {
-  let fallback: { name: string; driver: string | null } | null = null;
+  let fallback: { name: string; driver: string | null; integrated: boolean } | null = null;
   for (const [i, raw] of names.entries()) {
     const name = raw.trim();
     if (!/amd|radeon/i.test(name)) continue;
@@ -56,9 +59,14 @@ export function amdProbeFrom(names: readonly string[], drivers: readonly (string
     for (const card of AMD_CARDS) {
       if (card.re.test(lower)) return { kind: 'supported', gpu: { name: card.name, gfx: card.gfx }, driver };
     }
-    fallback ??= { name, driver };
+    fallback ??= { name, driver, integrated: AMD_IGPU.test(name) };
   }
   return fallback ? { kind: 'unsupported', ...fallback } : { kind: 'none' };
+}
+
+/** 服务起不来时要不要把「自动」档写回 CPU：只有自动选出来的 ROCm 才回落，用户显式选的档不动。 */
+export function fallbackToCpu(setting: TierSetting, current: Tier): boolean {
+  return setting === 'auto' && current === 'rocm';
 }
 
 /** `auto` 的优先级：NVIDIA 显卡档 → 官方矩阵内的 AMD 卡走 ROCm 档 → CPU 档。显式选择一律尊重。 */

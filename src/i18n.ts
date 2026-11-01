@@ -21,7 +21,8 @@ const PANEL = {
     tierAuto: (found: boolean): string => (found ? '自动：检测到 NVIDIA 显卡' : '自动：没有检测到 NVIDIA 显卡'),
     tierAutoRocm: (gfx: string): string => `自动：检测到 AMD 显卡（${gfx}），使用 ROCm 档`,
     tierRocmUnpublished: (gfx: string): string => `自动：检测到 AMD 显卡（${gfx}），但 ROCm 运行时还没发布，先用 CPU 档`,
-    tierAmdUnsupported: '自动：检测到 AMD 显卡，但不在官方 ROCm 支持列表，使用 CPU 档',
+    tierAmdUnsupported: (name: string): string => `自动：检测到 ${name}，当前显卡不在支持名单内，使用 CPU 档`,
+    tierNoDiscrete: '自动：没有检测到支持的独立显卡，使用 CPU 档',
     tierCudaMissing: (vendor: string | null): string => (vendor === 'amd'
       ? '本机是 AMD 显卡，没有 NVIDIA CUDA；要 GPU 加速请选「AMD ROCm」或「自动」'
       : '没有检测到 NVIDIA 显卡，显卡档可能起不来；请改回「自动」或「CPU」'),
@@ -182,7 +183,8 @@ const PANEL = {
     tierAuto: (found: boolean) => (found ? 'Auto: NVIDIA GPU found' : 'Auto: no NVIDIA GPU found'),
     tierAutoRocm: (gfx: string) => `Auto: AMD GPU found (${gfx}); using the ROCm tier`,
     tierRocmUnpublished: (gfx: string) => `Auto: AMD GPU found (${gfx}), but the ROCm runtime is not published yet; using the CPU tier`,
-    tierAmdUnsupported: 'Auto: AMD GPU found but not on the official ROCm list; using the CPU tier',
+    tierAmdUnsupported: (name: string): string => `Auto: ${name} is not on the supported list; using the CPU tier`,
+    tierNoDiscrete: 'Auto: no supported discrete GPU found; using the CPU tier',
     tierCudaMissing: (vendor: string | null) => (vendor === 'amd'
       ? 'This machine has an AMD GPU, not NVIDIA CUDA; pick "AMD ROCm" or Auto for GPU acceleration'
       : 'No NVIDIA GPU found; the GPU tier may fail to start — switch to Auto or CPU'),

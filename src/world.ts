@@ -20,7 +20,7 @@ import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
 import { officialVoice, OUTPUT_GAIN, resolveModelVersion, RUNTIME_ASSETS, RUNTIME_EXTRACT_BYTES, RUNTIME_VERSION, weightPaths, type ModelVersion } from './catalog.ts';
 import { dirBytes, topLevelBytes } from './disk.ts';
-import { detectGpus, pickTier, type AmdProbe, type GpuVendor } from './gpu.ts';
+import { detectGpus, fallbackToCpu, pickTier, type AmdProbe, type GpuVendor } from './gpu.ts';
 import { configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, RVC_INDEX_MAX, RVC_INDEX_MIN, RVC_PROTECT_MAX, RVC_PROTECT_MIN, RVC_TIMEOUT_MAX, RVC_TIMEOUT_MIN, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
 import { startHttpTts, SING_MARK, type HttpTtsHandle, type TtsJob } from './http-tts.ts';
@@ -798,7 +798,7 @@ export class GptSovitsWorld implements World {
   async start(host: WorldHost): Promise<void> {
     this.log = host.log;
     this.host = host;
-    this.server = new SovitsServer(this.log, (detail) => this.announce(false, detail));
+    this.server = new SovitsServer(this.log, (detail) => this.onServerExit(detail));
     this.stopped = false;
     this.announced = null;
     this.sleeping = false;
@@ -822,6 +822,19 @@ export class GptSovitsWorld implements World {
     if (this.launching && this.canStart()) void this.startServer().finally(() => { this.launching = false; });
     else this.launching = false;
     void this.startHttpApi();
+  }
+
+  /**
+   * 推理服务意外退出。ROCm 档如果是「自动」选出来的，就把它写回 CPU：
+   * A 卡第一次真机跑不能卡在一个起不来的档上。显式选了 ROCm 的不动，由面板如实报错。
+   */
+  private onServerExit(detail: string): void {
+    this.announce(false, detail);
+    if (!fallbackToCpu(this.cfg.tier, this.tier())) return;
+    this.log.warn('ROCm 推理服务起不来，「自动」档回落到 CPU', { detail });
+    this.lastError = detail;
+    this.weightsFailed = '';
+    this.opts.persist({ tier: 'cpu' });
   }
 
   /** 可用性变了才推事件;World 刚启动时第一次变为可用也报，因为前缀里写的是「启动中」。 */
