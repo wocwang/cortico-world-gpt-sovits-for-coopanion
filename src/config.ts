@@ -1,6 +1,7 @@
 import type { ConfigGroup } from 'cortico/core/types.ts';
 import { pick, type Language } from 'cortico/core/language.ts';
 import type { CustomVoice } from './custom-voice.ts';
+import type { VoiceModelSetting } from './catalog.ts';
 import type { RvcLinkConfig } from './rvc-link.ts';
 import type { SpeechLang } from './synth.ts';
 import { DEFAULT_PRESET } from './voices.ts';
@@ -18,6 +19,11 @@ export type Tier = Exclude<TierSetting, 'auto'>;
 export interface GptSovitsConfigSection {
   enabled: boolean;
   tier: TierSetting;
+  /**
+   * 底模版本：`auto` 跟档位（显卡/ROCm 档 v5turbo、CPU 档 v2ProPlus）。
+   * 显卡档可以显式选 `v2ProPlus`——v5turbo 的音色偏「电」，自备的 v2ProPlus LoRA 也只有这时才装得上。
+   */
+  voiceModel: VoiceModelSetting;
   /** 自备的 GPT-SoVITS 根目录(含 `runtime/python.exe` 与 `api_v2.py`);填了就不下载运行时。 */
   runtimeDir: string;
   /** 已在运行的 GPT-SoVITS api_v2 地址;填了就不启动本机运行时，也不下载。 */
@@ -122,6 +128,7 @@ export const SEED_RANDOM = -1;
 export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   enabled: false,
   tier: 'auto',
+  voiceModel: 'auto',
   runtimeDir: '',
   serverUrl: '',
   autoStart: true,
@@ -155,6 +162,7 @@ const K = `worlds.${GPT_SOVITS_ID}`;
 
 /** `x-options` 的选项源，由定义的 `configOptions` 给出。 */
 export const TIER_OPTIONS = `${GPT_SOVITS_ID}:tier`;
+export const MODEL_VERSION_OPTIONS = `${GPT_SOVITS_ID}:model-version`;
 export const DEVICE_OPTIONS = `${GPT_SOVITS_ID}:output-device`;
 export const PROMPT_LANGUAGE_OPTIONS = `${GPT_SOVITS_ID}:prompt-language`;
 export const TEXT_LANGUAGE_OPTIONS = `${GPT_SOVITS_ID}:text-language`;
@@ -171,7 +179,8 @@ const TEXT = {
     audio: { title: '参考音频', description: '3–10 秒的 WAV。这里是当前音色的参考音频，与「音色」页同步。' },
     text: { title: '参考音频的台本', description: '参考音频里说的话，要逐字一致。' },
     gptWeights: { title: '自备 GPT 权重', description: '自己训的 s1 权重(.ckpt)。与下面的 SoVITS 权重一起填才生效；都留空就用内置底模。选自定义音色时，这里改的是该音色自带的权重。' },
-    sovitsWeights: { title: '自备 SoVITS 权重', description: '自己训的 s2 权重(.pth)，版本要和推理档一致(显卡档 v5turbo / CPU 档 v2ProPlus)。服务在跑时改这两项会就地换权重，不用重启。' },
+    sovitsWeights: { title: '自备 SoVITS 权重', description: '自己训的 s2 权重(.pth)，版本要和「模型版本」一致（V5 turbo 的 LoRA 头是 08，V2 Pro Plus 是 06）。服务在跑时改这两项会就地换权重，不用重启。' },
+    voiceModel: { title: '模型版本', auto: '跟随推理档', v5turbo: 'V5 turbo（快，音色偏电）', v2ProPlus: 'V2 Pro Plus（更自然，慢一些）', description: '用哪套底模。跟随推理档时：显卡 / ROCm 档用 V5 turbo，CPU 档用 V2 Pro Plus。显卡档也可以手动选 V2 Pro Plus——V5 turbo 的音色偏「电」，V2 Pro Plus 更自然但慢一些，切换要多下约 300 MB 权重；CPU 档只能用 V2 Pro Plus。修改后推理服务会重启一次。' },
     tier: { title: '推理档', auto: '自动', cuda: '显卡(NVIDIA)', rocm: '显卡(AMD ROCm)', cpu: 'CPU', description: '自动：检测到 NVIDIA 显卡用显卡档；没有 NVIDIA 但有官方支持的 AMD 显卡（RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700）就用 ROCm 档；其余用 CPU 档。AMD 需要 Windows 11、Adrenalin 26.2.2 或更新，且系统开启长路径（安装前会检查，不会自己改系统）。Intel 显卡与不在列表里的 AMD 显卡只能用 CPU 档。显卡档约 2–3 GB 显存（按需加载后约 1.5–2.5 GB），ROCm 档约 2 GB 显存；CPU 档约 4–6 GB 内存。修改后重启推理服务生效。' },
     speed: { title: '语速', description: '1 为原速。' },
     textLang: {
@@ -218,7 +227,8 @@ const TEXT = {
     audio: { title: 'Reference audio', description: 'A 3–10 second WAV. The reference audio of the current voice, kept in sync with the "Voices" page.' },
     text: { title: 'Reference transcript', description: 'The exact words spoken in the reference audio.' },
     gptWeights: { title: 'Own GPT weights', description: 'Your own trained s1 weights (.ckpt). Takes effect together with the SoVITS weights below; leave both empty to use the bundled base model. For a custom voice these are the voice’s own weights.' },
-    sovitsWeights: { title: 'Own SoVITS weights', description: 'Your own trained s2 weights (.pth). Its version must match the tier (v5turbo on GPU, v2ProPlus on CPU). Editing either field switches the running server in place, no restart.' },
+    sovitsWeights: { title: 'Own SoVITS weights', description: 'Your own trained s2 weights (.pth). Its version must match the model version (v5turbo LoRA header is 08, v2ProPlus is 06). Editing either field switches the running server in place, no restart.' },
+    voiceModel: { title: 'Model version', auto: 'Follow the tier', v5turbo: 'V5 turbo (fast, metallic timbre)', v2ProPlus: 'V2 Pro Plus (more natural, slower)', description: 'Which base model to use. Follow the tier: V5 turbo on the GPU / ROCm tier, V2 Pro Plus on the CPU tier. The GPU tier can also use V2 Pro Plus by hand — V5 turbo sounds metallic, V2 Pro Plus is more natural but slower, and switching downloads about 300 MB more weights; the CPU tier is V2 Pro Plus only. The inference server restarts once after a change.' },
     tier: { title: 'Inference tier', auto: 'Auto', cuda: 'GPU (NVIDIA)', rocm: 'GPU (AMD ROCm)', cpu: 'CPU', description: 'Auto uses the GPU tier when an NVIDIA GPU is found; without one, an AMD card from the official list (RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700) uses the ROCm tier; everything else uses the CPU tier. AMD needs Windows 11, Adrenalin 26.2.2 or newer, and long paths enabled in Windows (checked before installing; the plugin never changes system settings itself). Intel GPUs and AMD cards outside the list can only use the CPU tier. GPU tier: about 2–3 GB VRAM (1.5–2.5 GB with on-demand loading); ROCm tier: about 2 GB VRAM; CPU tier: about 4–6 GB RAM. Takes effect when the inference server restarts.' },
     speed: { title: 'Speech rate', description: '1 is the original rate.' },
     textLang: {
@@ -260,6 +270,11 @@ const TEXT = {
 export function tierOptions(language: Language): Array<{ value: string; label: string }> {
   const t = pick(language, TEXT).tier;
   return [{ value: 'auto', label: t.auto }, { value: 'cuda', label: t.cuda }, { value: 'rocm', label: t.rocm }, { value: 'cpu', label: t.cpu }];
+}
+
+export function modelVersionOptions(language: Language): Array<{ value: string; label: string }> {
+  const t = pick(language, TEXT).voiceModel;
+  return [{ value: 'auto', label: t.auto }, { value: 'v5turbo', label: t.v5turbo }, { value: 'v2ProPlus', label: t.v2ProPlus }];
 }
 
 export const promptLanguageOptions = (): Array<{ value: string; label: string }> =>
@@ -353,6 +368,7 @@ export function configGroups(language: Language): ConfigGroup[] {
         description: t.groupService.description,
         properties: {
           [`${K}.tier`]: { type: 'string', title: t.tier.title, description: t.tier.description, 'x-options': TIER_OPTIONS, 'x-hot': true },
+          [`${K}.voiceModel`]: { type: 'string', title: t.voiceModel.title, description: t.voiceModel.description, 'x-options': MODEL_VERSION_OPTIONS, 'x-hot': true },
           [`${K}.autoStart`]: { type: 'boolean', title: t.autoStart.title, 'x-hot': true },
           [`${K}.idleMinutes`]: { type: 'number', title: t.idle.title, description: t.idle.description, minimum: 0, multipleOf: 1, 'x-hot': true },
           [`${K}.serverUrl`]: { type: 'string', title: t.serverUrl.title, description: t.serverUrl.description, 'x-hot': true },

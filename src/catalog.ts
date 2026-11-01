@@ -35,6 +35,9 @@ export interface RuntimeAsset {
 
 const MS_OWN = 'https://www.modelscope.cn/models/Phantivia/gpt-sovits-for-coopanion/resolve/master';
 const GH_OWN = `https://github.com/Phantivia/cortico-world-gpt-sovits-for-coopanion/releases/download/runtime-${RUNTIME_VERSION}`;
+/** ROCm 档由本仓自己托管：整包放魔搭，分片放本仓的 GitHub Release。 */
+const MS_SELF = 'https://www.modelscope.cn/models/wocwang/gpt-sovits-for-coopanion/resolve/master';
+const GH_SELF = `https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion/releases/download/runtime-${RUNTIME_VERSION}`;
 
 const CUDA_FILE = `gpt-sovits-${RUNTIME_VERSION}-win-x64-cu128.zip`;
 const CPU_FILE = `gpt-sovits-${RUNTIME_VERSION}-win-x64-cpu.zip`;
@@ -44,8 +47,9 @@ const ROCM_FILE = `gpt-sovits-${RUNTIME_VERSION}-win-x64-rocm.zip`;
  * 魔搭放整包;GitHub Release 放不下 2 GiB 以上的整包，显卡档在那里只有分片。
  *
  * `rocm` 是独立的一档，绝不覆盖共享的 `cuda` 目录（本插件、RVC、DiffSinger 共用
- * `runtimes/gpt-sovits/<版本>/<档>`）。包还没构建上传时 `bytes` 为 0，`RuntimeJob.published()`
- * 据此在面板上说「这一档还没有发布运行时包」；上传后把实测的整包字节、SHA-256 与分片字节填进来。
+ * `runtimes/gpt-sovits/<版本>/<档>`）。`bytes` 为 0 表示这一档还没发布，`RuntimeJob.published()`
+ * 据此在面板上说清楚，`auto` 也会退回 CPU；发布时把整包实测字节、SHA-256 与分片字节填进来。
+ * 2026-11-01 的包：3,140,067,689 B，两片（1,992,294,400 + 1,147,773,289），解压后 7,077 MiB。
  */
 export const RUNTIME_ASSETS: Readonly<Record<Tier, RuntimeAsset>> = {
   cuda: {
@@ -67,9 +71,13 @@ export const RUNTIME_ASSETS: Readonly<Record<Tier, RuntimeAsset>> = {
   },
   rocm: {
     file: ROCM_FILE,
-    bytes: 0,
-    sha256: '',
-    sources: [],
+    bytes: 3140067689,
+    sha256: '0b3f7f709f7f5f7f0dde62488a7bcab0a4d31dce46d1cf53ecc0e6bbbdccc945',
+    sources: [`${MS_SELF}/runtime/${ROCM_FILE}`],
+    parts: [
+      { bytes: 1992294400, sources: [`${GH_SELF}/${ROCM_FILE}.part0`] },
+      { bytes: 1147773289, sources: [`${GH_SELF}/${ROCM_FILE}.part1`] },
+    ],
   },
 };
 
@@ -85,12 +93,23 @@ export const TIER_MODEL: Readonly<Record<Tier, ModelVersion>> = {
 
 export type ModelVersion = 'v5turbo' | 'v2ProPlus';
 
+/** 配置里的模型版本：`auto` 跟档位走；也可以显式选一套底座。 */
+export type VoiceModelSetting = 'auto' | ModelVersion;
+
+/**
+ * 选定的模型版本。`auto` 按档位；CPU 档上 v5turbo 跑不动（社区实测 >300 s 无输出），
+ * 配置里写了 v5turbo 也退回 v2ProPlus——不然用户以为换了版本，实际只是永远不出声。
+ */
+export function resolveModelVersion(setting: VoiceModelSetting, tier: Tier): ModelVersion {
+  if (tier === 'cpu') return 'v2ProPlus';
+  return setting === 'auto' ? TIER_MODEL[tier] : setting;
+}
+
 /** 运行时解压后大约占多少字节（实测），面板上估算可释放空间用；精确值要递归扫几万个文件，太慢。 */
 export const RUNTIME_EXTRACT_BYTES: Readonly<Record<Tier, number>> = {
   cuda: 11_300_000_000,
-  // ROCm 档 = CPU 档的底子换掉 torch，再加 rocm-sdk-core/-libraries 与四套设备内核；
-  // 按 wheel 体积估 6.8 GB，构建出整包后按解压实测回填。
-  rocm: 6_800_000_000,
+  // 实测：本仓打出的 ROCm 整包解压后 7,077 MiB（含四套 gfx 内核）。
+  rocm: 7_420_772_352,
   cpu: 2_210_000_000,
 };
 

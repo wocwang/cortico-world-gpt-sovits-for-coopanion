@@ -18,7 +18,7 @@ import type { Language } from 'cortico/core/language.ts';
 import type { Logger, ToolDef, ToolOutcome, World, WorldHost, WorldLamp, WorldWebUiDecl } from 'cortico/core/types.ts';
 import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
-import { officialVoice, OUTPUT_GAIN, RUNTIME_ASSETS, RUNTIME_EXTRACT_BYTES, RUNTIME_VERSION, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
+import { officialVoice, OUTPUT_GAIN, resolveModelVersion, RUNTIME_ASSETS, RUNTIME_EXTRACT_BYTES, RUNTIME_VERSION, weightPaths, type ModelVersion } from './catalog.ts';
 import { dirBytes, topLevelBytes } from './disk.ts';
 import { detectGpus, pickTier, type AmdProbe, type GpuVendor } from './gpu.ts';
 import { configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, RVC_INDEX_MAX, RVC_INDEX_MIN, RVC_PROTECT_MAX, RVC_PROTECT_MIN, RVC_TIMEOUT_MAX, RVC_TIMEOUT_MIN, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
@@ -178,6 +178,8 @@ export class GptSovitsWorld implements World {
   private voiceIssue: string | null = null;
   /** 已经让服务加载的权重签名;配置变了就地换，不必重启。 */
   private appliedWeights = '';
+  /** 服务启动时用的底模版本：版本变了只能重启，热换权重换不了底座。 */
+  private appliedVersion: ModelVersion | null = null;
   /** 服务此刻实际加载的权重(内置或自备)；换失败时用它退回去。 */
   private appliedTarget: TrainedWeights | null = null;
   /** 切换失败的签名，同一条配置不重复试。 */
@@ -227,8 +229,9 @@ export class GptSovitsWorld implements World {
     return picked === 'rocm' && this.cfg.tier === 'auto' && RUNTIME_ASSETS.rocm.bytes === 0 ? 'cpu' : picked;
   }
 
+  /** 生效的底模版本：配置显式选了就照它，`auto` 跟档位；CPU 档一律 v2ProPlus。 */
   version(): ModelVersion {
-    return TIER_MODEL[this.tier()];
+    return resolveModelVersion(this.cfg.voiceModel ?? 'auto', this.tier());
   }
 
   /** 配置里的自备权重，校验过版本与文件；用不上时 `problem` 里是原因。
@@ -675,6 +678,14 @@ export class GptSovitsWorld implements World {
         const { spoken, at, started } = item;
         // 本机不外放开关关着时整句静音；句子级 silent 参数也一样。
         const silent = item.silent || !this.cfg.playLocally;
+        // 换底模版本只能重启：api_v2 的 `version` 只在启动时读 yaml，热换权重换不了底座。
+        if (this.backend().kind !== 'remote' && this.appliedVersion !== null && this.appliedVersion !== this.version()) {
+          this.log.info('模型版本变了，重启推理服务', { from: this.appliedVersion, to: this.version() });
+          await this.server.stop();
+          this.appliedWeights = '';
+          this.weightsFailed = '';
+          await this.startServer();
+        }
         const url = this.url();
         const voice = this.voice();
         if (!url || !voice) {
@@ -792,6 +803,7 @@ export class GptSovitsWorld implements World {
     this.announced = null;
     this.sleeping = false;
     this.appliedWeights = '';
+    this.appliedVersion = null;
     this.appliedTarget = null;
     this.weightsFailed = '';
     this.launching = this.cfg.autoStart && this.backend().kind !== 'remote';
@@ -801,6 +813,7 @@ export class GptSovitsWorld implements World {
     this.gpu = gpus.vendor;
     if (this.cfg.tier === 'cuda' && !gpus.nvidia) this.log.warn('配置的是显卡档，但没检测到 NVIDIA 显卡', { gpu: this.gpu });
     if (this.cfg.tier === 'rocm' && gpus.amd.kind !== 'supported') this.log.warn('配置的是 ROCm 档，但没检测到官方支持的 AMD 显卡', { gpu: this.gpu, amd: gpus.amd });
+    if (this.cfg.voiceModel === 'v5turbo' && this.tier() === 'cpu') this.log.warn('CPU 档跑不动 V5 turbo，已按 V2 Pro Plus 运行', { voiceModel: this.cfg.voiceModel });
     // 启动即把当前音色的音频/台本镜像进配置字段：配置页一打开就能看到实际用的文件。
     this.settlePreset();
     this.appliedTextLang = null;
@@ -1002,6 +1015,7 @@ export class GptSovitsWorld implements World {
       gfx: this.amd.kind === 'supported' ? this.amd.gpu.gfx : null,
     });
     // yaml 里已经是这组权重，启动即加载，不必再调一遍换权重的接口。
+    this.appliedVersion = this.version();
     this.appliedWeights = this.weightsSignature();
     this.appliedTarget = trained ?? this.baseTarget();
     this.weightsFailed = '';

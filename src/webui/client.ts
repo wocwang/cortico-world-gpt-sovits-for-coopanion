@@ -137,7 +137,7 @@ const voicePanel: WebUiPanel = {
       // 推理档
       setPill(tierRow.pill, s.tier === 'cuda' ? t.tierCuda : s.tier === 'rocm' ? t.tierRocm : t.tierCpu, 'on');
       // 自动档说明实际选了哪一档；显式选了显卡档但机器不支持时提前警告，别等下了几个 GB 运行时才失败。
-      tierRow.detail.textContent = s.tierSetting === 'auto'
+      const explain = s.tierSetting === 'auto'
         ? (s.cudaFound ? t.tierAuto(true)
           : s.amd.kind === 'supported'
             ? (s.tier === 'rocm' ? t.tierAutoRocm(s.amd.gpu.gfx) : t.tierRocmUnpublished(s.amd.gpu.gfx))
@@ -145,6 +145,7 @@ const voicePanel: WebUiPanel = {
         : s.tier === 'cuda' && !s.cudaFound ? t.tierCudaMissing(s.gpu)
           : s.tier === 'rocm' && s.amd.kind !== 'supported' ? t.tierRocmMissing(s.amd.kind === 'unsupported' ? s.amd.name : null)
             : '';
+      tierRow.detail.textContent = [explain, t.modelLine(s.version === 'v5turbo' ? 'V5 turbo' : 'V2 Pro Plus')].filter(Boolean).join(' · ');
       // 运行时与权重
       const managed = s.backend === 'managed';
       runtimeRow.acts.hidden = !managed;

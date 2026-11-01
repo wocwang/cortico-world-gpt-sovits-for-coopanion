@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { modelsRoot, runtimesRoot } from 'cortico/paths.ts';
 import { describeTools, type WorldDefinition, type WorldDescribe } from 'cortico/world.ts';
 import {
-  DEVICE_OPTIONS, GPT_SOVITS_DEFAULTS, GPT_SOVITS_ID, PROMPT_LANGUAGE_OPTIONS, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS,
-  promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection,
+  DEVICE_OPTIONS, GPT_SOVITS_DEFAULTS, GPT_SOVITS_ID, MODEL_VERSION_OPTIONS, PROMPT_LANGUAGE_OPTIONS, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS,
+  modelVersionOptions, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection,
 } from './config.ts';
 import { listOutputDevices } from './player.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
@@ -49,6 +49,7 @@ export const GPT_SOVITS: WorldDefinition<GptSovitsConfigSection> = {
   defaults: () => structuredClone(GPT_SOVITS_DEFAULTS),
   configOptions(kind, language) {
     if (kind === TIER_OPTIONS) return tierOptions(language);
+    if (kind === MODEL_VERSION_OPTIONS) return modelVersionOptions(language);
     if (kind === PROMPT_LANGUAGE_OPTIONS) return promptLanguageOptions();
     if (kind === TEXT_LANGUAGE_OPTIONS) return textLanguageOptions(language);
     if (kind === VOICE_OPTIONS) {
