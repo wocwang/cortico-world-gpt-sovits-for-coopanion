@@ -20,7 +20,11 @@
 
 ## 2. 当前状态
 
-- **进度**：AMD ROCm 档约 **90%**——代码、测试、构建脚本、运行时整包都已完成；**只差上传（需要主人的魔搭 / GitHub 账号）与社区真机代验**。`catalog.ts` 里 bytes / SHA-256 / 分片已按实测填好；上传后若字节对不上，下载会按校验失败处理并回落到 CPU 档，不会装半截。
+- **进度**：AMD ROCm 档 **已随 0.6.0 发布**（npm latest = 0.6.0）。运行时整包 3,140,067,689 B 已上传到魔搭
+  `wocwang/gpt-sovits-for-coopanion`（主源，实测 `206 / 3140067689`）与 GitHub Release `runtime-e91506f-1`
+  两个分片（兜底，字节一致）；`catalog.ts` 的 bytes / SHA-256 / 分片都按实测填好。
+  #228 已定向回复四位求 AMD 支持的用户与 ANGOSUNG（附支持清单）；**只剩社区真机代验**（A 卡启动与 RTF）。
+  若服务起不来，「自动」档会写回 CPU 档，不会把用户卡死。
 - **本轮提交（本地，未推送）**：
   - `e11949b` Revert "feat(qq): copy only the four fields that need pasting"
   - `2e91145` Revert "feat(qq): give every value its own copy button"
@@ -48,7 +52,7 @@
 |---|---|---|
 | 0.5.28 | 面板可卸载运行时/权重；体积统计跳过联接 | **npm latest；本机安装中** |
 | 0.5.29 | 认证整改（删 QQ 配置读写、归档哈希、唱歌描述） | **已整体回退，不发布** |
-| 0.6.0 | ROCm 档 + 长路径预检 + MIOpen/设备探针 + 模型版本选项 + 回执带 `Said:` | 代码与运行时包完成，待上传与社区代验 |
+| 0.6.0 | ROCm 档 + 长路径预检 + MIOpen/设备探针 + 模型版本选项 + 回执带 `Said:` + 启动失败回落 CPU | **已发布**（npm latest、魔搭 + GitHub 运行时、#228 已回复）；待社区真机代验 |
 
 ## 3. 关键假设与决策
 
