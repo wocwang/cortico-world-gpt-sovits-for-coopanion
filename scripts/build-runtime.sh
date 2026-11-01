@@ -41,10 +41,27 @@ fi
 # 两边的大权重都不在 git 归档里,无需另删。
 
 # 独立 CPython:._pth 把运行时根(..)放进 sys.path,因为 -I 下脚本目录不在里面
-uv python install 3.12 --no-bin --install-dir "$WORK/python" >/dev/null
+# 已有解压好的 CPython 就跳过 uv：某些 Windows 上 uv 建「次版本别名目录」（目录联接）会报
+# os error 448（不受信任的装入点），但解压本身已经完成，直接用那份即可。
+if ! ls -d "$WORK"/python/cpython-3.12.*-windows-x86_64-none >/dev/null 2>&1; then
+  uv python install 3.12 --no-bin --install-dir "$WORK/python" >/dev/null
+fi
 PYSRC=$(ls -d "$WORK"/python/cpython-3.12.*-windows-x86_64-none | grep -v -- '-3\.12-' | head -1)
 cp -r "$PYSRC" "$OUT/runtime"
 rm -f "$OUT/runtime/Lib/EXTERNALLY-MANAGED"
+
+# jieba_fast（只有 sdist）与 pyopenjtalk（CMake + MSVC）在没装编译器的构建机上编不出来。
+# PREBUILT_SITE_PACKAGES 指向一份既有运行时的 site-packages，就从那里取同版本的编译产物：
+# 版本一致、ABI 一致（同为 CPython 3.12 win_amd64），后续 pip 看到已装就不再重编。
+if [ -n "${PREBUILT_SITE_PACKAGES:-}" ]; then
+  for name in jieba_fast 'jieba_fast-*.dist-info' '_jieba_fast_functions_py3*.pyd' \
+              pyopenjtalk 'pyopenjtalk-*.dist-info' eunjeon 'eunjeon-*.dist-info' '_MeCab*.pyd'; do
+    for hit in "$PREBUILT_SITE_PACKAGES"/$name; do
+      [ -e "$hit" ] && cp -r "$hit" "$OUT/runtime/Lib/site-packages/"
+    done
+  done
+  echo "reused prebuilt extensions from $PREBUILT_SITE_PACKAGES"
+fi
 printf 'DLLs\r\nLib\r\nLib\\site-packages\r\n..\r\nimport site\r\n' > "$OUT/runtime/python312._pth"
 
 PIP=(uv pip install --python "$OUT/runtime/python.exe" --link-mode copy)
@@ -54,9 +71,10 @@ if [ "$TIER" = cu128 ]; then
 elif [ "$TIER" = rocm ]; then
   # --upgrade 不能省：不升级时 pip 认为已装的 cpu 版 torch 已满足要求，extras 不触发安装，只会空转。
   # extras 决定装哪几套内核包；少一套，对应架构的机器会在第一个卷积报 hipErrorInvalidKernelFile。
-  # numpy 钉 <2：pyopenjtalk 在 numpy 2.x 下会崩。
+  # 这里不写 numpy：AMD 索引里只有 numpy>=2.2.6，和下面的 numpy<2 直接冲突；torch 本身不依赖 numpy，
+  # numpy 由 requirements-infer.txt 从 PyPI 装（钉 <2，pyopenjtalk 在 numpy 2.x 下会崩）。
   "${PIP[@]}" --upgrade --index-url https://stable.repo.amd.com/rocm/whl-next/ \
-    "torch[device-gfx1100,device-gfx1101,device-gfx1200,device-gfx1201]" torchaudio "numpy<2"
+    "torch[device-gfx1100,device-gfx1101,device-gfx1200,device-gfx1201]" torchaudio
 else
   "${PIP[@]}" torch==2.7.1+cpu torchaudio==2.7.1+cpu --index-url https://download.pytorch.org/whl/cpu
 fi
@@ -95,7 +113,14 @@ rm -rf "$OUT/GPT_SoVITS/pretrained_models" && mkdir -p "$OUT/GPT_SoVITS/pretrain
 # 打包与分片
 ZIP="$WORK/$NAME.zip"
 rm -f "$ZIP" "$ZIP".part*
-(cd "$OUT" && "$TAR" -a -c -f "$ZIP" *)
+# 几个 GB 的 zip 要压几分钟，tar 本身不打印进度；每 10 秒报一次已压体积，免得被当成卡死。
+( cd "$OUT" && "$TAR" -a -c -f "$ZIP" * ) &
+PACK_PID=$!
+while kill -0 "$PACK_PID" 2>/dev/null; do
+  sleep 10
+  echo "  packing $(du -sm "$ZIP" 2>/dev/null | cut -f1) MiB"
+done
+wait "$PACK_PID"
 split -b 1900m -d -a 1 "$ZIP" "$ZIP.part"
 BYTES=$(stat -c %s "$ZIP")
 SHA=$(sha256sum "$ZIP" | cut -d' ' -f1)
