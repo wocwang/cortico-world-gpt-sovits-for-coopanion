@@ -460,14 +460,17 @@ type ConfigField = {
 };
 type ConfigResp = { groupId: string; title?: string; description?: string; properties: ConfigField[]; values: Record<string, unknown> };
 type QqGuide = {
+  installed: boolean;
   httpApi: boolean;
   port: number;
   voice: string;
   tokenSet: boolean;
+  path: string;
   values: Array<{ label: string; value: string }>;
+  current: { enabled: boolean; provider: string; tts: boolean; voiceBaseUrl: string; voiceVoice: string } | null;
 };
 
-/** 「与其他插件联动」页底部的 QQ 对接说明：展示要填的值，由使用者去 QQ 插件页面里填。 */
+/** 「与其他插件联动」页底部的 QQ 对接说明：展示要填的值 + 一键写入。 */
 async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<void> {
   const { ui } = ctx;
   const t = panelText(ctx.language);
@@ -481,21 +484,45 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
   );
   const code = ui.h('pre', 'gsv-output');
   const acts = ui.actions();
+  const msg = ui.msgline();
   let guide: QqGuide | null = null;
   const codeText = () => (guide ? guide.values.map((v) => `${v.label} = ${v.value}`).join('\n') : '');
   const copyAll = ui.copyButton(() => codeText(), { label: t.qqCopyAll, size: 'sm' });
-  acts.append(copyAll);
-  sec.append(status, steps, code, acts);
+  const write = ui.button(t.qqWrite, {
+    variant: 'primary',
+    size: 'sm',
+    onClick: () => {
+      void (async () => {
+        if (!(await ui.confirm({ title: t.qqWrite, body: t.qqConfirm }))) return;
+        msg.classList.remove('bad');
+        msg.textContent = '';
+        try {
+          const res = await ctx.invoke<{ ok: boolean; path: string; backup: string }>('writeQqVoice');
+          ui.toast(t.qqWriteOk);
+          msg.textContent = `${t.qqWriteOk}（${res.path}）`;
+          await load();
+        } catch (err) {
+          msg.textContent = errText(err);
+          msg.classList.add('bad');
+        }
+      })();
+    },
+  });
+  acts.append(copyAll, write);
+  sec.append(status, steps, code, acts, msg);
   host.append(sec);
 
   const load = async () => {
     try {
       guide = await ctx.invoke<QqGuide>('qqGuide');
       status.textContent = [
+        guide.installed ? t.qqInstalled : t.qqMissing,
         guide.httpApi ? t.qqApiOn : t.qqApiOff,
         guide.tokenSet ? t.qqTokenWarn : '',
+        guide.current ? `${t.qqCurrent}：${guide.current.provider || '—'} · ${guide.current.voiceBaseUrl || '—'} · ${guide.current.voiceVoice || '—'}` : '',
       ].filter(Boolean).join(' · ');
       code.textContent = guide.values.map((v) => `${v.label}：${v.value}`).join('\n');
+      write.disabled = !guide.installed;
     } catch (err) {
       status.textContent = errText(err);
     }

@@ -11,7 +11,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from 'cortico/core/types.ts';
-import { RUNTIME_VERSION, TRAIN_ASSETS, UPSTREAM_COMMIT, type ModelVersion, type PinnedFile } from './catalog.ts';
+import { RUNTIME_VERSION, TRAIN_ASSETS, type ModelVersion, type PinnedFile } from './catalog.ts';
 import { extract, fetchVerified } from './install.ts';
 import { patchTrainer, TRAINER_PATCH_MARKER } from './runtime-patch.ts';
 import { freePort } from './server.ts';
@@ -67,20 +67,17 @@ const UPSTREAM_PORT = 9874;
 const TOOL_DIRS = ['asr', 'uvr5'];
 
 /**
- * 补齐用的上游整包：钉住 `UPSTREAM_COMMIT` 的归档（不是会变的 main），大小与 SHA-256 固定，
- * 下载后要校验通过才解压。缺哪个目录就下一份整包、解出目录复制过去。
- * 归档在国内走 ghfast / gh-proxy，最后才回官方 GitHub。
+ * 补齐用的上游整包：只有六兆多，缺哪个目录就下一份整包、解出目录复制过去。
+ * 整包跟着上游 main 变，没有固定大小与 SHA-256，所以下载只做续传重试，成不成看能不能解出目录。
  */
 const UPSTREAM_ZIP = 'gpt-sovits-upstream.zip';
-const UPSTREAM_ARCHIVE = `https://github.com/RVC-Boss/GPT-SoVITS/archive/${UPSTREAM_COMMIT}.zip`;
 const UPSTREAM_SOURCES = [
-  `https://ghfast.top/${UPSTREAM_ARCHIVE}`,
-  `https://gh-proxy.com/${UPSTREAM_ARCHIVE}`,
-  UPSTREAM_ARCHIVE,
+  'https://ghfast.top/https://github.com/RVC-Boss/GPT-SoVITS/archive/refs/heads/main.zip',
+  'https://gh-proxy.com/https://github.com/RVC-Boss/GPT-SoVITS/archive/refs/heads/main.zip',
+  'https://github.com/RVC-Boss/GPT-SoVITS/archive/refs/heads/main.zip',
 ];
-/** 实测 6,875,312 字节；两个镜像与官方归档的 SHA-256 一致（2026-10-31 实核）。 */
-const UPSTREAM_BYTES = 6_875_312;
-const UPSTREAM_SHA256 = 'f15d53e6c8947f71d0b956b3becabb7d3e6829048ae83d36c72d02c21fa324bd';
+/** 实测 6,874,704 字节，只用来算进度百分比。 */
+const UPSTREAM_APPROX_BYTES = 6_874_704;
 
 /** 首次加载要读模型进内存，慢的机器上要一两分钟。 */
 const READY_TIMEOUT_MS = 300_000;
@@ -314,15 +311,15 @@ export class TrainerManager {
     const unpack = join(cache, 'upstream');
     const label = `tools/${dirs.join('、tools/')}`;
     mkdirSync(cache, { recursive: true });
-    this.push(`缺少 ${label}，正在从上游整包补齐（约 ${Math.round(UPSTREAM_BYTES / 1024 ** 2)} MB）`);
+    this.push(`缺少 ${label}，正在从上游整包补齐（约 ${Math.round(UPSTREAM_APPROX_BYTES / 1024 ** 2)} MB）`);
     let got = 0;
     let shown = 0;
     const signal = new AbortController().signal;
     try {
-      await fetchVerified(UPSTREAM_SOURCES, archive, UPSTREAM_BYTES, UPSTREAM_SHA256, (n) => {
+      await fetchVerified(UPSTREAM_SOURCES, archive, 0, '', (n) => {
         got += n;
         // 每过 25% 报一次，别把日志尾巴刷满。
-        const step = Math.floor((got / UPSTREAM_BYTES) * 4);
+        const step = Math.floor((got / UPSTREAM_APPROX_BYTES) * 4);
         if (step > shown) {
           shown = step;
           this.push(`上游整包 ${Math.min(step * 25, 100)}%`);

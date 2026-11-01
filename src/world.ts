@@ -12,7 +12,7 @@
  * 随下一批事件送达(piggyback),不单独唤醒 bot。
  */
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Language } from 'cortico/core/language.ts';
@@ -1154,7 +1154,7 @@ export class GptSovitsWorld implements World {
         { id: 'voice', title: t.panel, description: t.panelHint, getMethods: ['state'] },
         cfgPanel('cfg-voice', `world:${GPT_SOVITS_ID}`),
         cfgPanel('cfg-output', `world:${GPT_SOVITS_ID}:output`),
-        cfgPanel('cfg-link', `world:${GPT_SOVITS_ID}:link`, ['config', 'qqGuide']),
+        cfgPanel('cfg-link', `world:${GPT_SOVITS_ID}:link`, ['config', 'qqGuide', 'writeQqVoice']),
         cfgPanel('cfg-service', `world:${GPT_SOVITS_ID}:service`),
         { id: 'voices', title: t.voicesPanel, description: t.voicesPanelHint, getMethods: ['state'] },
         { id: 'train', title: t.trainPanel, description: t.trainPanelHint, getMethods: ['trainerState'] },
@@ -1279,11 +1279,14 @@ export class GptSovitsWorld implements World {
     return { ok: true, rvc };
   }
 
-  /** QQ 语音对接：只生成要填的值，由使用者在 QQ 插件自己的页面里填；扩展不改别的 World 的配置。 */
+  /** QQ 语音对接：给面板生成要填的值，并读出 QQ 插件当前配置做对照。 */
   private qqGuide(): unknown {
     const zh = this.uiLanguage === 'zh' || this.uiLanguage === 'zh-Hant';
     const port = this.cfg.httpPort || 9880;
     const voice = this.cfg.voice.preset || DEFAULT_PRESET;
+    const path = join(this.opts.botDir, 'config.json');
+    let qq: any = null;
+    try { qq = JSON.parse(readFileSync(path, 'utf8'))?.worlds?.qqbot ?? null; } catch { /* 没装或读不到就按未安装处理 */ }
     const values = [
       { label: zh ? '实现方式' : 'Provider', value: 'local' },
       { label: zh ? '发语音' : 'Send voice', value: 'true' },
@@ -1292,7 +1295,43 @@ export class GptSovitsWorld implements World {
       { label: zh ? 'TTS 模型名' : 'TTS model', value: 'tts-1' },
       { label: zh ? 'TTS 请求超时(秒)' : 'TTS timeout (s)', value: '120' },
     ];
-    return { httpApi: !!this.cfg.httpApi, port, voice, tokenSet: !!this.cfg.httpToken, values };
+    return {
+      installed: !!qq,
+      httpApi: !!this.cfg.httpApi,
+      port,
+      voice,
+      tokenSet: !!this.cfg.httpToken,
+      path,
+      values,
+      current: qq?.voice
+        ? { enabled: !!qq.voice.enabled, provider: qq.voice.provider ?? '', tts: !!qq.voice.tts, voiceBaseUrl: qq.voice.voiceBaseUrl ?? '', voiceVoice: qq.voice.voiceVoice ?? '' }
+        : null,
+    };
+  }
+
+  /** 一键把本地语音接口的参数写进 QQ 插件配置（改完需重启 Coopanion 生效）。 */
+  private writeQqVoice(): unknown {
+    const port = this.cfg.httpPort || 9880;
+    // 先把自己的接口开关写进配置（HTTP 服务本身要重启 World 才挂载，这里只改值）。
+    if (!this.cfg.httpApi) this.opts.persist({ httpApi: true });
+    if (!this.cfg.httpPort) this.opts.persist({ httpPort: port });
+    const path = join(this.opts.botDir, 'config.json');
+    let raw: any;
+    try { raw = JSON.parse(readFileSync(path, 'utf8')); } catch { throw new Error(`读不到部署配置：${path}`); }
+    const qq = raw?.worlds?.qqbot;
+    if (!qq) throw new Error('没有找到 QQ 插件配置（worlds.qqbot），请先安装并启用 cortico-world-qq-final。');
+    qq.voice = { ...(qq.voice ?? {}) };
+    qq.voice.enabled = true;
+    qq.voice.provider = 'local';
+    qq.voice.tts = true;
+    qq.voice.voiceBaseUrl = `http://127.0.0.1:${port}`;
+    qq.voice.voiceVoice = this.cfg.voice.preset || DEFAULT_PRESET;
+    qq.voice.voiceTtsModel = 'tts-1';
+    qq.voice.voiceTimeout = 120;
+    const backup = `${path}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    copyFileSync(path, backup);
+    writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`);
+    return { ok: true, path, backup, port, voice: qq.voice.voiceVoice, tokenSet: !!this.cfg.httpToken };
   }
 
   /** 面板写配置：只接受已声明配置组里的键，按 schema 类型校验后写回。 */
@@ -1332,6 +1371,7 @@ export class GptSovitsWorld implements World {
   async invoke(panel: string, method: string, args: unknown[]): Promise<unknown> {
     if (method === 'setConfigValue') return this.setConfigValue(String(args[0] ?? ''), args[1]);
     if (method === 'qqGuide') return this.qqGuide();
+    if (method === 'writeQqVoice') return this.writeQqVoice();
     if (method === 'rvcProbe') return this.rvcProbe();
     if (method === 'rvcWrite') return this.rvcWrite(args[0]);
     if (method === 'rvcTest') return this.rvcTest(String(args[0] ?? ''));
