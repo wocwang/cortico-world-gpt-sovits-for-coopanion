@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.0
+
+- **AMD 显卡多了一档 ROCm 推理**：官方 Windows 矩阵里的 A 卡（RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 /
+  7900 XTX / PRO W7900 / RX 7700）可以像 N 卡一样在本机用 V5 turbo 跑，不再只能退回 CPU 档。
+  「自动」档的顺序是 NVIDIA 显卡档 → 官方矩阵内的 A 卡走 ROCm 档 → 其余 CPU 档；显式选了哪档就照哪档。
+  ROCm 是**独立目录** `runtimes/gpt-sovits/<版本>/rocm/`，共享的 `cuda` 目录一个字节都不动
+  （RVC、DiffSinger 用的是同一份运行时）。
+- **装之前先看两件事**：ROCm 的内核库文件名会撞 Windows 的 260 字符上限，安装前检查目标路径与长路径开关；
+  没开就明确拒绝并给出开启命令，由操作者自己决定，插件不改注册表、不装驱动。默认装在
+  `Program Files` 下的路径本身就超限，所以这一档基本要求先开长路径。
+- **MIOpen 走快速启发式**：Windows 上 MIOpen 默认每换一句都重新 benchmark 全部 solver（社区实测换句 9.18 s），
+  插件拉起推理时带 `MIOPEN_FIND_MODE=FAST` 与可写的缓存目录（同一实测 3.22 s）。
+- **按架构挑独显**：启动前跑一次设备探针，按 `gcnArchName` 把核显排除在 `HIP_VISIBLE_DEVICES` 外，
+  避免双显卡机器上第一个卷积就 `hipErrorInvalidKernelFile`；探针结果缓存 7 天。
+- **torchaudio 解码兜底**：ROCm 版 torchaudio 的 `load` 只走 TorchCodec，运行时里用 soundfile 顶上
+  （构建期写进 `sitecustomize.py`，不是运行期改包）。
+- 面板新增「AMD ROCm」档位标签，以及「检测到 A 卡但不在官方列表 / ROCm 运行时还没发布 / 路径太长」三类说明；
+  「已安装模型」里能单独看到并卸载 ROCm 运行时。
+- 训练补齐的上游整包钉住运行时同一个 commit 并校验 SHA-256（6,875,312 字节），三个来源同一份哈希。
+- ROCm 运行时包与代码分开发布：没上传前「自动」档仍走 CPU 档，面板会写明原因。
+
 ## 0.5.28
 
 - **新增「已安装模型」与一键卸载**：语音面板列出已安装的运行时（CUDA / CPU / 未完成的下载 / 旧运行时残留）

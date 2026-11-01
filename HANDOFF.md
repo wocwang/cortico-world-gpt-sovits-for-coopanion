@@ -1,188 +1,115 @@
-# 交接文档 · 更好的GPTSovits 语音（Coopanion 插件）
+# 任务交接单
 
-> 写给接手这个插件改进工作的模型/开发者。读完这一份就能上手，不用翻历史对话。
-> 最后更新：2026-10-24 21:55（版本 0.4.1）
+> 交接时间：2026-11-01 10:10（Asia/Shanghai）
+> 仓库：`D:\Users\HW W\Documents\pr-gpt-sovits\repo`
+> npm 包：`@wocwang/cortico-world-gpt-sovits-for-coopanion`
+> 工作区版本：**0.6.0**（开发中，未发布）；本机 `data\extensions` 装的是 **0.5.28**
+> 配套清单：[TODO.md](TODO.md)；ROCm 代验清单：[docs/rocm-acceptance.md](docs/rocm-acceptance.md)
 
 ---
 
-## 1. 这是什么
+## 1. 任务目标
 
-Coopanion 桌宠的语音插件（Cortico World）：桌宠每次 `pet_say` 前调用 `sovits_speak`，插件用本机
-GPT-SoVITS 合成这句话并从声卡播出。是本机离线合成，不上传任何音频。
+- **一句话目标**：让 Coopanion 桌宠用自己的声音说话——本机 GPT-SoVITS 合成、从声卡播出；现在再加一档：官方支持的 AMD 显卡用 ROCm 跑 V5 turbo，其余 AMD 继续 CPU 档。
+- **本轮已完成**：按主人要求把 0.5.29（认证整改）整体回退，恢复到 0.5.28 的「一键写入 QQ 配置」；在这条线上实现 `rocm` 推理档（代码与测试完成，运行时包未构建）。
+- **验收标准**：
+  - 包内：`pnpm typecheck` 通过、`pnpm test` 全绿（当前 13 文件 136 例）、`pnpm build` 产出 `dist/webui.js`；
+  - 二级：Cortico checkout 里 `describe:extension` + `check:extension` 通过（本轮已过，见 §2）；
+  - 三级：由有 A 卡的人按 [docs/rocm-acceptance.md](docs/rocm-acceptance.md) 实测并在 #228 回帖；
+  - 发布：ROCm 运行时包上传后回填 `catalog.ts` 的 bytes/SHA-256/分片，再 `npm publish`。
 
-| 项 | 值 |
-|---|---|
-| npm 包 | `@wocwang/cortico-world-gpt-sovits-for-coopanion`（当前 **0.4.1**，已上线） |
-| 仓库 | `D:\Users\HW W\Documents\pr-gpt-sovits\repo`（fork 自 Phantivia 的原版，原作者已同意从 fork 发） |
-| 远程 | `origin` = https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion.git |
-| 分支 | `main` 与 `release/0.2.0` 同点（`daa3834`）；两个都推，保持一致 |
-| 市场收录 | Pal-AI-Lab/cortico-extensions（见 §3） |
-| 插件显示名 | 更好的GPTSovits 语音—大肥鱼来咯 |
-| 测试 | 44 项（`tests/`），typecheck 干净 |
+## 2. 当前状态
 
-## 2. 快速开始
+- **进度**：AMD ROCm 档约 **75%**——代码、测试、构建脚本、面板与预检完成；**运行时整包未构建、未上传**（本机没有 `uv` 与 Git Bash，见 §5）。因为 `RUNTIME_ASSETS.rocm.bytes = 0`，「自动」档在检测到官方支持的 A 卡时会**回落到 CPU 档**并在面板说明「ROCm 运行时还没发布」，不会把用户留在装不了的档上。
+- **本轮提交（本地，未推送）**：
+  - `e11949b` Revert "feat(qq): copy only the four fields that need pasting"
+  - `2e91145` Revert "feat(qq): give every value its own copy button"
+  - `5e71124` Revert "fix(certify): stop touching other worlds' config …"
+  - `bb3006b` `fix(trainer): pin the upstream tools archive to the runtime commit`（回退会连带丢掉归档哈希校验，单独留了这一处安全加固，与 QQ 配置无关）
+  - 加上原 `75a5792`/`962bf9e`/`8ed1d42`/`e683abc`/`ff19b29`，全部只在本地；**0.5.29 不推送、不发布、#542 不回帖**（主人决定）。
+- **实测数据（本轮）**：
+  - `pnpm typecheck` 通过；`pnpm test` **13 文件 136 例全过**；`pnpm build` 产出 `dist/webui.js` 35.8 KB、`dist/webui.css` 0.9 KB。
+  - `npm pack` 出的 0.5.28 tgz 2,553,232 B；装进 `data\extensions` 后 `node_modules\...\package.json` 的 `version` = `0.5.28`，`src/world.ts` 有 `writeQqVoice`，`dist/webui.js` 里有 `writeQqVoice`。
+  - Cortico 二级验证：`node --import tsx scripts/extension-describe.ts <repo>` → `tools 2, events 2, prompts 1`；`extension-check.ts` → **Extension check passed**。两条 warning：`sovits_speak` 默认配置下的 description 与声明不一致（历史遗留，市场只显示声明）；标签词表因本机证书吊销检查坏了读不到（`UNABLE_TO_VERIFY_LEAF_SIGNATURE`）。
+  - AMD 官方 wheel 体积（HEAD 实测，`stable.repo.amd.com/rocm/whl-next` 10.1.0）：torch 2.14.0+rocm10.1.0 115.6 MB、rocm-sdk-core 777.0 MB、rocm-sdk-libraries 118.6 MB、rocm-sdk-device-gfx1201 314.1 MB、amd-torch-device-gfx1201 51.1 MB、其余三个架构各约 50 MB。
 
-```powershell
-cd "D:\Users\HW W\Documents\pr-gpt-sovits\repo"
-pnpm install
-pnpm test          # 44 项
-pnpm typecheck     # tsc --noEmit
-pnpm build         # src/webui → dist/webui.js/.css（改了面板必须跑）
-```
+### 版本时间线
 
-改完代码 → 本机安装验证（见 §6）→ 重启 Coopanion → 验证 → 发布（见 §3）。
+| 版本 | 内容 | 状态 |
+|---|---|---|
+| 0.5.28 | 面板可卸载运行时/权重；体积统计跳过联接 | **npm latest；本机安装中** |
+| 0.5.29 | 认证整改（删 QQ 配置读写、归档哈希、唱歌描述） | **已整体回退，不发布** |
+| 0.6.0 | 新增 ROCm 档 + 长路径预检 + MIOpen/设备探针 + 归档哈希 | 代码完成，运行时包待构建 |
 
-## 3. 发布流程
+## 3. 关键假设与决策
 
-### 3.1 npm
+| 决策 | 理由 | 是否已确认 |
+|---|---|---|
+| 回退到 0.5.28 并恢复「一键写入 QQ 配置」 | 主人要这个交互；代价是认证整改归零 | 是（主人明确选择，对外发布自担风险） |
+| 放弃 0.5.29 的 push/publish 与 #542 回帖 | 同上 | 是 |
+| 保留归档 SHA-256 校验（`bb3006b`） | 与 QQ 配置无关，去掉会让下载的上游代码失去校验 | 是（本轮自行判断，主人可否决） |
+| ROCm 做成独立 `rocm` 档，不覆盖共享的 `cuda` 目录 | 三个语音插件共用 `runtimes/gpt-sovits/<版本>/<档>`；覆盖会破坏 RVC/DiffSinger | 是 |
+| 只认官方 4 架构（gfx1100/1101/1200/1201，8 款卡） | 官方 Windows 矩阵只支持这些；RDNA2/Intel 硬上只会变成「装了不出声」 | 是 |
+| 「自动」优先级：NVIDIA → 官方 A 卡 ROCm → CPU；显式选择一律尊重 | 主人的选择；避免把省显存的用户拽回 GPU | 是 |
+| 不改注册表、不装驱动、不改系统策略 | Cortico `docs/runtimes.md` §3 | 是 |
+| ROCm 运行时和代码分开发布，`bytes = 0` 时自动回落 CPU | 先落代码、后传包；不留死路 | 是 |
+| 版本号 0.6.0 | 回退后 0.5.28 已被 npm 占用，新功能只能往上走 | 是 |
 
-- npm 账号 `wocwang`，**开了两步验证**：发布需要 Automation token 或 OTP。
-- token 由主人提供（`npm config set "//registry.npmjs.org/:_authToken" "npm_xxx" --location=user`），
-  或用临时 userconfig。**不要**把 token 写进仓库或日志。
-- `npm publish` 会跑 `prepublishOnly = build && test && typecheck`，全过才上传。
-- registry 同步要 1–3 分钟，`npm view ... dist-tags.latest` 轮询确认。
-- 每次发布记得 bump `package.json` 的 version + 在 `CHANGELOG.md` 加 `## x.y.z` 一节
-  （市场 Action 会读 CHANGELOG 按版本切更新日志）。
+## 4. 待办事项
 
-### 3.2 市场收录（Pal-AI-Lab/cortico-extensions）
+- [ ] **构建 ROCm 运行时包**（需 Git Bash + `uv` + 约 15 GB 空闲）：`bash scripts/build-runtime.sh rocm <工作目录>`；脚本会校验四套 `*device*gfx*` 包齐全、`flash_attn` 不在、`sitecustomize.py` 已写入，最后打印整包 bytes、sha256 与分片字节。
+- [ ] 上传：魔搭整包 `runtime/gpt-sovits-e91506f-1-win-x64-rocm.zip`；GitHub Release `runtime-e91506f-1` 放 1900 MiB 分片。
+- [ ] 回填 `src/catalog.ts` 的 `RUNTIME_ASSETS.rocm`（file/bytes/sha256/sources/parts）与 `RUNTIME_EXTRACT_BYTES.rocm`（解压实测）。
+- [ ] 在 #228 贴 [docs/rocm-acceptance.md](docs/rocm-acceptance.md) 请人代验（@ANGOSUNG 已在 RX 9070 上手工跑通过 ROCm）；结果按模板回填到本文件 §2。
+- [ ] 代验通过后再考虑 `npm publish 0.6.0`；**未获主人同意不 push、不 publish**。
+- [ ] 可选：`sovits_speak` 的 describe 声明与默认配置下的 description 对齐（`check:extension` 的 warning）。
+- [ ] 冻结项：云端 TTS（主人保留意见）、QQ `qq_audio`、仓库清理、显卡档 4.14 GB 真机下载。
 
-- Action 每半小时（cron `17,47 * * * *`）扫 npm 关键词 `cortico-world` 自动收录；
-  但 npm 的 **search 索引对新包延迟 1–2 小时**，刚发布往往扫不到。
-- **立即收录**：新建一个 issue（**不要 reopen 旧 issue，GitHub 会拒**）：
+## 5. 已知问题 / 风险
 
-  ```bash
-  gh issue create -R Pal-AI-Lab/cortico-extensions \
-    --title "[sync] @wocwang/cortico-world-gpt-sovits-for-coopanion" \
-    --body "package: @wocwang/cortico-world-gpt-sovits-for-coopanion"
+- **卡点**：本机没有 `uv`，`bash` 是 WSL 的而不是 Git Bash，`scripts/build-runtime.sh` 跑不了；ROCm 整包必须在另一台机器上打。没有包时 ROCm 档装不了（面板会明说）。
+- **没有 A 卡**：三级验证只能靠社区代验，作者侧只能保证代码、类型、单测与二级验证。
+- **长路径是硬门槛**：默认 `D:\Program Files\Coopanion\data\home\runtimes\gpt-sovits\e91506f-1\rocm` 加最长相对路径（220 字符）后超过 259，没开 `LongPathsEnabled` 就会被预检拦下。这是社区实测的 272 字符路径问题的直接后果，不是文案问题。
+- **认证风险**：一键写入 QQ 配置是 #542 明确要求删除的行为；恢复后对外发布可能被市场拒绝收录或撤销认证（主人已知悉并接受）。
+- **描述一致性**：`package.json` 描述、`README`、`config.ts` 文案都改成了「AMD 官方支持型号走 ROCm」，以后改实现要同步，别再出现 0.5.29 那种描述与实现不一致。
+- **未复现的风险**：MIOpen `FAST` 的加速倍率来自社区单机（换新句 9.18 s → 3.22 s），本机无法验证；TorchCodec 兜底、`HIP_VISIBLE_DEVICES` 选卡、探针缓存都只在单测层面验证过。
+
+## 6. 上下文与约束
+
+- **核心文件**：`src/gpu.ts`（新：gfx 映射、`pickTier`、长路径、HIP 探针解析）、`src/catalog.ts`（`RUNTIME_ASSETS.rocm` 占位）、`src/install.ts`（`rocmPathProblem` / `assertRocmPaths`）、`src/server.ts`（`infererYaml` 二分、`runtimeEnv`、`probeHipDevice`、`cachedHipIndex`）、`src/world.ts`（`tier()` 回落、`usage()` 认 `rocm`、`PanelState.amd`）、`src/config.ts`、`src/i18n.ts`、`src/webui/client.ts`、`scripts/build-runtime.sh`、`scripts/rocm-sitecustomize.py`。
+- **测试**：`tests/gpu.test.ts`、`tests/server.test.ts` 新增；`tests/install.test.ts` 加路径预检用例。测试不联网。
+- **命令**：
+  ```powershell
+  cd "D:\Users\HW W\Documents\pr-gpt-sovits\repo"
+  pnpm typecheck; pnpm test; pnpm build; npm pack
+
+  cd "D:\Users\HW W\Documents\pr-rvc\Cortina\state\cortico"
+  node --import tsx scripts/extension-describe.ts "D:\Users\HW W\Documents\pr-gpt-sovits\repo"
+  node --import tsx scripts/extension-check.ts "D:\Users\HW W\Documents\pr-gpt-sovits\repo"
+  # 不要用 pnpm run：pnpm 11 的 verify-deps-before-run 会先跑一次完整 install，容易超时。
   ```
+- **本机安装命令**（当前 0.5.28）：
+  ```powershell
+  cd "D:\Program Files\Coopanion\data\extensions"
+  $env:XDG_DATA_HOME="D:\Program Files\Coopanion\data"
+  pnpm add "<tgz 路径>" --ignore-scripts
+  # pnpm add 不接受 --no-frozen-lockfile；装完必须重启 Coopanion
+  ```
+- **约束**：不读/写别的插件配置（现在例外只有主人要的「一键写入 QQ 配置」，只在面板按钮触发时写）；密钥只走部署 `.env`；不提交未跟踪的 `AGENTS.md`、`CLAUDE.md`；按显式路径暂存。
 
-  Action 会立刻跑一次，回帖「已收录 x.y.z」并自动关闭。`gh` 已在本机登录 wocwang。
-- 校验：`catalog.json` 里 `packages["@wocwang/..."]` 的 `version` 是否更新。
-- 市场卡片文案：`package.json` 的 `cortico.locales.zh/en`（displayName + description），
-  顶层 `description` 是英文（npm 页用），中文简介靠 `locales.zh`。
+## 7. 交接说明
 
-## 4. 代码地图（src/）
+- **接手方先做**：跑 §6 的 `typecheck`/`test` 核对 136 例；`git log --oneline -8` 核对 §2 的提交；确认 `package.json` 版本是 `0.6.0`、本机安装是 `0.5.28`。
+- **下一步**：按 §4 第 1 条找一台有 `uv` + Git Bash 的机器打 ROCm 包，再回填 catalog。
+- **可以直接发给下一个接手方的提示词**：
 
-| 文件 | 职责 |
-|---|---|
-| `index.ts` | 包入口，导出 `definition.ts` 的 WorldDefinition |
-| `definition.ts` | WorldDefinition：id/defaults/configOptions/create/describe；**音色下拉的选项源在这里**（预设 + 动态自定义音色） |
-| `world.ts` | 核心：队列、合成、播放、权重热切换、配置收敛（settlePreset）、两个面板的 invoke |
-| `config.ts` | 配置结构与 schema 表单（x-options / x-path / x-hot）、中英文案 |
-| `custom-voice.ts` | 自定义音色的纯逻辑：校验、按 id 选、权重联动（8 项测试） |
-| `voice-options.ts` | 模块级注册器：world 启动时注册「读当前音色列表」的函数，供 definition 的下拉选项用（避免循环 import） |
-| `voices.ts` | 内置预设（`dfy`/`female`/`male`）与 label |
-| `weights.ts` | 自备权重：`.pth` 头字节判版本、配对校验、底模路径推导 |
-| `synth.ts` | api_v2 请求（`/tts` 流式）、`switchWeights`（`/set_gpt_weights` + `/set_sovits_weights`） |
-| `server.ts` | 启动/停止本机 api_v2、写 `tts_infer.<档>.yaml` |
-| `install.ts` | 运行时/权重的下载安装（按 SHA-256 校验，多源回退） |
-| `catalog.ts` | 运行时版本、档位→模型映射、权重相对路径、输出增益 |
-| `player.ts` | audify 播放与队列 |
-| `speech-text.ts` | 台本清洗（去 `【…】`/`<…>` 标记、去装饰符号 ♡★♪） |
-| `wav.ts` | 读 WAV 时长/采样率 |
-| `i18n.ts` | 面板文案（中英）与状态词 |
-| `webui/client.ts` | 两个面板：`voice`（状态/试听）与 `voices`（音色增删改） |
-| `assets/voices/` | 随包默认音色 `dfy.wav` + `dfy.txt`（**成对，差一个字音色就漂**） |
-
-## 5. 关键设计与必须知道的事实
-
-### 5.1 音色 = 参考音频 + 台本（+ 可选权重）
-
-- 预设音色（dfy/female/male）的音频与台本**成对随包**，选即用，用户零配置。
-- 自定义音色 = `name + audio + text + weights(可选，成对)`，存在 `worlds.gpt-sovits.voices[]`。
-- 选中自定义音色且它带成对权重时 → 生效权重随之切换（复用热切换）；否则用全局 `weights`。
-
-### 5.2 配置页（cortico 配置表单）的限制——**别再试图在那里做交互**
-
-- 表单只有 `x-hot / x-options / x-path` 三种扩展，**塞不进按钮**。
-- 表单值只在进入页面时加载一次，**不会随切换刷新**（无轮询无推送）。切完音色要「再点一下配置 tab」
-  才刷新（重复点当前 tab 有效，因为 `enter` 无条件执行）。
-- 已向上游提 issue 请求自动重载：**https://github.com/Pal-AI-Lab/Cortico/issues/308**
-  如果它被修了，可以把 `world.ts` 里的镜像逻辑简化。
-- 因此：**音色的增删改一律在「音色」面板**（`panels[].id = 'voices'`），配置页只负责「选」。
-
-### 5.3 `settlePreset()`（world.ts）——配置收敛的核心
-
-在 `voice()` 与 `panelState()` 开头调用，保证配置字段与当前音色一致：
-
-1. 选中自定义音色且 `seenPreset` 变化 → 把它的 name/audio/text/weights **镜像**进配置字段；
-2. 改过字段（name 除外）→ 写回该音色；音频换了要在写回前校验（3–10 秒）；
-3. 预设 → 把包内音频/台本镜像进字段（`PRESET_PATH` 识别镜像路径，用户手填的非预设路径仍然优先）；
-4. `voice.name` 只做内部镜像，**不再参与变更判断**（面板改名后不会被旧值回写）。
-
-### 5.4 权重热切换
-
-- `switchWeights()` 依次调 `/set_gpt_weights`、`/set_sovits_weights`（GET + `weights_path`），
-  **实测 2.5–3.1 秒**（s1 155 MB + s2 LoRA 766 MB 重载），不重启进程、不打断正在播的句子。
-- **音色切换是零成本**（每次合成请求自带参考音频与台本），不要为它做任何等待/提示。
-- 换失败会退回上一组权重，同一条配置不重复试（`weightsFailed`）。
-- `.pth` 头两字节：`08` = v5turbo LoRA（显卡档），`06` = v2ProPlus（CPU 档），其余版本拒绝。
-
-### 5.5 两档与模型
-
-- 显卡档（有 NVIDIA）：v5turbo（`s1v3.ckpt` + `s2Gv5turbo.pth`）；CPU 档：v2ProPlus。
-- v5turbo 的 s2 训练产物是 LoRA 增量，**底模必须还在**（不能只来自备权重）。
-
-## 6. 本机安装与验证（改完必须走一遍）
-
-Coopanion 的插件装在 `D:\Program Files\Coopanion\data\extensions`（pnpm workspace）。
-
-```powershell
-# 1) 打包
-cd "D:\Users\HW W\Documents\pr-gpt-sovits\repo"; npm pack
-
-# 2) 装到本机（⚠️ 必须带 XDG_DATA_HOME，否则 store 会切到盘根，拓展中心随后报错）
-cd "D:\Program Files\Coopanion\data\extensions"
-$env:XDG_DATA_HOME="D:\Program Files\Coopanion\data"
-pnpm add "D:\Users\HW W\Documents\pr-gpt-sovits\repo\wocwang-cortico-world-gpt-sovits-for-coopanion-<ver>.tgz" --ignore-scripts
-
-# 3) 检查顶层链接；缺了就补（.pnpm 里多版本并存时按 package.json 的 version 选最高）
-pnpm install --force
+```text
+你是接手「更好的GPTSovits 语音」Coopanion 插件的模型/开发者。先读
+D:\Users\HW W\Documents\pr-gpt-sovits\repo\HANDOFF.md、AGENTS.md、TODO.md 与 docs\rocm-acceptance.md。
+当前工作区版本 0.6.0（未发布）：0.5.29 已按主人要求整体回退到 0.5.28（恢复一键写入 QQ 配置），
+AMD ROCm 推理档的代码/测试/构建脚本已完成，但运行时整包还没构建上传，catalog 里 bytes=0，
+所以「自动」档在 A 卡上会回落到 CPU 档。
+下一步是打 ROCm 包（需要 Git Bash + uv）→ 上传魔搭与 GitHub 分片 → 回填 catalog → 请社区代验。
+未经主人明确同意不要 git push、不要 npm publish、不要改 AGENTS.md/CLAUDE.md。
+汇报用中文、给实测数据。
 ```
-
-- **「本机包缺失」的固定解法**：`pnpm install --force` 再重启。普通 `install` 会说
-  "Already up to date" 不重建链接（宿主安装器会清掉其他插件的顶层链接）。
-- 判断 store 是否正确：`node_modules/.modules.yaml` 的 `storeDir` 应为
-  `D:\Program Files\Coopanion\data\pnpm\store\v11`。
-- 装完**重启 Coopanion**（插件在启动时加载；面板改动要重启才生效）。
-
-## 7. 运行环境速查
-
-- 推理服务端口是**动态**的，别记死：
-  `Get-CimInstance Win32_Process -Filter "Name='python.exe'"` 看 `-p` 参数。
-- 运行时：`data\home\runtimes\gpt-sovits\e91506f-1\<cuda|cpu>\`；权重：
-  `data\home\models\gpt-sovits\pretrained_models\`。
-- 日志：`data\logs\core.log`（插件）、`data\gpt-sovits\voice-server.log`（api_v2）。
-- **不要让 agent 启动常驻语音服务**（会话结束会回收子进程树）；由应用自启或主人双击。
-- 本机证书吊销检查坏了：`git push` / `curl` 访问 GitHub 需要
-  `git config --local http.sslVerify false`（本仓库已设）或 `curl --ssl-no-revoke`。
-
-## 8. 踩过的坑（别再踩）
-
-1. **双参考（aux）在 V3+ 完全无效**：`TTS.py` 只取 `refer_spec[0]`，多参考融合是 V1/V2 专属。
-   已彻底移除相关代码，不要加回来。
-2. **「忽好忽坏」= 插件不传 seed**：已加 `seed` 配置；做 A/B 必须固定 seed，否则结论全是噪声。
-3. **跨进程 MD5 不可比**（cuDNN 算法自选），判断音色变化只能看时长 + 听感。
-4. **v5turbo 有固有「电音感」**（谱平坦度是参考的 30–47 倍，集中在 100–1000 Hz），
-   输出端降噪无效，只能靠参考端滤波缓解。别浪费时间在输出端处理。
-5. **测试偶发 `Errors 1 error / 31 passed`**：esbuild 在系统临时目录写缓存报 EPERM，
-   与代码无关，重跑一次即 44 全绿。
-6. **`.pnpm` 里可能有多个版本目录**：补链接时按版本号选最高，否则会指向旧版。
-7. 面板 `client.ts` 的 `ui.*` API 是 cortico 的 web/shared/client-panel，改动前先看现有用法。
-
-## 9. 待办 / 可改进
-
-- [ ] 上游 #308 修好后，可简化 `settlePreset` 的镜像逻辑（配置表单能自动刷新后就不需要「点一下配置」）。
-- [ ] 「音色」面板可加「试听这一句」（用选中音色合成一小段试听）。
-- [ ] 自定义音色的权重目前是**路径输入框**（浏览器 file input 拿不到本机路径）；
-      如果框架以后给出路径选择 API，换成文件选择器。
-- [ ] 删除音色目前没有二次确认，容易误删。
-- [ ] `config.ts` 里 `voice.name` 已从表单移除，但数据结构仍保留（内部镜像用）；后续可考虑彻底清理。
-
-## 10. 跟主人配合的约定
-
-- 用中文，称呼「主人」；语气可以可爱，但**干活必须硬**（禁止糊弄、编造、偷懒）。
-- **汇报要有实测数据**，不要只给判断；猜错要主动纠正。
-- 改完要能自证：给出日志/命令/实测结果，别只说「应该好了」。
-- 发布（npm / 市场收录）属于对外动作，**先问主人**再执行；npm token 由主人提供。
-- 大的方案调整先说清约束（比如本文件 §5.2 的框架限制），再给选择，别闷头硬做。

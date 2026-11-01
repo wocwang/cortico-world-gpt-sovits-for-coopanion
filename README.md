@@ -2,7 +2,7 @@
 
 `@wocwang/cortico-world-gpt-sovits-for-coopanion`
 
-给 Coopanion 桌宠配上真实的 GPT-SoVITS 语音：桌宠每次说话，插件就在**你自己的电脑上**把这句话合成出来、从声卡播出。全程本机运行，不上传任何录音。NVIDIA 显卡走 V5 turbo；**AMD 显卡用户可使用 CPU 推理档**（速度较慢但可用）。
+给 Coopanion 桌宠配上真实的 GPT-SoVITS 语音：桌宠每次说话，插件就在**你自己的电脑上**把这句话合成出来、从声卡播出。全程本机运行，不上传任何录音。NVIDIA 显卡走 V5 turbo；AMD 显卡分两路——官方支持的型号走 ROCm 档（V5 turbo），其余用 CPU 档（v2ProPlus，速度较慢但可用）。
 
 ## 和另外两个声音插件一起用
 
@@ -57,7 +57,7 @@
 - **进阶**：用 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 自己训练，把训出的两个文件填进「自备 GPT 权重 / 自备 SoVITS 权重」两个框，服务在跑也会就地换上、不用重启。详见下方「自备训练权重」。
 
 **需要什么硬件？**
-有 NVIDIA 显卡自动走显卡档（V5 turbo，又快又好）；没有就自动走 CPU 档（v2ProPlus），能出声但慢一些。
+有 NVIDIA 显卡自动走显卡档（V5 turbo，又快又好）。没有 NVIDIA 但有官方支持的 AMD 显卡时走 ROCm 档（同样是 V5 turbo）：RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700，要求 Windows 11、Adrenalin 26.2.2 或更新。ROCm 的内核库文件名会超过 Windows 260 字符的路径上限，所以这一档要先自己开启长路径（系统设置里改注册表 `LongPathsEnabled=1`，插件不会替你改），或者把 Coopanion 装在很短的路径下。其余显卡（含 RX 6000 系列、Intel）自动走 CPU 档（v2ProPlus），能出声但慢一些。
 
 **会联网吗？会泄露隐私吗？**
 联网只发生在**下载**运行时与模型的时候；之后所有语音合成都在你电脑上完成，**不上传任何录音与文本**。
