@@ -13,14 +13,14 @@
 - **一句话目标**：让 Coopanion 桌宠用自己的声音说话——本机 GPT-SoVITS 合成、从声卡播出；现在再加一档：官方支持的 AMD 显卡用 ROCm 跑 V5 turbo，其余 AMD 继续 CPU 档。
 - **本轮已完成**：按主人要求把 0.5.29（认证整改）整体回退，恢复到 0.5.28 的「一键写入 QQ 配置」；在这条线上实现 `rocm` 推理档（代码与测试完成，运行时包未构建）。
 - **验收标准**：
-  - 包内：`pnpm typecheck` 通过、`pnpm test` 全绿（当前 13 文件 140 例）、`pnpm build` 产出 `dist/webui.js`；
+  - 包内：`pnpm typecheck` 通过、`pnpm test` 全绿（当前 14 文件 148 例）、`pnpm build` 产出 `dist/webui.js`；
   - 二级：Cortico checkout 里 `describe:extension` + `check:extension` 通过（本轮已过，见 §2）；
   - 三级：由有 A 卡的人按 [docs/rocm-acceptance.md](docs/rocm-acceptance.md) 实测并在 #228 回帖；
   - 发布：ROCm 运行时包上传后回填 `catalog.ts` 的 bytes/SHA-256/分片，再 `npm publish`。
 
 ## 2. 当前状态
 
-- **进度**：AMD ROCm 档约 **75%**——代码、测试、构建脚本、面板与预检完成；**运行时整包未构建、未上传**（本机没有 `uv` 与 Git Bash，见 §5）。因为 `RUNTIME_ASSETS.rocm.bytes = 0`，「自动」档在检测到官方支持的 A 卡时会**回落到 CPU 档**并在面板说明「ROCm 运行时还没发布」，不会把用户留在装不了的档上。
+- **进度**：AMD ROCm 档约 **90%**——代码、测试、构建脚本、运行时整包都已完成；**只差上传（需要主人的魔搭 / GitHub 账号）与社区真机代验**。`catalog.ts` 里 bytes / SHA-256 / 分片已按实测填好；上传后若字节对不上，下载会按校验失败处理并回落到 CPU 档，不会装半截。
 - **本轮提交（本地，未推送）**：
   - `e11949b` Revert "feat(qq): copy only the four fields that need pasting"
   - `2e91145` Revert "feat(qq): give every value its own copy button"
@@ -29,7 +29,15 @@
   - 加上原 `75a5792`/`962bf9e`/`8ed1d42`/`e683abc`/`ff19b29`，全部只在本地；**0.5.29 不推送、不发布、#542 不回帖**（主人决定）。
 - **按 #228 最新评论做的修正**：@goumo514 报「语音说的话和气泡里的不一样，大肥鱼意识不到」。现在 `sovits_speak` 的回执带 `Said: "…"`（翻译模式注明是译文），提示词要求中文/自动模式下 text 必须是这次 `pet_say` 的逐字副本、翻译模式气泡保持原文；面板「试听」下方显示最近念的一句。翻译从 `pump` 提前到入队前，回执与合成用的是同一份文字。
 - **实测数据（本轮）**：
-  - `pnpm typecheck` 通过；`pnpm test` **13 文件 140 例全过**；`pnpm build` 产出 `dist/webui.js` 36.1 KB、`dist/webui.css` 0.9 KB。
+  - `pnpm typecheck` 通过；`pnpm test` **14 文件 148 例全过**；`pnpm build` 产出 `dist/webui.js` 36.2 KB、`dist/webui.css` 0.9 KB。
+  - **ROCm 运行时包已在本机打出**：`gpt-sovits-e91506f-1-win-x64-rocm.zip` **3,140,067,689 B**，
+    SHA-256 `0b3f7f709f7f5f7f0dde62488a7bcab0a4d31dce46d1cf53ecc0e6bbbdccc945`，解压 **7,077 MiB**，共 42,396 个条目；
+    分片 `.part0` 1,992,294,400 B、`.part1` 1,147,773,289 B。包内 `torch 2.14.0+rocm10.1.0`、`torchaudio 2.11.0.3`、
+    `rocm-sdk 10.1.0`、四套 gfx 内核、`sitecustomize.py` 齐全，没有 `flash_attn` 包；文本栈 `jieba_fast / pyopenjtalk / eunjeon`
+    与 `numpy 1.26.4` 在包内解释器里导入通过，`torch.version.hip = 7.16.26385`。
+  - 构建环境：uv 0.13.6 + Git Bash；`uv python install` 建联接报 os error 448，改为复用已解压的 CPython 3.12.16；
+    `jieba_fast` / `pyopenjtalk` / `eunjeon` 在 PyPI 只有 sdist，从已发布的 CPU 档运行时里取同版本 cp312 编译产物；
+    PyPI 直连会卡死，最后用清华镜像 + 独立 `--cache-dir` 装完 143 个包。
   - `npm pack` 出的 0.5.28 tgz 2,553,232 B；装进 `data\extensions` 后 `node_modules\...\package.json` 的 `version` = `0.5.28`，`src/world.ts` 有 `writeQqVoice`，`dist/webui.js` 里有 `writeQqVoice`。
   - Cortico 二级验证：`node --import tsx scripts/extension-describe.ts <repo>` → `tools 2, events 2, prompts 1`；`extension-check.ts` → **Extension check passed**。两条 warning：`sovits_speak` 默认配置下的 description 与声明不一致（历史遗留，市场只显示声明）；标签词表因本机证书吊销检查坏了读不到（`UNABLE_TO_VERIFY_LEAF_SIGNATURE`）。
   - AMD 官方 wheel 体积（HEAD 实测，`stable.repo.amd.com/rocm/whl-next` 10.1.0）：torch 2.14.0+rocm10.1.0 115.6 MB、rocm-sdk-core 777.0 MB、rocm-sdk-libraries 118.6 MB、rocm-sdk-device-gfx1201 314.1 MB、amd-torch-device-gfx1201 51.1 MB、其余三个架构各约 50 MB。
@@ -40,7 +48,7 @@
 |---|---|---|
 | 0.5.28 | 面板可卸载运行时/权重；体积统计跳过联接 | **npm latest；本机安装中** |
 | 0.5.29 | 认证整改（删 QQ 配置读写、归档哈希、唱歌描述） | **已整体回退，不发布** |
-| 0.6.0 | 新增 ROCm 档 + 长路径预检 + MIOpen/设备探针 + 归档哈希 | 代码完成，运行时包待构建 |
+| 0.6.0 | ROCm 档 + 长路径预检 + MIOpen/设备探针 + 模型版本选项 + 回执带 `Said:` | 代码与运行时包完成，待上传与社区代验 |
 
 ## 3. 关键假设与决策
 
@@ -63,6 +71,8 @@
 - [ ] 回填 `src/catalog.ts` 的 `RUNTIME_ASSETS.rocm`（file/bytes/sha256/sources/parts）与 `RUNTIME_EXTRACT_BYTES.rocm`（解压实测）。
 - [ ] 在 #228 贴 [docs/rocm-acceptance.md](docs/rocm-acceptance.md) 请人代验（@ANGOSUNG 已在 RX 9070 上手工跑通过 ROCm）；结果按模板回填到本文件 §2。
 - [ ] 代验通过后再考虑 `npm publish 0.6.0`；**未获主人同意不 push、不 publish**。
+- [x] **模型版本与档位解耦（#228 @niaolong233）**：已随 0.6.0 实现——新增配置 `voiceModel`（`auto` / `v5turbo` / `v2ProPlus`），
+      显卡与 ROCm 档可选 V2 Pro Plus（自备 `06` 头权重不再被挡），CPU 档一律 V2 Pro Plus；换版本时重启一次推理服务。
 - [ ] 可选：`sovits_speak` 的 describe 声明与默认配置下的 description 对齐（`check:extension` 的 warning）。
 - [ ] 冻结项：云端 TTS（主人保留意见）、QQ `qq_audio`、仓库清理、显卡档 4.14 GB 真机下载。
 
@@ -74,6 +84,7 @@
 - **长路径是硬门槛**：默认 `D:\Program Files\Coopanion\data\home\runtimes\gpt-sovits\e91506f-1\rocm` 加最长相对路径（220 字符）后超过 259，没开 `LongPathsEnabled` 就会被预检拦下。这是社区实测的 272 字符路径问题的直接后果，不是文案问题。
 - **认证风险**：一键写入 QQ 配置是 #542 明确要求删除的行为；恢复后对外发布可能被市场拒绝收录或撤销认证（主人已知悉并接受）。
 - **描述一致性**：`package.json` 描述、`README`、`config.ts` 文案都改成了「AMD 官方支持型号走 ROCm」，以后改实现要同步，别再出现 0.5.29 那种描述与实现不一致。
+- **v5turbo 的「电音」是模型固有**：0.5.x 实测输出端降噪无效，别再加降噪/后处理去「修」；能给的只有换 v2ProPlus（见 §4 的 `voiceModel` 计划）。
 - **未复现的风险**：MIOpen `FAST` 的加速倍率来自社区单机（换新句 9.18 s → 3.22 s），本机无法验证；TorchCodec 兜底、`HIP_VISIBLE_DEVICES` 选卡、探针缓存都只在单测层面验证过。
 
 ## 6. 上下文与约束
@@ -101,7 +112,7 @@
 
 ## 7. 交接说明
 
-- **接手方先做**：跑 §6 的 `typecheck`/`test` 核对 140 例；`git log --oneline -8` 核对 §2 的提交；确认 `package.json` 版本是 `0.6.0`、本机安装是 `0.5.28`。
+- **接手方先做**：跑 §6 的 `typecheck`/`test` 核对 148 例；`git log --oneline -8` 核对 §2 的提交；确认 `package.json` 版本是 `0.6.0`、本机安装是 `0.5.28`。
 - **下一步**：按 §4 第 1 条找一台有 `uv` + Git Bash 的机器打 ROCm 包，再回填 catalog。
 - **可以直接发给下一个接手方的提示词**：
 

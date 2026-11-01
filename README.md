@@ -57,7 +57,7 @@
 - **进阶**：用 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 自己训练，把训出的两个文件填进「自备 GPT 权重 / 自备 SoVITS 权重」两个框，服务在跑也会就地换上、不用重启。详见下方「自备训练权重」。
 
 **需要什么硬件？**
-有 NVIDIA 显卡自动走显卡档（V5 turbo，又快又好）。没有 NVIDIA 但有官方支持的 AMD 显卡时走 ROCm 档（同样是 V5 turbo）：RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700，要求 Windows 11、Adrenalin 26.2.2 或更新。ROCm 的内核库文件名会超过 Windows 260 字符的路径上限，所以这一档要先自己开启长路径（系统设置里改注册表 `LongPathsEnabled=1`，插件不会替你改），或者把 Coopanion 装在很短的路径下。其余显卡（含 RX 6000 系列、Intel）自动走 CPU 档（v2ProPlus），能出声但慢一些。
+有 NVIDIA 显卡自动走显卡档（V5 turbo，又快又好）。嫌 V5 turbo 音色偏「电」时，在「模型版本」里改成 V2 Pro Plus 即可（更自然、慢一些，首次切换多下约 300 MB 权重，服务会重启一次）；自己训的 V2 Pro Plus LoRA 也只在选了这个版本时才能加载。没有 NVIDIA 但有官方支持的 AMD 显卡时走 ROCm 档（同样是 V5 turbo）：RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700，要求 Windows 11、Adrenalin 26.2.2 或更新。ROCm 的内核库文件名会超过 Windows 260 字符的路径上限，所以这一档要先自己开启长路径（系统设置里改注册表 `LongPathsEnabled=1`，插件不会替你改），或者把 Coopanion 装在很短的路径下。其余显卡（含 RX 6000 系列、Intel）自动走 CPU 档（v2ProPlus），能出声但慢一些。
 
 **会联网吗？会泄露隐私吗？**
 联网只发生在**下载**运行时与模型的时候；之后所有语音合成都在你电脑上完成，**不上传任何录音与文本**。
@@ -162,7 +162,7 @@
 想用完全属于自己的声音，可以直接在面板里训练，不必另装一套 GPT-SoVITS：
 
 - 入口在「语音」插件的「训练」页；**训练依赖与训练资源都是可选的、手动触发**，默认不装不下。
-- 显卡档训 **v5turbo（LoRA）**，CPU 档训 **v2ProPlus**；训练很吃显存，建议先勾上**「先停推理服务（释放显存）」**再开训。
+- 训练版本跟着「模型版本」走：V5 turbo 训 **LoRA**，V2 Pro Plus 训 **v2ProPlus**；训练很吃显存，建议先勾上**「先停推理服务（释放显存）」**再开训。
 - 步骤：① 点「安装训练依赖」（gradio / tensorboard / funasr / modelscope 等）→ ② 点「下载训练资源」（v2ProPlus 需要判别器 s2D，显卡档通常已就绪）→ ③ 依次「启动训练 WebUI」并「打开浏览器」→ ④ 在上游页面里走完 数据准备 → 训练。
 - 训练产物（`GPT_weights*` / `SoVITS_weights*` 目录里的 `.ckpt` / `.pth`）拿到「音色」页当**「自备权重」成对选用**；v5turbo 的 s2 产物是 LoRA（版本头 `08`），v2ProPlus 是 `06`。
 - 训练 WebUI 只监听 `127.0.0.1`，端口自动挑空闲的，不影响推理服务端口。
