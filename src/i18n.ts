@@ -15,12 +15,18 @@ const PANEL = {
     lamp: '推理服务',
     tier: '推理档',
     tierCuda: '显卡(V5 turbo)',
+    tierRocm: 'AMD ROCm(V5 turbo)',
     tierCpu: 'CPU(v2ProPlus)',
     tierAuto: (found: boolean): string => (found ? '自动：检测到 NVIDIA 显卡' : '自动：没有检测到 NVIDIA 显卡'),
-    tierAutoAmd: '自动：检测到 AMD 显卡（没有 CUDA），使用 CPU 档',
+    tierAutoRocm: (gfx: string): string => `自动：检测到 AMD 显卡（${gfx}），使用 ROCm 档`,
+    tierRocmUnpublished: (gfx: string): string => `自动：检测到 AMD 显卡（${gfx}），但 ROCm 运行时还没发布，先用 CPU 档`,
+    tierAmdUnsupported: '自动：检测到 AMD 显卡，但不在官方 ROCm 支持列表，使用 CPU 档',
     tierCudaMissing: (vendor: string | null): string => (vendor === 'amd'
-      ? '本机是 AMD 显卡，没有 CUDA 加速，显卡档起不来；请改回「自动」或「CPU」'
+      ? '本机是 AMD 显卡，没有 NVIDIA CUDA；要 GPU 加速请选「AMD ROCm」或「自动」'
       : '没有检测到 NVIDIA 显卡，显卡档可能起不来；请改回「自动」或「CPU」'),
+    tierRocmMissing: (name: string | null): string => (name
+      ? `检测到 ${name}，但不在官方 ROCm 支持列表；请改回「自动」或「CPU」`
+      : '没有检测到官方支持的 AMD 显卡；请改回「自动」或「CPU」'),
     models: '已安装模型',
     modelsHint: '运行时与权重的实际占用；卸载立即释放磁盘空间，运行时由三个语音插件共用。',
     modelsScan: '正在统计…',
@@ -31,6 +37,7 @@ const PANEL = {
     uninstallConfirm: (name: string, size: string): string => `卸载「${name}」，释放 ${size}？推理服务会先停止，下次使用需要重新下载。`,
     uninstalled: (name: string, size: string): string => `已卸载「${name}」，释放 ${size}。`,
     runtimeCuda: '显卡运行时（CUDA）',
+    runtimeRocm: 'ROCm 运行时（AMD）',
     runtimeCpu: 'CPU 运行时',
     runtimePartial: '未完成的运行时下载',
     runtimeStale: '旧运行时残留',
@@ -167,12 +174,18 @@ const PANEL = {
     lamp: 'Inference server',
     tier: 'Tier',
     tierCuda: 'GPU (V5 turbo)',
+    tierRocm: 'AMD ROCm (V5 turbo)',
     tierCpu: 'CPU (v2ProPlus)',
     tierAuto: (found: boolean) => (found ? 'Auto: NVIDIA GPU found' : 'Auto: no NVIDIA GPU found'),
-    tierAutoAmd: 'Auto: AMD GPU found (no CUDA); using the CPU tier',
+    tierAutoRocm: (gfx: string) => `Auto: AMD GPU found (${gfx}); using the ROCm tier`,
+    tierRocmUnpublished: (gfx: string) => `Auto: AMD GPU found (${gfx}), but the ROCm runtime is not published yet; using the CPU tier`,
+    tierAmdUnsupported: 'Auto: AMD GPU found but not on the official ROCm list; using the CPU tier',
     tierCudaMissing: (vendor: string | null) => (vendor === 'amd'
-      ? 'This machine has an AMD GPU, which cannot use CUDA; the GPU tier will not start — switch to Auto or CPU'
+      ? 'This machine has an AMD GPU, not NVIDIA CUDA; pick "AMD ROCm" or Auto for GPU acceleration'
       : 'No NVIDIA GPU found; the GPU tier may fail to start — switch to Auto or CPU'),
+    tierRocmMissing: (name: string | null) => (name
+      ? `${name} is not on the official ROCm list; switch to Auto or CPU`
+      : 'No supported AMD GPU found; switch to Auto or CPU'),
     models: 'Installed models',
     modelsHint: 'What the runtime and weights take on disk. Uninstalling frees the space now; the runtime is shared by the three voice plugins.',
     modelsScan: 'Measuring…',
@@ -183,6 +196,7 @@ const PANEL = {
     uninstallConfirm: (name: string, size: string) => `Uninstall "${name}" and free ${size}? The inference server stops first, and using it again downloads it anew.`,
     uninstalled: (name: string, size: string) => `Uninstalled "${name}", freed ${size}.`,
     runtimeCuda: 'GPU runtime (CUDA)',
+    runtimeRocm: 'ROCm runtime (AMD)',
     runtimeCpu: 'CPU runtime',
     runtimePartial: 'Unfinished runtime download',
     runtimeStale: 'Leftover old runtime',

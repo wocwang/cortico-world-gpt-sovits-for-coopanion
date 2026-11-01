@@ -3,14 +3,15 @@
  * 启动方式与上游整合包的 go-webui.bat 一致(工作目录为运行时根,`runtime/` 在 PATH 最前)。
  * 托管运行时的 `GPT_SoVITS/pretrained_models` 在启动前接成指向权重目录的目录联接;自备目录原样使用。
  */
-import { spawn, type ChildProcess } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Logger } from 'cortico/core/types.ts';
 import { weightPaths, type ModelVersion } from './catalog.ts';
 import type { Tier } from './config.ts';
+import { parseHipProbe, pickHipDevice, type AmdGfx } from './gpu.ts';
 import { isLinkEntry, removeLink } from './install.ts';
 import { patchRuntime } from './runtime-patch.ts';
 import type { TrainedWeights } from './weights.ts';
@@ -37,6 +38,8 @@ export interface LaunchSpec {
   dataDir: string;
   /** 托管运行时才打「BERT 按需加载、CNHuBERT 用完即卸」的补丁；自备目录是用户的，不动。 */
   patchRuntime?: boolean;
+  /** ROCm 档要用的架构；用来把核显排除在 HIP 可见列表外。 */
+  gfx?: AmdGfx | null;
 }
 
 /** 首次加载要把几个模型读进内存,CPU 档慢的机器上要一两分钟。 */
@@ -98,10 +101,12 @@ export function yamlScalar(value: string): string {
 export function infererYaml(tier: Tier, version: ModelVersion, trained: TrainedWeights | null = null): string {
   const base = weightPaths(version);
   const w = trained ?? { gpt: base.t2s, sovits: base.vits };
+  const gpu = tier !== 'cpu';
   return [
     'custom:',
-    `  device: ${tier === 'cuda' ? 'cuda' : 'cpu'}`,
-    `  is_half: ${tier === 'cuda'}`,
+    // ROCm 版 PyTorch 暴露同一套 `torch.cuda` API，所以 ROCm 档写的也是 cuda。
+    `  device: ${gpu ? 'cuda' : 'cpu'}`,
+    `  is_half: ${gpu}`,
     `  version: ${version}`,
     `  t2s_weights_path: ${yamlScalar(w.gpt)}`,
     `  vits_weights_path: ${yamlScalar(w.sovits)}`,
@@ -109,6 +114,91 @@ export function infererYaml(tier: Tier, version: ModelVersion, trained: TrainedW
     '  cnhuhbert_base_path: GPT_SoVITS/pretrained_models/chinese-hubert-base',
     '',
   ].join('\n');
+}
+
+/**
+ * 子进程环境：ROCm 档要把 MIOpen 的 solver 搜索压到快速启发式，并指定一个确定可写的缓存目录。
+ * 原生库直接读进程环境，`python -I` 只隔离 `PYTHON*`，不影响这些变量。
+ */
+export function runtimeEnv(tier: Tier, opts: { miopenDir: string; deviceIndex: number | null }): NodeJS.ProcessEnv {
+  if (tier !== 'rocm') return {};
+  const env: NodeJS.ProcessEnv = {
+    MIOPEN_FIND_MODE: 'FAST',
+    MIOPEN_USER_DB_PATH: opts.miopenDir,
+    MIOPEN_CUSTOM_CACHE_DIR: opts.miopenDir,
+  };
+  if (opts.deviceIndex !== null) env.HIP_VISIBLE_DEVICES = String(opts.deviceIndex);
+  return env;
+}
+
+/** 只打印设备表，不加载模型；`gcnArchName` 只有 ROCm 版 torch 才有。 */
+const HIP_PROBE = [
+  'import json',
+  'import torch',
+  'out = []',
+  'for i in range(torch.cuda.device_count()):',
+  '    p = torch.cuda.get_device_properties(i)',
+  '    out.append({"index": i, "arch": getattr(p, "gcnArchName", ""), "name": str(p.name)})',
+  'print("HIPDEVICES:" + json.dumps(out))',
+].join('\n');
+
+interface HipCache {
+  gfx: AmdGfx;
+  index: number;
+  at: number;
+}
+
+/** 探针一次 3–5 秒，缓存 7 天；换卡或换运行时会因为架构不同而失效。 */
+const HIP_CACHE_FILE = 'hip-device.json';
+const HIP_CACHE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** 纯函数：缓存文件内容是否还能用。 */
+export function cachedHipIndex(raw: string, gfx: AmdGfx, now = Date.now()): number | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<HipCache>;
+    if (parsed.gfx !== gfx || typeof parsed.index !== 'number' || typeof parsed.at !== 'number') return null;
+    return now - parsed.at < HIP_CACHE_MS ? parsed.index : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 按架构挑出独显的 HIP 索引：双显卡机器上核显常被枚举成 device 0，而运行时只带了独显的内核包
+ * （社区实测：device 0 是 gfx1036 核显时，第一个卷积就 `hipErrorInvalidKernelFile`）。
+ * 探针失败或没命中就返回 null，不设可见列表、照原样启动。
+ */
+async function probeHipDevice(runtimeDir: string, gfx: AmdGfx, dataDir: string, log: Logger): Promise<number | null> {
+  const file = join(dataDir, HIP_CACHE_FILE);
+  try {
+    const cached = cachedHipIndex(readFileSync(file, 'utf8'), gfx);
+    if (cached !== null) return cached;
+  } catch { /* 还没有缓存 */ }
+  const out = await new Promise<string | null>((done) => {
+    execFile(
+      join(runtimeDir, 'runtime', 'python.exe'),
+      ['-I', '-X', 'utf8', '-c', HIP_PROBE],
+      { cwd: runtimeDir, windowsHide: true, timeout: 20_000 },
+      (err, stdout) => done(err ? null : stdout),
+    );
+  });
+  if (out === null) {
+    log.warn('ROCm 设备探针没跑起来，按默认设备顺序启动', { runtimeDir });
+    return null;
+  }
+  const devices = parseHipProbe(out);
+  if (!devices.length) {
+    log.warn('ROCm 设备探针没有返回设备表', { gfx });
+    return null;
+  }
+  const index = pickHipDevice(devices, gfx);
+  log.info('ROCm 设备探针', { gfx, picked: index, devices: devices.map((device) => `${device.index}:${device.arch}`) });
+  if (index === null) return null;
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(file, JSON.stringify({ gfx, index, at: Date.now() }));
+  } catch { /* 缓存写不了不影响启动 */ }
+  return index;
 }
 
 export class SovitsServer {
@@ -173,6 +263,12 @@ export class SovitsServer {
     mkdirSync(spec.dataDir, { recursive: true });
     const yaml = join(spec.dataDir, `tts_infer.${spec.tier}.yaml`);
     writeFileSync(yaml, infererYaml(spec.tier, spec.version, spec.trained));
+    const miopenDir = join(spec.dataDir, 'miopen');
+    let deviceIndex: number | null = null;
+    if (spec.tier === 'rocm') {
+      mkdirSync(miopenDir, { recursive: true });
+      if (spec.gfx) deviceIndex = await probeHipDevice(spec.runtimeDir, spec.gfx, spec.dataDir, this.log);
+    }
     const port = await freePort();
     const url = `http://127.0.0.1:${port}`;
     const runtimeBin = join(spec.runtimeDir, 'runtime');
@@ -180,7 +276,7 @@ export class SovitsServer {
       cwd: spec.runtimeDir,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, PATH: `${runtimeBin};${process.env.PATH ?? ''}` },
+      env: { ...process.env, ...runtimeEnv(spec.tier, { miopenDir, deviceIndex }), PATH: `${runtimeBin};${process.env.PATH ?? ''}` },
     });
     this.child = child;
     this.st = { phase: 'starting', url, pid: child.pid ?? null, detail: null, startMs: null };

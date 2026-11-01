@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# 打一档运行时包:bash scripts/build-runtime.sh <cu128|cpu> <工作目录>
+# 打一档运行时包:bash scripts/build-runtime.sh <cu128|cpu|rocm> <工作目录>
 #
 # 产物 <工作目录>/gpt-sovits-<RUNTIME_VERSION>-win-x64-<档>.zip,解压后是 runtime 根:上游 GPT-SoVITS 在
 # UPSTREAM_COMMIT 的代码、runtime/(python-build-standalone 的 CPython 3.12 加依赖)、G2PW、NLTK 数据、Open JTalk 词典。
 # GPT_SoVITS/pretrained_models 留空，启动前由扩展接到权重目录。另出 1900 MiB 的分片(GitHub Release 单个附件上限 2 GiB)。
 # 要 git、uv、curl、Windows 自带的 tar.exe;只在 Windows x64 上跑。
+#
+# rocm 档：torch/torchaudio 从 AMD 官方 wheel 索引装 ROCm 版，四套官方架构的内核包一次装齐
+# （gfx1100/1101/1200/1201）；不装 flash-attn（cu128 编译的扩展会让 GPT-SoVITS 挂上 CUDA graph 后端）。
 set -euo pipefail
 TIER="$1"
+case "$TIER" in
+  cu128|cpu|rocm) ;;
+  *) echo "usage: $0 <cu128|cpu|rocm> <work dir>" >&2; exit 2 ;;
+esac
 WORK="$(mkdir -p "$2" && cd "$2" && pwd)"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 COMMIT=$(sed -nE "s/^export const UPSTREAM_COMMIT = '([0-9a-f]+)';/\1/p" "$HERE/../src/catalog.ts")
@@ -44,12 +51,30 @@ PIP=(uv pip install --python "$OUT/runtime/python.exe" --link-mode copy)
 if [ "$TIER" = cu128 ]; then
   "${PIP[@]}" torch==2.7.1+cu128 torchaudio==2.7.1+cu128 --index-url https://download.pytorch.org/whl/cu128
   "${PIP[@]}" "flash-attn @ https://huggingface.co/lj1995/GPT-SoVITS-windows-package/resolve/main/wheels/cu128/flash_attn-2.8.3%2Bcu12torch2.7cxx11abiFALSE-cp312-cp312-win_amd64.whl"
+elif [ "$TIER" = rocm ]; then
+  # --upgrade 不能省：不升级时 pip 认为已装的 cpu 版 torch 已满足要求，extras 不触发安装，只会空转。
+  # extras 决定装哪几套内核包；少一套，对应架构的机器会在第一个卷积报 hipErrorInvalidKernelFile。
+  # numpy 钉 <2：pyopenjtalk 在 numpy 2.x 下会崩。
+  "${PIP[@]}" --upgrade --index-url https://stable.repo.amd.com/rocm/whl-next/ \
+    "torch[device-gfx1100,device-gfx1101,device-gfx1200,device-gfx1201]" torchaudio "numpy<2"
 else
   "${PIP[@]}" torch==2.7.1+cpu torchaudio==2.7.1+cpu --index-url https://download.pytorch.org/whl/cpu
 fi
-# onnxruntime 只给中文多音字模型 G2PW 用，两档都用 CPU 版(GPU 版多 500 MB 以上)
+# onnxruntime 只给中文多音字模型 G2PW 用，各档都用 CPU 版(GPU 版多 500 MB 以上)
 "${PIP[@]}" "onnxruntime==1.19.2"
 "${PIP[@]}" -r "$HERE/requirements-infer.txt"
+
+if [ "$TIER" = rocm ]; then
+  ROCM_SP="$OUT/runtime/Lib/site-packages"
+  # 四套架构的内核包缺一套，对应显卡就在第一个卷积报 hipErrorInvalidKernelFile；装不全不打包。
+  for arch in gfx1100 gfx1101 gfx1200 gfx1201; do
+    ls -d "$ROCM_SP"/*device*"$arch"* >/dev/null 2>&1 || { echo "missing device kernels for $arch" >&2; exit 1; }
+  done
+  # cu128 编译的 flash-attn 会让上游挂上 flash-attn / CUDA graph 后端（importlib.util.find_spec 探测）。
+  if [ -e "$ROCM_SP/flash_attn" ]; then echo "flash_attn must not ship in the rocm tier" >&2; exit 1; fi
+  # torchaudio >= 2.9 的 load 只走 TorchCodec；用 soundfile 兜底（构建期写入，不是运行期改包）。
+  cp "$HERE/rocm-sitecustomize.py" "$ROCM_SP/sitecustomize.py"
+fi
 
 # 文本前端的数据
 mkdir -p "$WORK/archives"

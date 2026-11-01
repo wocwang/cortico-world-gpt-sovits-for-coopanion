@@ -7,8 +7,11 @@ import { DEFAULT_PRESET } from './voices.ts';
 
 export const GPT_SOVITS_ID = 'gpt-sovits';
 
-/** 推理档：显卡档要 NVIDIA 显卡,`auto` 按 nvidia-smi 能否列出显卡选。 */
-export type TierSetting = 'auto' | 'cuda' | 'cpu';
+/**
+ * 推理档：`cuda` 要 NVIDIA 显卡，`rocm` 要 AMD 官方支持矩阵内的显卡，`cpu` 谁都能跑；
+ * `auto` 按 nvidia-smi 与 AMD 型号决定（见 `gpu.ts` 的 `pickTier`）。
+ */
+export type TierSetting = 'auto' | 'cuda' | 'rocm' | 'cpu';
 export type Tier = Exclude<TierSetting, 'auto'>;
 
 /** config.json 的 `worlds.gpt-sovits` 段。 */
@@ -169,7 +172,7 @@ const TEXT = {
     text: { title: '参考音频的台本', description: '参考音频里说的话，要逐字一致。' },
     gptWeights: { title: '自备 GPT 权重', description: '自己训的 s1 权重(.ckpt)。与下面的 SoVITS 权重一起填才生效；都留空就用内置底模。选自定义音色时，这里改的是该音色自带的权重。' },
     sovitsWeights: { title: '自备 SoVITS 权重', description: '自己训的 s2 权重(.pth)，版本要和推理档一致(显卡档 v5turbo / CPU 档 v2ProPlus)。服务在跑时改这两项会就地换权重，不用重启。' },
-    tier: { title: '推理档', auto: '自动', cuda: '显卡(NVIDIA)', cpu: 'CPU', description: '自动：检测到 NVIDIA 显卡用显卡档，否则用 CPU 档。AMD / Intel 显卡没有 CUDA，只能用 CPU 档（慢一些但能用），显卡档在那些机器上起不来。显卡档约 2–3 GB 显存（按需加载后约 1.5–2.5 GB）；CPU 档约 4–6 GB 内存。修改后重启推理服务生效。' },
+    tier: { title: '推理档', auto: '自动', cuda: '显卡(NVIDIA)', rocm: '显卡(AMD ROCm)', cpu: 'CPU', description: '自动：检测到 NVIDIA 显卡用显卡档；没有 NVIDIA 但有官方支持的 AMD 显卡（RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700）就用 ROCm 档；其余用 CPU 档。AMD 需要 Windows 11、Adrenalin 26.2.2 或更新，且系统开启长路径（安装前会检查，不会自己改系统）。Intel 显卡与不在列表里的 AMD 显卡只能用 CPU 档。显卡档约 2–3 GB 显存（按需加载后约 1.5–2.5 GB），ROCm 档约 2 GB 显存；CPU 档约 4–6 GB 内存。修改后重启推理服务生效。' },
     speed: { title: '语速', description: '1 为原速。' },
     textLang: {
       title: '语音语言',
@@ -216,7 +219,7 @@ const TEXT = {
     text: { title: 'Reference transcript', description: 'The exact words spoken in the reference audio.' },
     gptWeights: { title: 'Own GPT weights', description: 'Your own trained s1 weights (.ckpt). Takes effect together with the SoVITS weights below; leave both empty to use the bundled base model. For a custom voice these are the voice’s own weights.' },
     sovitsWeights: { title: 'Own SoVITS weights', description: 'Your own trained s2 weights (.pth). Its version must match the tier (v5turbo on GPU, v2ProPlus on CPU). Editing either field switches the running server in place, no restart.' },
-    tier: { title: 'Inference tier', auto: 'Auto', cuda: 'GPU (NVIDIA)', cpu: 'CPU', description: 'Auto uses the GPU tier when an NVIDIA GPU is found, the CPU tier otherwise. AMD and Intel GPUs have no CUDA: they can only use the CPU tier (slower but works), and the GPU tier will not start on them. GPU tier: about 2–3 GB VRAM (1.5–2.5 GB with on-demand loading); CPU tier: about 4–6 GB RAM. Takes effect when the inference server restarts.' },
+    tier: { title: 'Inference tier', auto: 'Auto', cuda: 'GPU (NVIDIA)', rocm: 'GPU (AMD ROCm)', cpu: 'CPU', description: 'Auto uses the GPU tier when an NVIDIA GPU is found; without one, an AMD card from the official list (RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700) uses the ROCm tier; everything else uses the CPU tier. AMD needs Windows 11, Adrenalin 26.2.2 or newer, and long paths enabled in Windows (checked before installing; the plugin never changes system settings itself). Intel GPUs and AMD cards outside the list can only use the CPU tier. GPU tier: about 2–3 GB VRAM (1.5–2.5 GB with on-demand loading); ROCm tier: about 2 GB VRAM; CPU tier: about 4–6 GB RAM. Takes effect when the inference server restarts.' },
     speed: { title: 'Speech rate', description: '1 is the original rate.' },
     textLang: {
       title: 'Speech language',
@@ -256,7 +259,7 @@ const TEXT = {
 
 export function tierOptions(language: Language): Array<{ value: string; label: string }> {
   const t = pick(language, TEXT).tier;
-  return [{ value: 'auto', label: t.auto }, { value: 'cuda', label: t.cuda }, { value: 'cpu', label: t.cpu }];
+  return [{ value: 'auto', label: t.auto }, { value: 'cuda', label: t.cuda }, { value: 'rocm', label: t.rocm }, { value: 'cpu', label: t.cpu }];
 }
 
 export const promptLanguageOptions = (): Array<{ value: string; label: string }> =>

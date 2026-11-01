@@ -12,6 +12,7 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { MODEL_FILES, RUNTIME_ASSETS, RUNTIME_VERSION, UPSTREAM_COMMIT, type ModelVersion, type PinnedFile } from './catalog.ts';
 import type { Tier } from './config.ts';
+import { longPathsEnabled, pathTooLong } from './gpu.ts';
 
 export interface JobState {
   phase: 'absent' | 'working' | 'ready' | 'error';
@@ -164,6 +165,29 @@ export function assertFreeSpace(dir: string, needBytes: number): void {
   }
 }
 
+/**
+ * ROCm 运行时的路径预检。hipBLASLt 的 TensileLibrary 文件名让绝对路径达到 272 字符，
+ * 系统没开长路径时进程会在第一个线性层直接 `0xC0000005`（安装期则是 pip 的 OSError）。
+ * Cortico 不改系统策略，所以这里只拒绝安装、把开关命令交给操作者；换短路径也行。
+ */
+export function rocmPathProblem(installDir: string, longPaths: boolean | null): string | null {
+  if (!pathTooLong(installDir)) return null;
+  if (longPaths === true) return null;
+  const reason = longPaths === false ? '系统没有开启长路径支持' : '读不到长路径开关，请先确认已开启';
+  return [
+    `安装路径太长（${installDir.length} 字符）：ROCm 内核库的文件名会超过 Windows 的 260 字符上限，${reason}。`,
+    '两条路：把 Coopanion 装到更短的目录，或由你自己开启长路径后重试：',
+    'reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f',
+    '改完建议重启系统。插件不会自己改注册表。',
+  ].join('\n');
+}
+
+/** 装 ROCm 档前调用；路径超限且开关没开时抛出带解决步骤的错误。 */
+export async function assertRocmPaths(dir: string): Promise<void> {
+  const problem = rocmPathProblem(dir, await longPathsEnabled());
+  if (problem) throw new Error(problem);
+}
+
 /** Windows 10 起自带 bsdtar,能解 zip;PATH 上靠前的 Git tar 不认 zip,所以写全路径。 */
 export function extract(archive: string, into: string): Promise<void> {
   const tar = process.platform === 'win32' ? resolve(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
@@ -242,6 +266,8 @@ export class RuntimeJob extends Job {
     // 先把上一轮留下的半成品清掉（下载的是压缩包本身，不跨次续传）。
     rmSync(partial, { recursive: true, force: true });
     mkdirSync(partial, { recursive: true });
+    // ROCm 的库文件名会撞 260 字符上限；装完才发现就白下几个 GB。
+    if (this.tier() === 'rocm') await assertRocmPaths(dir);
     // 空间不够时，下载到 100% 才会在解压那一步炸——先看盘，直接说清楚。
     assertFreeSpace(dir, asset.bytes);
     const archive = join(partial, asset.file);

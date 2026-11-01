@@ -11,7 +11,6 @@
  * 环境提示词里的状态是前缀重建时的快照;之后变为可用或不可用时推一条 `gpt-sovits.state` 内部事件，
  * 随下一批事件送达(piggyback),不单独唤醒 bot。
  */
-import { execFile } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,8 +18,9 @@ import type { Language } from 'cortico/core/language.ts';
 import type { Logger, ToolDef, ToolOutcome, World, WorldHost, WorldLamp, WorldWebUiDecl } from 'cortico/core/types.ts';
 import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
-import { officialVoice, OUTPUT_GAIN, RUNTIME_EXTRACT_BYTES, RUNTIME_VERSION, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
+import { officialVoice, OUTPUT_GAIN, RUNTIME_ASSETS, RUNTIME_EXTRACT_BYTES, RUNTIME_VERSION, TIER_MODEL, weightPaths, type ModelVersion } from './catalog.ts';
 import { dirBytes, topLevelBytes } from './disk.ts';
+import { detectGpus, pickTier, type AmdProbe, type GpuVendor } from './gpu.ts';
 import { configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, RVC_INDEX_MAX, RVC_INDEX_MIN, RVC_PROTECT_MAX, RVC_PROTECT_MIN, RVC_TIMEOUT_MAX, RVC_TIMEOUT_MIN, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
 import { startHttpTts, SING_MARK, type HttpTtsHandle, type TtsJob } from './http-tts.ts';
@@ -157,7 +157,9 @@ export class GptSovitsWorld implements World {
   private warmed = false;
   private lastError: string | null = null;
   private cuda: boolean | null = null;
-  /** 没检测到 NVIDIA 时的显卡厂商，只用来把「为什么走 CPU 档」说清楚（AMD 不支持 CUDA）。 */
+  /** AMD 显卡的探测结果：只有在官方 ROCm 支持矩阵里才走 ROCm 档。 */
+  private amd: AmdProbe = { kind: 'none' };
+  /** 没检测到 NVIDIA 时的显卡厂商，只用来把「为什么走 CPU / ROCm 档」说清楚。 */
   private gpu: GpuVendor | null = null;
   /** 「已安装模型」的体积扫描结果；面板不是每秒都量，1 分钟内的重复请求直接复用。 */
   private usageCache: { at: number; data: UsageState } | null = null;
@@ -213,10 +215,11 @@ export class GptSovitsWorld implements World {
     return this.opts.cfg;
   }
 
-  /** 生效的推理档;`auto` 按 nvidia-smi 能否列出显卡。 */
+  /** 生效的推理档；显式选择照用，`auto` 的优先级见 `pickTier`。 */
   tier(): Tier {
-    if (this.cfg.tier !== 'auto') return this.cfg.tier;
-    return this.cuda ? 'cuda' : 'cpu';
+    const picked = pickTier(this.cfg.tier, this.cuda === true, this.amd);
+    // ROCm 运行时还没上传时，自动档不能把 A 卡用户留在装不了的档上（显式选了就照用户的意思）。
+    return picked === 'rocm' && this.cfg.tier === 'auto' && RUNTIME_ASSETS.rocm.bytes === 0 ? 'cpu' : picked;
   }
 
   version(): ModelVersion {
@@ -785,9 +788,12 @@ export class GptSovitsWorld implements World {
     this.appliedTarget = null;
     this.weightsFailed = '';
     this.launching = this.cfg.autoStart && this.backend().kind !== 'remote';
-    this.cuda = await detectCuda();
-    if (!this.cuda) this.gpu = await detectGpuVendor();
-    if (this.cfg.tier === 'cuda' && !this.cuda) this.log.warn('配置的是显卡档，但没检测到 NVIDIA 显卡（AMD/Intel 不支持 CUDA）', { gpu: this.gpu });
+    const gpus = await detectGpus();
+    this.cuda = gpus.nvidia;
+    this.amd = gpus.amd;
+    this.gpu = gpus.vendor;
+    if (this.cfg.tier === 'cuda' && !gpus.nvidia) this.log.warn('配置的是显卡档，但没检测到 NVIDIA 显卡', { gpu: this.gpu });
+    if (this.cfg.tier === 'rocm' && gpus.amd.kind !== 'supported') this.log.warn('配置的是 ROCm 档，但没检测到官方支持的 AMD 显卡', { gpu: this.gpu, amd: gpus.amd });
     // 启动即把当前音色的音频/台本镜像进配置字段：配置页一打开就能看到实际用的文件。
     this.settlePreset();
     this.appliedTextLang = null;
@@ -986,6 +992,7 @@ export class GptSovitsWorld implements World {
       trained,
       dataDir: this.opts.dataDir,
       patchRuntime: b.kind === 'managed',
+      gfx: this.amd.kind === 'supported' ? this.amd.gpu.gfx : null,
     });
     // yaml 里已经是这组权重，启动即加载，不必再调一遍换权重的接口。
     this.appliedWeights = this.weightsSignature();
@@ -1454,6 +1461,7 @@ export class GptSovitsWorld implements World {
       tierSetting: this.cfg.tier,
       tier: this.tier(),
       cudaFound: this.cuda === true,
+      amd: this.amd,
       gpu: this.gpu,
       version: this.version(),
       runtime: { ...this.runtime.status(), dir: b.kind === 'remote' ? b.url : b.dir, published: this.runtime.published(), bytes: this.runtime.bytes(), own: b.kind === 'own' && isRuntimeDir(b.dir) },
@@ -1482,11 +1490,13 @@ export class GptSovitsWorld implements World {
       if (!entry.isDirectory() || isLinkEntry(path)) continue;
       const kind: UsageKind | null = entry.name.endsWith('.partial') ? 'partial'
         : /\.old-\d+$/.test(entry.name) ? 'stale'
-          : (entry.name === 'cuda' || entry.name === 'cpu') ? 'runtime'
+          : (entry.name === 'cuda' || entry.name === 'rocm' || entry.name === 'cpu') ? 'runtime'
             : null;
       if (!kind) continue;
       // 运行时是几万个文件，递归量要几十秒；面板用解压后的实测估算，标 ≈。
-      const tier: Tier | null = entry.name.startsWith('cuda') ? 'cuda' : entry.name.startsWith('cpu') ? 'cpu' : null;
+      const tier: Tier | null = entry.name.startsWith('cuda') ? 'cuda'
+        : entry.name.startsWith('rocm') ? 'rocm'
+          : entry.name.startsWith('cpu') ? 'cpu' : null;
       const bytes = kind === 'partial' ? topLevelBytes(path) : tier ? RUNTIME_EXTRACT_BYTES[tier] : 0;
       items.push({ id: entry.name, kind, dir: path, bytes, estimated: true });
     }
@@ -1519,14 +1529,14 @@ export class GptSovitsWorld implements World {
   }
 }
 
-/** 没检测到 NVIDIA 时的显卡厂商。 */
-export type GpuVendor = 'amd' | 'intel' | 'other';
+/** 没检测到 NVIDIA 时的显卡厂商；定义在 `gpu.ts`，这里转出给现有引用。 */
+export type { GpuVendor } from './gpu.ts';
 
 /** 「已安装模型」里的一项：运行时档、没下完的运行时、旧运行时残留，或 GPT-SoVITS 权重。 */
 export type UsageKind = 'runtime' | 'partial' | 'stale' | 'weights';
 
 export interface UsageItem {
-  /** 目录名：`cuda` / `cpu` / `cuda.partial` / `cuda.old-…` / `weights`。 */
+  /** 目录名：`cuda` / `rocm` / `cpu` / `cuda.partial` / `cuda.old-…` / `weights`。 */
   id: string;
   kind: UsageKind;
   dir: string;
@@ -1547,6 +1557,8 @@ export interface PanelState {
   tierSetting: GptSovitsConfigSection['tier'];
   tier: Tier;
   cudaFound: boolean;
+  /** AMD 显卡的探测结果；`supported` 时 `auto` 会走 ROCm 档。 */
+  amd: AmdProbe;
   /** 没有 NVIDIA 时的显卡厂商；用来解释为什么用 CPU 档。 */
   gpu: GpuVendor | null;
   version: ModelVersion;
@@ -1565,28 +1577,3 @@ export interface PanelState {
 }
 
 const readText = (file: string): string => readFileSync(file, 'utf8').trim();
-
-/** nvidia-smi 能列出至少一块显卡就算有 NVIDIA 显卡。 */
-function detectCuda(): Promise<boolean> {
-  return new Promise((done) => {
-    execFile('nvidia-smi', ['-L'], { windowsHide: true, timeout: 5000 }, (err, stdout) => done(!err && /GPU \d+:/.test(stdout)));
-  });
-}
-
-/** 没有 NVIDIA 时查一下显卡厂商：AMD 没有 CUDA，面板和日志里要把「为什么用 CPU 档」说清楚。 */
-function detectGpuVendor(): Promise<GpuVendor | null> {
-  return new Promise((done) => {
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join ';'"],
-      { windowsHide: true, timeout: 8000 },
-      (err, stdout) => {
-        if (err) return done(null);
-        const names = stdout.toLowerCase();
-        if (/amd|radeon/.test(names)) done('amd');
-        else if (/intel/.test(names)) done('intel');
-        else done(names.trim() ? 'other' : null);
-      },
-    );
-  });
-}

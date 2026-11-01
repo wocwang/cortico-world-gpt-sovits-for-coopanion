@@ -38,8 +38,15 @@ const GH_OWN = `https://github.com/Phantivia/cortico-world-gpt-sovits-for-coopan
 
 const CUDA_FILE = `gpt-sovits-${RUNTIME_VERSION}-win-x64-cu128.zip`;
 const CPU_FILE = `gpt-sovits-${RUNTIME_VERSION}-win-x64-cpu.zip`;
+const ROCM_FILE = `gpt-sovits-${RUNTIME_VERSION}-win-x64-rocm.zip`;
 
-/** 魔搭放整包;GitHub Release 放不下 2 GiB 以上的整包，显卡档在那里只有分片。 */
+/**
+ * 魔搭放整包;GitHub Release 放不下 2 GiB 以上的整包，显卡档在那里只有分片。
+ *
+ * `rocm` 是独立的一档，绝不覆盖共享的 `cuda` 目录（本插件、RVC、DiffSinger 共用
+ * `runtimes/gpt-sovits/<版本>/<档>`）。包还没构建上传时 `bytes` 为 0，`RuntimeJob.published()`
+ * 据此在面板上说「这一档还没有发布运行时包」；上传后把实测的整包字节、SHA-256 与分片字节填进来。
+ */
 export const RUNTIME_ASSETS: Readonly<Record<Tier, RuntimeAsset>> = {
   cuda: {
     file: CUDA_FILE,
@@ -58,11 +65,21 @@ export const RUNTIME_ASSETS: Readonly<Record<Tier, RuntimeAsset>> = {
     sha256: '9ce348074e941388544b4db072ee0b9cfc50c9bd420e61f13ee9364fe90152e1',
     sources: [`${MS_OWN}/runtime/${CPU_FILE}`, `${GH_OWN}/${CPU_FILE}`],
   },
+  rocm: {
+    file: ROCM_FILE,
+    bytes: 0,
+    sha256: '',
+    sources: [],
+  },
 };
 
-/** 每档用的模型版本，即 api_v2 配置里的 `version`。 */
+/**
+ * 每档用的模型版本，即 api_v2 配置里的 `version`。ROCm 档和显卡档同为 v5turbo，
+ * 权重与显卡档共用，不额外下载；CPU 档用 v2ProPlus。
+ */
 export const TIER_MODEL: Readonly<Record<Tier, ModelVersion>> = {
   cuda: 'v5turbo',
+  rocm: 'v5turbo',
   cpu: 'v2ProPlus',
 };
 
@@ -71,6 +88,9 @@ export type ModelVersion = 'v5turbo' | 'v2ProPlus';
 /** 运行时解压后大约占多少字节（实测），面板上估算可释放空间用；精确值要递归扫几万个文件，太慢。 */
 export const RUNTIME_EXTRACT_BYTES: Readonly<Record<Tier, number>> = {
   cuda: 11_300_000_000,
+  // ROCm 档 = CPU 档的底子换掉 torch，再加 rocm-sdk-core/-libraries 与四套设备内核；
+  // 按 wheel 体积估 6.8 GB，构建出整包后按解压实测回填。
+  rocm: 6_800_000_000,
   cpu: 2_210_000_000,
 };
 

@@ -70,7 +70,8 @@ const voicePanel: WebUiPanel = {
     const labelOf = (item: UsageItem) => (item.kind === 'weights' ? t.weightsBase
       : item.kind === 'partial' ? t.runtimePartial
         : item.kind === 'stale' ? t.runtimeStale
-          : item.id === 'cuda' ? t.runtimeCuda : t.runtimeCpu);
+          : item.id === 'cuda' ? t.runtimeCuda
+            : item.id === 'rocm' ? t.runtimeRocm : t.runtimeCpu);
 
     const itemSize = (item: UsageItem) => `${item.estimated ? '≈' : ''}${sizeText(item.bytes)}`;
 
@@ -133,11 +134,16 @@ const voicePanel: WebUiPanel = {
     function render(s: PanelState) {
       state = s;
       // 推理档
-      setPill(tierRow.pill, s.tier === 'cuda' ? t.tierCuda : t.tierCpu, 'on');
-      // 自动档说明为什么走 CPU；显式选了显卡档但机器没有 NVIDIA 时提前警告，别等下了 4 GB 运行时才失败。
+      setPill(tierRow.pill, s.tier === 'cuda' ? t.tierCuda : s.tier === 'rocm' ? t.tierRocm : t.tierCpu, 'on');
+      // 自动档说明实际选了哪一档；显式选了显卡档但机器不支持时提前警告，别等下了几个 GB 运行时才失败。
       tierRow.detail.textContent = s.tierSetting === 'auto'
-        ? (s.cudaFound ? t.tierAuto(true) : (s.gpu === 'amd' ? t.tierAutoAmd : t.tierAuto(false)))
-        : (s.tier === 'cuda' && !s.cudaFound ? t.tierCudaMissing(s.gpu) : '');
+        ? (s.cudaFound ? t.tierAuto(true)
+          : s.amd.kind === 'supported'
+            ? (s.tier === 'rocm' ? t.tierAutoRocm(s.amd.gpu.gfx) : t.tierRocmUnpublished(s.amd.gpu.gfx))
+            : s.gpu === 'amd' ? t.tierAmdUnsupported : t.tierAuto(false))
+        : s.tier === 'cuda' && !s.cudaFound ? t.tierCudaMissing(s.gpu)
+          : s.tier === 'rocm' && s.amd.kind !== 'supported' ? t.tierRocmMissing(s.amd.kind === 'unsupported' ? s.amd.name : null)
+            : '';
       // 运行时与权重
       const managed = s.backend === 'managed';
       runtimeRow.acts.hidden = !managed;
