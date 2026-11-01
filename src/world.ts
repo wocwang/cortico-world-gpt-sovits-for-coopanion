@@ -30,7 +30,7 @@ import { Player, applyGain, listOutputDevices } from './player.ts';
 import { RvcLink, type RvcProbe } from './rvc-link.ts';
 import { SovitsServer, type ServerState } from './server.ts';
 import { customVoiceOptions, registerCustomVoiceOptions } from './voice-options.ts';
-import { promptLanguageOf, speechText, ttsPlain, ttsSafe } from './speech-text.ts';
+import { promptLanguageOf, spokenReceipt, speechText, ttsPlain, ttsSafe } from './speech-text.ts';
 import { parseWavHeader, synthesize, switchWeights, type SpeechLang, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { TrainerManager } from './trainer.ts';
@@ -90,7 +90,10 @@ const delayed = (ms: number): Promise<null> => new Promise((resolve) => {
 
 /** 队列里的一句。`finish` 只在开启「交给其他插件」时由 `speak()` 提供。 */
 interface QueuedLine {
+  /** 去掉标记后的台词，也就是气泡里该出现的那一段。 */
   text: string;
+  /** 真正送进合成器的文字：语音语言是 en/ja/ko 时可能是译文。 */
+  spoken: string;
   at: number;
   /** true = 只合成不本机外放（这一句是发给别的渠道的）。 */
   silent: boolean;
@@ -156,6 +159,8 @@ export class GptSovitsWorld implements World {
   private warming = false;
   private warmed = false;
   private lastError: string | null = null;
+  /** 最近一句真正送进合成器的文字：语音语言是 en/ja/ko 时这里是译文，和气泡本来就不同。 */
+  private lastSpoken: { text: string; translated: boolean; at: string } | null = null;
   private cuda: boolean | null = null;
   /** AMD 显卡的探测结果：只有在官方 ROCm 支持矩阵里才走 ROCm 档。 */
   private amd: AmdProbe = { kind: 'none' };
@@ -553,6 +558,9 @@ export class GptSovitsWorld implements World {
       this.log.info('推理服务在休眠，这句话会叫醒它');
       void this.startServer().finally(() => { this.armIdle(); void this.pump(); });
     }
+    // 翻译放在排队之前：回执要写清真正念出去的是哪句；放进 pump 里做的话，模型永远看不到译文。
+    const spoken = await this.prepareSpeechText(text, this.cfg.textLang);
+    this.lastSpoken = { text: spoken, translated: spoken !== text, at: nowIso(this.opts.timezone) };
     const ahead = this.queue.length + (this.current ? 1 : 0);
     // 开启「交给其他插件」或这一句本来就不外放（silent）时收下整句 PCM：
     // 后者让旧 QQ 插件（qq_draft 的 voice 只认 log:/mem: 句柄）拿到可发送的附件。
@@ -561,7 +569,7 @@ export class GptSovitsWorld implements World {
     const finished = sharing ? new Promise<Buffer | null>((resolve) => { finish = resolve; }) : null;
     let timer: NodeJS.Timeout | undefined;
     const started = new Promise<void>((done) => {
-      this.queue.push({ text, at: Date.now(), silent, started: done, ...(finish ? { finish } : {}) });
+      this.queue.push({ text, spoken, at: Date.now(), silent, started: done, ...(finish ? { finish } : {}) });
       timer = setTimeout(done, SPEAK_WAIT_MAX_MS);
     });
     if (ready) void this.pump();
@@ -569,7 +577,7 @@ export class GptSovitsWorld implements World {
     // 音频写进声卡（至多 SPEAK_WAIT_MAX_MS）；不外放的句子没有声音要对齐，直接回执，免得气泡白等 3 秒。
     if (!silent && this.cfg.playLocally) await started;
     clearTimeout(timer);
-    const said = ahead ? `Queued after ${ahead} line(s).` : 'Speaking.';
+    const said = spokenReceipt(spoken, { ahead, lang: this.cfg.textLang, translated: spoken !== text });
     if (!finished) return { text: said };
     const wav = await Promise.race([finished, delayed(SHARE_WAIT_MAX_MS)]);
     if (!wav) return { text: `${said} No audio attachment this time: the line did not finish within ${SHARE_WAIT_MAX_MS / 1000} s.` };
@@ -598,14 +606,13 @@ export class GptSovitsWorld implements World {
    * 失败时抛出，由调用方决定要不要降级重试。`onFirst` 在第一次真正写进声卡时调用一次。
    */
   private async playLine(
-    url: string, voice: { audio: string; text: string }, text: string,
+    url: string, voice: { audio: string; text: string }, spoken: string,
     signal: AbortSignal, onFirst: () => void, silent: boolean, deliver: boolean,
   ): Promise<{ first: number; wav: Buffer | null }> {
     const gain = this.backend().kind === 'remote' ? 1 : OUTPUT_GAIN[this.version()];
     // 落盘、交出去或这一句要回报附件时收整句；都没有时不占内存。
     const archive = this.cfg.saveAudio || deliver ? { rate: 0, chunks: [] as Buffer[] } : null;
     let first = 0;
-    const spoken = await this.prepareSpeechText(text, this.cfg.textLang);
     for await (const c of synthesize(url, this.request(spoken, voice), signal)) {
       if (archive) { archive.rate = c.sampleRate; archive.chunks.push(applyGain(c.pcm, gain)); }
       if (!silent) await this.player.write(c.sampleRate, c.pcm, gain);
@@ -665,7 +672,7 @@ export class GptSovitsWorld implements World {
     try {
       while (this.queue.length && !this.stopped) {
         const item = this.queue.shift()!;
-        const { text, at, started } = item;
+        const { spoken, at, started } = item;
         // 本机不外放开关关着时整句静音；句子级 silent 参数也一样。
         const silent = item.silent || !this.cfg.playLocally;
         const url = this.url();
@@ -683,9 +690,9 @@ export class GptSovitsWorld implements World {
         const onFirst = (): void => { heard = true; started(); };
         try {
           await this.applyWeights(url);
-          const spoken = await this.playLine(url, voice, text, abort.signal, onFirst, silent, !!item.finish);
-          wav = spoken.wav;
-          this.log.info('GPT-SoVITS 一句合成完', { chars: [...text].length, silent, waitMs: spoken.first - at, totalMs: Date.now() - at });
+          const played = await this.playLine(url, voice, spoken, abort.signal, onFirst, silent, !!item.finish);
+          wav = played.wav;
+          this.log.info('GPT-SoVITS 一句合成完', { chars: [...spoken].length, silent, waitMs: played.first - at, totalMs: Date.now() - at });
           this.lastError = null;
         } catch (err) {
           if (abort.signal.aborted) {
@@ -693,9 +700,9 @@ export class GptSovitsWorld implements World {
           } else {
             // 服务端遇到「某一段只剩符号」的文本会在音素前端崩(空音素段 -> torch.cat 报错)。
             // 已经出过声就不再重试(会把半句重复播一次)，没出声时去掉标点再试一次。
-            const plain = ttsPlain(text);
+            const plain = ttsPlain(spoken);
             let ok = false;
-            if (!heard && plain && plain !== text) {
+            if (!heard && plain && plain !== spoken) {
               try {
                 wav = (await this.playLine(url, voice, plain, abort.signal, onFirst, silent, !!item.finish)).wav;
                 ok = true;
@@ -1473,6 +1480,7 @@ export class GptSovitsWorld implements World {
       queue: this.queue.length + (this.current ? 1 : 0),
       playing: this.player.playing,
       lastError: this.lastError,
+      lastSpoken: this.lastSpoken,
       output: this.server.output().slice(-12),
     };
   }
@@ -1573,6 +1581,8 @@ export interface PanelState {
   queue: number;
   playing: boolean;
   lastError: string | null;
+  /** 最近念出去的一句；`translated` 为真表示这是译文，与气泡不同。 */
+  lastSpoken: { text: string; translated: boolean; at: string } | null;
   output: string[];
 }
 

@@ -2,6 +2,7 @@
  * 从 `pet_say` 写法的台词里取出要念的文字：去掉 `【动作】` 与 `<动作>` 标记、Markdown 强调符号。
  * 标记的认法与桌宠 World 的 `parseScript` 一致：尖括号里超过 INLINE_TAG_MAX 字或换行的不算标记，原样念。
  */
+import type { SpeechLang } from './synth.ts';
 
 /** 与桌宠 World `script.ts` 的同名常量一致。 */
 export const INLINE_TAG_MAX = 32;
@@ -50,6 +51,20 @@ export function ttsPlain(text: string): string {
  * 参考音频台本的语言。api_v2 的 `auto` 用 fast_langdetect 逐段识别，短句（如「主人，」）
  * 常被认成日语，参考端的音素就跟着变成日语；这里按字符集直接判断，避免这个误判。
  */
+const SPEECH_LANG_NAME: Record<Exclude<SpeechLang, 'auto' | 'zh'>, string> = { en: 'English', ja: 'Japanese', ko: 'Korean' };
+
+/**
+ * `sovits_speak` 的回执开头。模型看不到自己念了什么的时候，气泡和语音对不上它也不会察觉；
+ * 这里把真正送进合成器的文字原样带回去（翻译模式下是译文），下一句才有对齐的依据。
+ */
+export function spokenReceipt(spoken: string, opts: { ahead: number; lang: SpeechLang; translated: boolean }): string {
+  const head = opts.ahead > 0 ? `Queued after ${opts.ahead} line(s).` : 'Speaking.';
+  const how = opts.translated && opts.lang !== 'auto' && opts.lang !== 'zh'
+    ? ` (${SPEECH_LANG_NAME[opts.lang]} translation of the bubble)`
+    : '';
+  return `${head} Said${how}: "${spoken}"`;
+}
+
 export function promptLanguageOf(text: string): 'zh' | 'en' | 'ja' | 'ko' {
   if (/[\u3041-\u3096\u3099\u309a\u30a1-\u30fa\u30fc]/.test(text)) return 'ja';
   if (/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/.test(text)) return 'ko';

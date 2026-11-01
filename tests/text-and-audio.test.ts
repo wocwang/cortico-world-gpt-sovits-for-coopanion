@@ -1,12 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { INLINE_TAG_MAX, promptLanguageOf, speechText, ttsPlain, ttsSafe } from '../src/speech-text.ts';
+import { INLINE_TAG_MAX, promptLanguageOf, spokenReceipt, speechText, ttsPlain, ttsSafe } from '../src/speech-text.ts';
 import { parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth.ts';
 import { applyGain, upmix } from '../src/player.ts';
 import { wavBytes } from '../src/wav.ts';
 import { languageWords, shareWords } from '../src/i18n.ts';
 import { SOVITS_TOOL_DECLS } from '../src/tools.ts';
 import { presetRefId } from '../src/voices.ts';
+
+describe('spokenReceipt', () => {
+  it('回执带上真正念出去的原文，模型才能核对气泡', () => {
+    expect(spokenReceipt('今天也辛苦啦。', { ahead: 0, lang: 'zh', translated: false }))
+      .toBe('Speaking. Said: "今天也辛苦啦。"');
+  });
+
+  it('排队时说明前面还有几句', () => {
+    expect(spokenReceipt('好的。', { ahead: 2, lang: 'auto', translated: false }))
+      .toBe('Queued after 2 line(s). Said: "好的。"');
+  });
+
+  it('翻译模式下点明这是译文，不是气泡原文', () => {
+    expect(spokenReceipt('Good night.', { ahead: 0, lang: 'en', translated: true }))
+      .toBe('Speaking. Said (English translation of the bubble): "Good night."');
+    expect(spokenReceipt('おやすみ。', { ahead: 1, lang: 'ja', translated: true }))
+      .toBe('Queued after 1 line(s). Said (Japanese translation of the bubble): "おやすみ。"');
+  });
+
+  it('中文模式即使文字不同也不叫译文（那是模型改写，得暴露出来）', () => {
+    expect(spokenReceipt('短一点。', { ahead: 0, lang: 'zh', translated: true }))
+      .toBe('Speaking. Said: "短一点。"');
+  });
+});
 
 describe('speechText', () => {
   it('drops the bubble markup the pet parses as actions', () => {

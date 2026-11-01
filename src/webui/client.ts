@@ -121,8 +121,9 @@ const voicePanel: WebUiPanel = {
       ui.button(t.test, { variant: 'primary', size: 'sm', onClick: () => void call('test', [line.value]) }),
       ui.button(t.hush, { size: 'sm', onClick: () => void call('hush') }),
     );
+    const said = ui.h('span', 'gsv-detail');
     const queue = ui.h('span', 'gsv-detail');
-    test.append(line, testActs, queue);
+    test.append(line, testActs, said, queue);
 
     ctx.root.append(status, models, test, msg);
 
@@ -181,6 +182,8 @@ const voicePanel: WebUiPanel = {
       output.textContent = sv.phase === 'error' || sv.phase === 'starting' ? s.output.join('\n') : '';
       output.hidden = !output.textContent;
       // 队列与上次错误（音色在配置页管理，这里只显示状态）
+      const clip = (text: string): string => (text.length > 120 ? `${text.slice(0, 120)}…` : text);
+      said.textContent = s.lastSpoken ? t.lastSpoken(s.lastSpoken.translated, clip(s.lastSpoken.text)) : '';
       queue.textContent = [s.queue ? t.queue(s.queue) : '', s.lastError ? `${t.lastError}:${s.lastError}` : ''].filter(Boolean).join(' · ');
     }
 

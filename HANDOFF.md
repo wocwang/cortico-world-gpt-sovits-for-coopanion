@@ -13,7 +13,7 @@
 - **一句话目标**：让 Coopanion 桌宠用自己的声音说话——本机 GPT-SoVITS 合成、从声卡播出；现在再加一档：官方支持的 AMD 显卡用 ROCm 跑 V5 turbo，其余 AMD 继续 CPU 档。
 - **本轮已完成**：按主人要求把 0.5.29（认证整改）整体回退，恢复到 0.5.28 的「一键写入 QQ 配置」；在这条线上实现 `rocm` 推理档（代码与测试完成，运行时包未构建）。
 - **验收标准**：
-  - 包内：`pnpm typecheck` 通过、`pnpm test` 全绿（当前 13 文件 136 例）、`pnpm build` 产出 `dist/webui.js`；
+  - 包内：`pnpm typecheck` 通过、`pnpm test` 全绿（当前 13 文件 140 例）、`pnpm build` 产出 `dist/webui.js`；
   - 二级：Cortico checkout 里 `describe:extension` + `check:extension` 通过（本轮已过，见 §2）；
   - 三级：由有 A 卡的人按 [docs/rocm-acceptance.md](docs/rocm-acceptance.md) 实测并在 #228 回帖；
   - 发布：ROCm 运行时包上传后回填 `catalog.ts` 的 bytes/SHA-256/分片，再 `npm publish`。
@@ -27,8 +27,9 @@
   - `5e71124` Revert "fix(certify): stop touching other worlds' config …"
   - `bb3006b` `fix(trainer): pin the upstream tools archive to the runtime commit`（回退会连带丢掉归档哈希校验，单独留了这一处安全加固，与 QQ 配置无关）
   - 加上原 `75a5792`/`962bf9e`/`8ed1d42`/`e683abc`/`ff19b29`，全部只在本地；**0.5.29 不推送、不发布、#542 不回帖**（主人决定）。
+- **按 #228 最新评论做的修正**：@goumo514 报「语音说的话和气泡里的不一样，大肥鱼意识不到」。现在 `sovits_speak` 的回执带 `Said: "…"`（翻译模式注明是译文），提示词要求中文/自动模式下 text 必须是这次 `pet_say` 的逐字副本、翻译模式气泡保持原文；面板「试听」下方显示最近念的一句。翻译从 `pump` 提前到入队前，回执与合成用的是同一份文字。
 - **实测数据（本轮）**：
-  - `pnpm typecheck` 通过；`pnpm test` **13 文件 136 例全过**；`pnpm build` 产出 `dist/webui.js` 35.8 KB、`dist/webui.css` 0.9 KB。
+  - `pnpm typecheck` 通过；`pnpm test` **13 文件 140 例全过**；`pnpm build` 产出 `dist/webui.js` 36.1 KB、`dist/webui.css` 0.9 KB。
   - `npm pack` 出的 0.5.28 tgz 2,553,232 B；装进 `data\extensions` 后 `node_modules\...\package.json` 的 `version` = `0.5.28`，`src/world.ts` 有 `writeQqVoice`，`dist/webui.js` 里有 `writeQqVoice`。
   - Cortico 二级验证：`node --import tsx scripts/extension-describe.ts <repo>` → `tools 2, events 2, prompts 1`；`extension-check.ts` → **Extension check passed**。两条 warning：`sovits_speak` 默认配置下的 description 与声明不一致（历史遗留，市场只显示声明）；标签词表因本机证书吊销检查坏了读不到（`UNABLE_TO_VERIFY_LEAF_SIGNATURE`）。
   - AMD 官方 wheel 体积（HEAD 实测，`stable.repo.amd.com/rocm/whl-next` 10.1.0）：torch 2.14.0+rocm10.1.0 115.6 MB、rocm-sdk-core 777.0 MB、rocm-sdk-libraries 118.6 MB、rocm-sdk-device-gfx1201 314.1 MB、amd-torch-device-gfx1201 51.1 MB、其余三个架构各约 50 MB。
@@ -69,6 +70,7 @@
 
 - **卡点**：本机没有 `uv`，`bash` 是 WSL 的而不是 Git Bash，`scripts/build-runtime.sh` 跑不了；ROCm 整包必须在另一台机器上打。没有包时 ROCm 档装不了（面板会明说）。
 - **没有 A 卡**：三级验证只能靠社区代验，作者侧只能保证代码、类型、单测与二级验证。
+- **本机 pnpm 坏了（2026-11-01）**：`pnpm`/`corepack` 报 `ERR_PNPM_PACKAGE_MANAGER_INSPECT_OPTIONAL_DEPENDENCY`，`node_modules` 里的联接被 Windows 判为「不受信任的装入点」（os error 448 / errno -4094），连 `dir`、`Get-ChildItem`、`readFileSync` 都读不了。本轮用 `npm install` 重建了本仓库与 Cortico checkout 的 `node_modules`（真实目录），测试与二级验证都是在 npm 装出来的依赖上跑的（typescript 5.9.3 / vitest 2.1.9 / tsx 4.23.15，与 lockfile 版本不完全一致）；npm 生成的 `package-lock.json` 已删除。下次开工先确认 `pnpm test` 能跑，跑不了就照这个办法恢复，并把版本差异记在这里。
 - **长路径是硬门槛**：默认 `D:\Program Files\Coopanion\data\home\runtimes\gpt-sovits\e91506f-1\rocm` 加最长相对路径（220 字符）后超过 259，没开 `LongPathsEnabled` 就会被预检拦下。这是社区实测的 272 字符路径问题的直接后果，不是文案问题。
 - **认证风险**：一键写入 QQ 配置是 #542 明确要求删除的行为；恢复后对外发布可能被市场拒绝收录或撤销认证（主人已知悉并接受）。
 - **描述一致性**：`package.json` 描述、`README`、`config.ts` 文案都改成了「AMD 官方支持型号走 ROCm」，以后改实现要同步，别再出现 0.5.29 那种描述与实现不一致。
@@ -99,7 +101,7 @@
 
 ## 7. 交接说明
 
-- **接手方先做**：跑 §6 的 `typecheck`/`test` 核对 136 例；`git log --oneline -8` 核对 §2 的提交；确认 `package.json` 版本是 `0.6.0`、本机安装是 `0.5.28`。
+- **接手方先做**：跑 §6 的 `typecheck`/`test` 核对 140 例；`git log --oneline -8` 核对 §2 的提交；确认 `package.json` 版本是 `0.6.0`、本机安装是 `0.5.28`。
 - **下一步**：按 §4 第 1 条找一台有 `uv` + Git Bash 的机器打 ROCm 包，再回填 catalog。
 - **可以直接发给下一个接手方的提示词**：
 
