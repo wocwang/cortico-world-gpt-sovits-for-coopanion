@@ -31,7 +31,7 @@ import { RvcLink, type RvcProbe } from './rvc-link.ts';
 import { SovitsServer, type ServerState } from './server.ts';
 import { customVoiceOptions, registerCustomVoiceOptions } from './voice-options.ts';
 import { promptLanguageOf, spokenReceipt, speechText, ttsPlain, ttsSafe } from './speech-text.ts';
-import { parseWavHeader, synthesize, switchWeights, type SpeechLang, type SynthRequest } from './synth.ts';
+import { isConnectionDrop, parseWavHeader, synthesize, switchWeights, type SpeechLang, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { TrainerManager } from './trainer.ts';
 import { translateTo } from './translate.ts';
@@ -714,24 +714,36 @@ export class GptSovitsWorld implements World {
           if (abort.signal.aborted) {
             // 被 hush() 打断，不算失败。
           } else {
+            const message = err instanceof Error ? err.message : String(err);
+            let ok = false;
+            let recovered = '';
+            // 连接被服务端断开（undici 的 `terminated` 之类）时重发一次通常就好，这不是文本问题，
+            // 不该拿「去掉标点」去试（社区实测 0.6.1 在 ROCm 上就是这种错）。
+            if (!heard && isConnectionDrop(message)) {
+              try {
+                wav = (await this.playLine(url, voice, spoken, abort.signal, onFirst, silent, !!item.finish)).wav;
+                ok = true;
+                recovered = '连接断开后重试';
+              } catch { ok = false; }
+            }
             // 服务端遇到「某一段只剩符号」的文本会在音素前端崩(空音素段 -> torch.cat 报错)。
             // 已经出过声就不再重试(会把半句重复播一次)，没出声时去掉标点再试一次。
             const plain = ttsPlain(spoken);
-            let ok = false;
-            if (!heard && plain && plain !== spoken) {
+            if (!ok && !heard && plain && plain !== spoken) {
               try {
                 wav = (await this.playLine(url, voice, plain, abort.signal, onFirst, silent, !!item.finish)).wav;
                 ok = true;
+                recovered = '去掉标点后';
               } catch {
                 ok = false;
               }
             }
             if (ok) {
               this.lastError = null;
-              this.log.info('GPT-SoVITS 去掉标点后合成成功', { chars: [...plain].length });
+              this.log.info(`GPT-SoVITS ${recovered}合成成功`, { chars: [...spoken].length });
             } else if (!abort.signal.aborted) {
-              this.lastError = err instanceof Error ? err.message : String(err);
-              this.log.warn('GPT-SoVITS 合成失败', { err: this.lastError });
+              this.lastError = message;
+              this.log.warn('GPT-SoVITS 合成失败', { err: this.lastError, tier: this.tier(), streaming: this.tier() === 'rocm' ? 0 : 3 });
             }
           }
         } finally {
@@ -775,9 +787,13 @@ export class GptSovitsWorld implements World {
 
   /** 合成一句要用的请求参数；预热时可指定语言。 */
   private request(text: string, voice: { audio: string; text: string }, textLang: SpeechLang = this.cfg.textLang): SynthRequest {
+    const rocm = this.tier() === 'rocm';
     return {
       text, refAudio: voice.audio, refText: voice.text, speed: this.cfg.speed, seed: this.cfg.seed,
       textLang, promptLang: promptLanguageOf(voice.text),
+      // ROCm 上「多段 + 流式」会在第二段起被服务端断开（社区 0.6.1 实测 `terminated`，同一句试听却正常）。
+      // 这一档改成整句一次算、非流式返回：短句本来就能过，长句也不再分段，代价是首音晚一点。
+      ...(rocm ? { splitMethod: 'cut0', streamingMode: 0 } : {}),
     };
   }
 

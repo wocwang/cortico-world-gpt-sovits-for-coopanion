@@ -20,6 +20,10 @@ export interface SynthRequest {
   textLang?: SpeechLang;
   /** 参考台本的语言，默认 `auto`。 */
   promptLang?: PromptLang;
+  /** 覆盖切句方法（默认 cut2）；ROCm 档用 cut0 整句一次合成。 */
+  splitMethod?: string;
+  /** 覆盖流式模式（默认 3）；ROCm 档用 0（整句返回）。 */
+  streamingMode?: number;
 }
 
 export interface PcmChunk {
@@ -76,6 +80,15 @@ export async function* pcmChunks(body: AsyncIterable<Uint8Array>): AsyncGenerato
 export const STREAMING_MODE = 3;
 
 /**
+ * 连接被服务端断开时 undici 抛的错：`terminated`、socket hang up、ECONNRESET。
+ * 这类错重发一次通常就好——上一句的 keep-alive 连接被服务端关掉了，或者服务端在切段时重启了 worker。
+ * 它和「服务端返回 400 tts failed」是两回事，后者重发也不会好。
+ */
+export function isConnectionDrop(message: string): boolean {
+  return /terminated|socket hang up|ECONNRESET|other side closed|EPIPE/i.test(message);
+}
+
+/**
  * 让正在跑的服务换成另一组权重：`/set_gpt_weights` 与 `/set_sovits_weights` 都是 GET 加
  * `weights_path` 查询参数，成功回 `{"message":"success"}`。换权重不必重启进程，也不影响已建立的连接。
  *
@@ -113,14 +126,14 @@ export function ttsBody(req: SynthRequest): Record<string, unknown> {
     // 不能用 cut5（逐标点切）：2–4 字的碎片（如「晚安，」）会被 api_v2 当无效片段跳过，
     // 整段声音直接消失（issue #11，实测 cut2/cut4/cut0 都不丢）。cut2 按 50 字凑句，
     // 既不会切出超短碎片，长台词也仍会分块。
-    text_split_method: 'cut2',
+    text_split_method: req.splitMethod ?? 'cut2',
     // api_v2 在切开的每段之间插默认 0.3 s 静音；按标点切分时这会让逗号处听起来一顿一顿的。
     // 0.1 s 够分清句读，又不会每处标点都拖半秒（实测同一句标点处停顿从 0.48–0.60 s 降到 0.36–0.46 s）。
     fragment_interval: 0.1,
     batch_size: 1,
     speed_factor: req.speed,
     media_type: 'wav',
-    streaming_mode: STREAMING_MODE,
+    streaming_mode: req.streamingMode ?? STREAMING_MODE,
     parallel_infer: false,
     ...(typeof req.seed === 'number' && req.seed >= 0 ? { seed: req.seed } : {}),
   };

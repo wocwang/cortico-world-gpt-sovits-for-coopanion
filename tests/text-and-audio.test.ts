@@ -1,12 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { INLINE_TAG_MAX, promptLanguageOf, spokenReceipt, speechText, ttsPlain, ttsSafe } from '../src/speech-text.ts';
-import { parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth.ts';
+import { isConnectionDrop, parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth.ts';
 
 describe('切句方法', () => {
   it('用 cut2 凑句，不用 cut5（2–4 字碎片会被 api_v2 吞掉，issue #11）', () => {
     const body = ttsBody({ text: '好。晚安，我在这儿。', refAudio: 'a.wav', refText: '台本', speed: 1 });
     expect(body.text_split_method).toBe('cut2');
+  });
+
+  it('ROCm 档可以要求整句一次算、非流式返回', () => {
+    const body = ttsBody({ text: '长一点的台词。', refAudio: 'a.wav', refText: '台本', speed: 1, splitMethod: 'cut0', streamingMode: 0 });
+    expect(body.text_split_method).toBe('cut0');
+    expect(body.streaming_mode).toBe(0);
+  });
+
+  it('连接被断开和「服务端返回 400」要区分开', () => {
+    expect(isConnectionDrop('terminated')).toBe(true);
+    expect(isConnectionDrop('socket hang up')).toBe(true);
+    expect(isConnectionDrop('HTTP 400: tts failed')).toBe(false);
   });
 });
 import { applyGain, upmix } from '../src/player.ts';
