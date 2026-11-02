@@ -1,10 +1,15 @@
 # TODO — 更好的GPTSovits 语音（Coopanion 插件）
 
-> 最后更新：2026-11-01 23:55（Asia/Shanghai）
-> 工作区版本：**0.6.0（已发布 npm latest）**；本机 `data\extensions` 装的是 **0.5.28**（未升级）
+> 最后更新：2026-11-02 10:15（Asia/Shanghai）
+> 工作区版本：**0.6.1（已发布 npm latest，已推送）**；本机 `data\extensions` 装的是 **0.6.0**（未升级）
 > 详细交接见 [HANDOFF.md](HANDOFF.md)；ROCm 代验清单见 [docs/rocm-acceptance.md](docs/rocm-acceptance.md)。
 
-## P0 — 0.6.0 发布（已完成，待真机代验）
+## P0 — 0.6.0 / 0.6.1 发布（已完成，待真机代验）
+
+- [x] **0.6.1 已发布**（2026-11-02）：模型版本改下拉；`cut5` → `cut2`（#11）；音频后端 WASAPI/DirectSound 回退（#4、#8）；
+      权重联接失败不再拖垮 App（#9）；版本号 0.6.1，已 `git push`（`a9bbc01`）。
+- [x] issue 已回复 #2/#3/#4/#5/#6/#7/#9/#11；#9、#11 已关闭。
+- [ ] 本机 `data\extensions` 仍是 0.6.0，要验证下拉与新后端需重装 0.6.1。
 
 - [x] **打 ROCm 运行时整包**（2026-11-01）：`gpt-sovits-e91506f-1-win-x64-rocm.zip`
       **3,140,067,689 B**，SHA-256 `0b3f7f70…ccc945`，解压 **7,077 MiB**；
@@ -37,7 +42,16 @@
       一键写入 QQ 配置会改 QQ 插件配置（认证风险已知）。
 - [ ] 可选：把「逐项复制」按钮作为「不想让插件写配置」的替代交互加回来（0.5.29 的那两个提交还在历史里）。
 
+## P1.5 — macOS（单开一轮）
+
+- [ ] 按 PR #10 的路线实现：`src/platform.ts` 收口解释器/tar/播放差异，`player.ts` 走 `afplay`，自备运行时目录；
+      测试用手上的 `platform.test.ts`；`os` 先**不加** `darwin`，等 #5 作者在 M3 实测通过再放开市场。
+- [ ] 说明写清：自备运行时约 7 GB、`afplay` 只能整段播放（首字延迟变差）、无设备选择与软件音量。
+
 ## P2 — 冻结项 / 已知但先不动
+
+- [ ] **ONNX / TensorRT 推理引擎：不做**（2026-11-02 主人决定）。收益不确定、要再养一条推理链与一份 3–4 GB 运行时；
+      若以后重启，先看 `High-Logic/Genie-TTS` 是否支持 v5turbo，并在本机（RTX 5070 Ti Laptop）量基线再定。
 
 - [ ] 云端 TTS：主人保留意见，未拍板，不实现。
 - [ ] QQ 语音投递 `qq_audio`：主人说先不管。
