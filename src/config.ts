@@ -3,6 +3,7 @@ import { pick, type Language } from 'cortico/core/language.ts';
 import type { CustomVoice } from './custom-voice.ts';
 import type { VoiceModelSetting } from './catalog.ts';
 import type { AudioBackend } from './player.ts';
+import type { Platform } from './platform.ts';
 import type { RvcLinkConfig } from './rvc-link.ts';
 import type { SpeechLang } from './synth.ts';
 import { DEFAULT_PRESET } from './voices.ts';
@@ -25,7 +26,10 @@ export interface GptSovitsConfigSection {
    * 显卡档可以显式选 `v2ProPlus`——v5turbo 的音色偏「电」，自备的 v2ProPlus LoRA 也只有这时才装得上。
    */
   voiceModel: VoiceModelSetting;
-  /** 自备的 GPT-SoVITS 根目录(含 `runtime/python.exe` 与 `api_v2.py`);填了就不下载运行时。 */
+  /**
+   * 自备的 GPT-SoVITS 根目录(含 `runtime/` 与 `api_v2.py`);填了就不下载运行时。
+   * Windows 的 Python 在 `runtime/python.exe`，macOS 在 `runtime/bin/python3`（`python3 -m venv runtime` 的布局）。
+   */
   runtimeDir: string;
   /** 已在运行的 GPT-SoVITS api_v2 地址;填了就不启动本机运行时，也不下载。 */
   serverUrl: string;
@@ -190,7 +194,7 @@ const TEXT = {
     gptWeights: { title: '自备 GPT 权重', description: '自己训的 s1 权重(.ckpt)。与下面的 SoVITS 权重一起填才生效；都留空就用内置底模。选自定义音色时，这里改的是该音色自带的权重。' },
     sovitsWeights: { title: '自备 SoVITS 权重', description: '自己训的 s2 权重(.pth)，版本要和「模型版本」一致（V5 turbo 的 LoRA 头是 08，V2 Pro Plus 是 06）。服务在跑时改这两项会就地换权重，不用重启。' },
     voiceModel: { title: '模型版本', auto: '跟随推理档', v5turbo: 'V5 turbo（快，音色偏电）', v2ProPlus: 'V2 Pro Plus（更自然，慢一些）', description: '用哪套底模。跟随推理档时：显卡 / ROCm 档用 V5 turbo，CPU 档用 V2 Pro Plus。显卡档也可以手动选 V2 Pro Plus——V5 turbo 的音色偏「电」，V2 Pro Plus 更自然但慢一些，切换要多下约 300 MB 权重；CPU 档只能用 V2 Pro Plus。修改后推理服务会重启一次。' },
-    tier: { title: '推理档', auto: '自动', cuda: '显卡(NVIDIA)', rocm: '显卡(AMD ROCm)', cpu: 'CPU', description: '自动：检测到 NVIDIA 显卡用显卡档；没有 NVIDIA 但有官方支持的 AMD 显卡（RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700）就用 ROCm 档；其余用 CPU 档。AMD 需要 Windows 11、Adrenalin 26.2.2 或更新，且系统开启长路径（安装前会检查，不会自己改系统）。Intel 显卡与不在列表里的 AMD 显卡只能用 CPU 档。显卡档约 2–3 GB 显存（按需加载后约 1.5–2.5 GB），ROCm 档约 2 GB 显存；CPU 档约 4–6 GB 内存。修改后重启推理服务生效。' },
+    tier: { title: '推理档', auto: '自动', cuda: '显卡(NVIDIA)', rocm: '显卡(AMD ROCm)', cpu: 'CPU', description: '自动：检测到 NVIDIA 显卡用显卡档；没有 NVIDIA 但有官方支持的 AMD 显卡（RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700）就用 ROCm 档；其余用 CPU 档。AMD 需要 Windows 11、Adrenalin 26.2.2 或更新，且系统开启长路径（安装前会检查，不会自己改系统）。Intel 显卡与不在列表里的 AMD 显卡只能用 CPU 档。显卡档约 2–3 GB 显存（按需加载后约 1.5–2.5 GB），ROCm 档约 2 GB 显存；CPU 档约 4–6 GB 内存。macOS 只能走 CPU 档，运行时与权重都要自备（见 README 的 macOS 一节）。修改后重启推理服务生效。' },
     speed: { title: '语速', description: '1 为原速。' },
     textLang: {
       title: '语音语言',
@@ -224,7 +228,7 @@ const TEXT = {
     autoStart: { title: '随 Cortico 启动推理服务' },
     idle: { title: '闲置停服', description: '多久不说话就停掉本机推理服务，把显存和内存让出来；下一句会自动重新加载（显卡档通常十几秒）。0 为不停。只对本机服务生效。' },
     serverUrl: { title: '已有的 GPT-SoVITS 地址', description: '填写后连接这个 api_v2 服务，不在本机启动，也不下载运行时。' },
-    runtimeDir: { title: '自备运行时目录', description: '含 runtime/python.exe 与 api_v2.py 的 GPT-SoVITS 目录；填写后不下载运行时。' },
+    runtimeDir: { title: '自备运行时目录', description: '含 runtime/ 与 api_v2.py 的 GPT-SoVITS 目录（Windows 的 Python 在 runtime\\python.exe，macOS 在 runtime/bin/python3）；填写后不下载运行时。' },
     promptLanguage: { title: '提示词语言' },
   },
   en: {
@@ -239,7 +243,7 @@ const TEXT = {
     gptWeights: { title: 'Own GPT weights', description: 'Your own trained s1 weights (.ckpt). Takes effect together with the SoVITS weights below; leave both empty to use the bundled base model. For a custom voice these are the voice’s own weights.' },
     sovitsWeights: { title: 'Own SoVITS weights', description: 'Your own trained s2 weights (.pth). Its version must match the model version (v5turbo LoRA header is 08, v2ProPlus is 06). Editing either field switches the running server in place, no restart.' },
     voiceModel: { title: 'Model version', auto: 'Follow the tier', v5turbo: 'V5 turbo (fast, metallic timbre)', v2ProPlus: 'V2 Pro Plus (more natural, slower)', description: 'Which base model to use. Follow the tier: V5 turbo on the GPU / ROCm tier, V2 Pro Plus on the CPU tier. The GPU tier can also use V2 Pro Plus by hand — V5 turbo sounds metallic, V2 Pro Plus is more natural but slower, and switching downloads about 300 MB more weights; the CPU tier is V2 Pro Plus only. The inference server restarts once after a change.' },
-    tier: { title: 'Inference tier', auto: 'Auto', cuda: 'GPU (NVIDIA)', rocm: 'GPU (AMD ROCm)', cpu: 'CPU', description: 'Auto uses the GPU tier when an NVIDIA GPU is found; without one, an AMD card from the official list (RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700) uses the ROCm tier; everything else uses the CPU tier. AMD needs Windows 11, Adrenalin 26.2.2 or newer, and long paths enabled in Windows (checked before installing; the plugin never changes system settings itself). Intel GPUs and AMD cards outside the list can only use the CPU tier. GPU tier: about 2–3 GB VRAM (1.5–2.5 GB with on-demand loading); ROCm tier: about 2 GB VRAM; CPU tier: about 4–6 GB RAM. Takes effect when the inference server restarts.' },
+    tier: { title: 'Inference tier', auto: 'Auto', cuda: 'GPU (NVIDIA)', rocm: 'GPU (AMD ROCm)', cpu: 'CPU', description: 'Auto uses the GPU tier when an NVIDIA GPU is found; without one, an AMD card from the official list (RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700) uses the ROCm tier; everything else uses the CPU tier. AMD needs Windows 11, Adrenalin 26.2.2 or newer, and long paths enabled in Windows (checked before installing; the plugin never changes system settings itself). Intel GPUs and AMD cards outside the list can only use the CPU tier. GPU tier: about 2–3 GB VRAM (1.5–2.5 GB with on-demand loading); ROCm tier: about 2 GB VRAM; CPU tier: about 4–6 GB RAM. macOS can only use the CPU tier and needs an own runtime and weights (see the macOS section in the README). Takes effect when the inference server restarts.' },
     speed: { title: 'Speech rate', description: '1 is the original rate.' },
     textLang: {
       title: 'Speech language',
@@ -273,14 +277,17 @@ const TEXT = {
     autoStart: { title: 'Start the inference server with Cortico' },
     idle: { title: 'Stop when idle', description: 'Stops the local inference server after this many minutes without speech, freeing VRAM and RAM; the next line reloads it (usually ten-odd seconds on GPU). 0 keeps it running. Local server only.' },
     serverUrl: { title: 'Existing GPT-SoVITS address', description: 'Connects to this api_v2 server instead of starting one here; nothing is downloaded.' },
-    runtimeDir: { title: 'Own runtime directory', description: 'A GPT-SoVITS directory with runtime/python.exe and api_v2.py; the runtime is not downloaded.' },
+    runtimeDir: { title: 'Own runtime directory', description: 'A GPT-SoVITS directory with runtime/ and api_v2.py (Python at runtime\\python.exe on Windows, runtime/bin/python3 on macOS); the runtime is not downloaded.' },
     promptLanguage: { title: 'Prompt language' },
   },
 };
 
-export function tierOptions(language: Language): Array<{ value: string; label: string }> {
+/** 推理档的可选值。显卡档的运行时包只有 win-x64：别的平台只给「自动 / CPU」，选了也没包可下。 */
+export function tierOptions(language: Language, platform: Platform = process.platform): Array<{ value: string; label: string }> {
   const t = pick(language, TEXT).tier;
-  return [{ value: 'auto', label: t.auto }, { value: 'cuda', label: t.cuda }, { value: 'rocm', label: t.rocm }, { value: 'cpu', label: t.cpu }];
+  const cpu = { value: 'cpu', label: t.cpu };
+  if (platform !== 'win32') return [{ value: 'auto', label: t.auto }, cpu];
+  return [{ value: 'auto', label: t.auto }, { value: 'cuda', label: t.cuda }, { value: 'rocm', label: t.rocm }, cpu];
 }
 
 export function modelVersionOptions(language: Language): Array<{ value: string; label: string }> {
@@ -288,9 +295,12 @@ export function modelVersionOptions(language: Language): Array<{ value: string; 
   return [{ value: 'auto', label: t.auto }, { value: 'v5turbo', label: t.v5turbo }, { value: 'v2ProPlus', label: t.v2ProPlus }];
 }
 
-export function audioBackendOptions(language: Language): Array<{ value: string; label: string }> {
+/** WASAPI / DirectSound 是 Windows 的音频接口；macOS 用系统的 afplay，只留「自动」。 */
+export function audioBackendOptions(language: Language, platform: Platform = process.platform): Array<{ value: string; label: string }> {
   const t = pick(language, TEXT).audioBackend;
-  return [{ value: 'auto', label: t.auto }, { value: 'wasapi', label: t.wasapi }, { value: 'directsound', label: t.directsound }];
+  const auto = { value: 'auto', label: t.auto };
+  if (platform !== 'win32') return [auto];
+  return [auto, { value: 'wasapi', label: t.wasapi }, { value: 'directsound', label: t.directsound }];
 }
 
 export const promptLanguageOptions = (): Array<{ value: string; label: string }> =>

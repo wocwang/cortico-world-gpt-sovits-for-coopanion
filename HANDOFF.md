@@ -20,6 +20,15 @@
 
 ## 2. 当前状态
 
+- **macOS 支持（2026-11-02，本轮）**：按 issue #10（作者 @ink1453，补丁在其 fork 的 `feat/macos-own-runtime`，`c78d0a5`，基线
+  `e683abc`＝0.5.28）**手工移植**到 0.6.1，因为中间隔了 0.6.0/0.6.1 三十个提交（`player.ts` 128 行、`server.ts` 116 行偏离）。
+  落地范围：新增 `src/platform.ts`（解释器 / PATH / tar / 发布判定 / 系统播放器，全部带 `platform` 参数）；
+  `player.ts` 的 macOS 分支走 `afplay`（`write()` 攒 PCM → `flush()` 落临时 WAV 排队 → `cut()` 停播清队列）；
+  `server.ts` / `trainer.ts` / `install.ts` 改用平台解释器与 PATH，macOS 子进程 `detached` + 按进程组收，
+  权重目录在非 Windows 上建普通目录符号链接；**顺带收口** 0.6.0 之后才有的东西：`probeHipDevice` 的解释器、
+  `gpu.ts` 非 Windows 短路（不 spawn `powershell`/`nvidia-smi`）、`assertRocmPaths` 跳过读注册表、
+  `tierOptions` 只给「自动 / CPU」、`audioBackendOptions` 只给「自动」、面板新增 `tierMac` 说明（`PanelState.platform`）。
+  **`package.json` 的 `os` 仍是 `["win32"]`、version 仍是 0.6.1**（主人硬约束：等 M3 实测通过再放开）。
 - **进度**：AMD ROCm 档 **已随 0.6.0 发布**（npm latest = 0.6.0）。运行时整包 3,140,067,689 B 已上传到魔搭
   `wocwang/gpt-sovits-for-coopanion`（主源，实测 `206 / 3140067689`）与 GitHub Release `runtime-e91506f-1`
   两个分片（兜底，字节一致）；`catalog.ts` 的 bytes / SHA-256 / 分片都按实测填好。
@@ -32,7 +41,13 @@
   - `bb3006b` `fix(trainer): pin the upstream tools archive to the runtime commit`（回退会连带丢掉归档哈希校验，单独留了这一处安全加固，与 QQ 配置无关）
   - 加上原 `75a5792`/`962bf9e`/`8ed1d42`/`e683abc`/`ff19b29`，全部只在本地；**0.5.29 不推送、不发布、#542 不回帖**（主人决定）。
 - **按 #228 最新评论做的修正**：@goumo514 报「语音说的话和气泡里的不一样，大肥鱼意识不到」。现在 `sovits_speak` 的回执带 `Said: "…"`（翻译模式注明是译文），提示词要求中文/自动模式下 text 必须是这次 `pet_say` 的逐字副本、翻译模式气泡保持原文；面板「试听」下方显示最近念的一句。翻译从 `pump` 提前到入队前，回执与合成用的是同一份文字。
-- **实测数据（本轮）**：
+- **实测数据（macOS 那一轮，2026-11-02）**：
+  - `node node_modules/typescript/bin/tsc --noEmit` 通过；`node node_modules/vitest/vitest.mjs run` → **16 文件 177 例全过**
+    （新增 `tests/platform.test.ts` 14 例、`gpu` +2、`install` +3）；`node scripts/build-webui.mjs` → `dist/webui.js` 37.0 KB、`dist/webui.css` 0.9 KB。
+  - 移植自 #10（`c78d0a5`）的改动**全部手工重写**，没有 `git apply`：`player.ts` 保留 0.6.1 的 WASAPI/DirectSound 回退，
+    `server.ts` 保留 `runtimeEnv()` 的 `MIOPEN_*` 与 `HIP_VISIBLE_DEVICES`（`PATH` 只由 `envWithRuntime` 给）。
+  - `package.json` 未改：`os` 仍 `["win32"]`、version 仍 `0.6.1`。
+- **实测数据（ROCm 那一轮）**：
   - `pnpm typecheck` 通过；`pnpm test` **14 文件 150 例全过**；`pnpm build` 产出 `dist/webui.js` 36.5 KB、`dist/webui.css` 0.9 KB。
   - **ROCm 运行时包已在本机打出**：`gpt-sovits-e91506f-1-win-x64-rocm.zip` **3,140,067,689 B**，
     SHA-256 `0b3f7f709f7f5f7f0dde62488a7bcab0a4d31dce46d1cf53ecc0e6bbbdccc945`，解压 **7,077 MiB**，共 42,396 个条目；
@@ -54,6 +69,7 @@
 | 0.5.29 | 认证整改（删 QQ 配置读写、归档哈希、唱歌描述） | **已整体回退，不发布** |
 | 0.6.0 | ROCm 档 + 长路径预检 + MIOpen/设备探针 + 模型版本选项 + 回执带 `Said:` + 启动失败回落 CPU | **已发布**（npm latest、魔搭 + GitHub 运行时、#228 已回复）；待社区真机代验 |
 | 0.6.1 | 模型版本改下拉；`cut5`→`cut2`（#11）；音频后端 WASAPI/DirectSound 回退（#4/#8）；联接失败不再拖垮 App（#9） | **已发布**（npm latest，`a9bbc01` 已推送）；issue #2/#3/#4/#5/#6/#7/#9/#11 已回复，#9/#11 已关 |
+| （未编号） | macOS：`platform.ts` + `afplay` 播放 + 平台解释器/PATH/进程组 + 非 Windows 短路与选项裁剪 | **本地已合入 main，未 push、未发布**；`os` 仍只有 `win32`，等 M3 实测 |
 
 ## 3. 关键假设与决策
 
@@ -68,6 +84,10 @@
 | 不改注册表、不装驱动、不改系统策略 | Cortico `docs/runtimes.md` §3 | 是 |
 | ROCm 运行时和代码分开发布，`bytes = 0` 时自动回落 CPU | 先落代码、后传包；不留死路 | 是 |
 | 版本号 0.6.0 | 回退后 0.5.28 已被 npm 占用，新功能只能往上走 | 是 |
+| macOS 只做「自备运行时」，不内置 darwin 运行时包 | 内置包要多养一份 arm64 CPython + torch（数值百 MB～1 GB）与一条发布链；自备目录这个入口已经有了 | 是（主人同意本轮只到代码） |
+| `os` 先不加 `darwin` | 主人硬约束：先让 #10 作者在 M3 上实测通过，再放开市场 | 是 |
+| 平台差异一律参数化 `platform` | darwin 分支能在 Windows 上跑单测，结果不随跑测试的机器漂移 | 是（本轮自行判断） |
+| 非 Windows 直接短路显卡探测、裁剪档位/后端选项 | 没有 PowerShell、没有注册表、没有 win-x64 运行时包；跑一遍只会白等并给出误导文案 | 是（主人选「一并收口」） |
 
 ## 4. 待办事项
 
@@ -79,13 +99,21 @@
 - [x] **模型版本与档位解耦（#228 @niaolong233）**：已随 0.6.0 实现——新增配置 `voiceModel`（`auto` / `v5turbo` / `v2ProPlus`），
       显卡与 ROCm 档可选 V2 Pro Plus（自备 `06` 头权重不再被挡），CPU 档一律 V2 Pro Plus；换版本时重启一次推理服务。
 - [ ] 可选：`sovits_speak` 的 describe 声明与默认配置下的 description 对齐（`check:extension` 的 warning）。
+- [ ] **macOS 真机实测**（#10 @ink1453 或主人协调的 M3）：本机没有 Mac，`afplay` 分支、venv 的 `-I` 隔离模式、
+      `detached` + 进程组收尾**都没有跑过真机**，只有参数化单测。实测时 `os` 里没有 `darwin`，
+      要手工放目录或 `pnpm add <tgz> --force`（README「macOS（自备运行时）」有步骤）。
+- [ ] 实测通过后：`package.json` 的 `os` 加 `darwin`、发 0.6.2、在 #10 回帖（**未获主人同意不 push、不 publish**）。
 - [ ] 冻结项：云端 TTS（主人保留意见）、QQ `qq_audio`、仓库清理、显卡档 4.14 GB 真机下载。
 
 ## 5. 已知问题 / 风险
 
 - **卡点**：本机没有 `uv`，`bash` 是 WSL 的而不是 Git Bash，`scripts/build-runtime.sh` 跑不了；ROCm 整包必须在另一台机器上打。没有包时 ROCm 档装不了（面板会明说）。
 - **没有 A 卡**：三级验证只能靠社区代验，作者侧只能保证代码、类型、单测与二级验证。
-- **本机 pnpm 坏了（2026-11-01）**：`pnpm`/`corepack` 报 `ERR_PNPM_PACKAGE_MANAGER_INSPECT_OPTIONAL_DEPENDENCY`，`node_modules` 里的联接被 Windows 判为「不受信任的装入点」（os error 448 / errno -4094），连 `dir`、`Get-ChildItem`、`readFileSync` 都读不了。本轮用 `npm install` 重建了本仓库与 Cortico checkout 的 `node_modules`（真实目录），测试与二级验证都是在 npm 装出来的依赖上跑的（typescript 5.9.3 / vitest 2.1.9 / tsx 4.23.15，与 lockfile 版本不完全一致）；npm 生成的 `package-lock.json` 已删除。下次开工先确认 `pnpm test` 能跑，跑不了就照这个办法恢复，并把版本差异记在这里。
+- **本机 pnpm 坏了（2026-11-01，2026-11-02 又踩一次）**：`pnpm`/`corepack` 报 `ERR_PNPM_PACKAGE_MANAGER_INSPECT_OPTIONAL_DEPENDENCY`，`node_modules` 里的联接被 Windows 判为「不受信任的装入点」（os error 448 / errno -4094），连 `dir`、`Get-ChildItem`、`readFileSync` 都读不了。本轮用 `npm install` 重建了本仓库与 Cortico checkout 的 `node_modules`（真实目录），测试与二级验证都是在 npm 装出来的依赖上跑的（typescript 5.9.3 / vitest 2.1.9 / tsx 4.23.15，与 lockfile 版本不完全一致）；npm 生成的 `package-lock.json` 已删除。下次开工先确认 `pnpm test` 能跑，跑不了就照这个办法恢复，并把版本差异记在这里。
+  - 2026-11-02 的 macOS 那一轮：`pnpm typecheck` 触发 verify-deps 的 install，报
+    `EPERM: rename node_modules\cortico -> node_modules\.ignored_cortico`，并把 `cortico`/`esbuild`/`tsx`/`typescript`/`vitest`
+    五个真实目录改名成 `.ignored_*`。**这几个是真实目录，`Move-Item` 改回来就恢复了**（不用重装）。之后一律直连本地二进制：
+    `node node_modules/typescript/bin/tsc --noEmit`、`node node_modules/vitest/vitest.mjs run`、`node scripts/build-webui.mjs`。
 - **长路径是硬门槛**：默认 `D:\Program Files\Coopanion\data\home\runtimes\gpt-sovits\e91506f-1\rocm` 加最长相对路径（220 字符）后超过 259，没开 `LongPathsEnabled` 就会被预检拦下。这是社区实测的 272 字符路径问题的直接后果，不是文案问题。
 - **认证风险**：一键写入 QQ 配置是 #542 明确要求删除的行为；恢复后对外发布可能被市场拒绝收录或撤销认证（主人已知悉并接受）。
 - **描述一致性**：`package.json` 描述、`README`、`config.ts` 文案都改成了「AMD 官方支持型号走 ROCm」，以后改实现要同步，别再出现 0.5.29 那种描述与实现不一致。
@@ -94,8 +122,8 @@
 
 ## 6. 上下文与约束
 
-- **核心文件**：`src/gpu.ts`（新：gfx 映射、`pickTier`、长路径、HIP 探针解析）、`src/catalog.ts`（`RUNTIME_ASSETS.rocm` 占位）、`src/install.ts`（`rocmPathProblem` / `assertRocmPaths`）、`src/server.ts`（`infererYaml` 二分、`runtimeEnv`、`probeHipDevice`、`cachedHipIndex`）、`src/world.ts`（`tier()` 回落、`usage()` 认 `rocm`、`PanelState.amd`）、`src/config.ts`、`src/i18n.ts`、`src/webui/client.ts`、`scripts/build-runtime.sh`、`scripts/rocm-sitecustomize.py`。
-- **测试**：`tests/gpu.test.ts`、`tests/server.test.ts` 新增；`tests/install.test.ts` 加路径预检用例。测试不联网。
+- **核心文件**：`src/platform.ts`（**新**：平台差异唯一出口——`runtimePublished` / `pythonInRuntime` / `runtimeBinDir` / `tarBinary` / `envWithRuntime` / `useSystemPlayer`，全部带 `platform` 参数）、`src/player.ts`（`afplay` 分支与 audify 并存）、`src/gpu.ts`（gfx 映射、`pickTier`、长路径、HIP 探针解析、非 Windows 短路）、`src/catalog.ts`（`RUNTIME_ASSETS.rocm`）、`src/install.ts`（`rocmPathProblem` / `assertRocmPaths` / `tarBinary` / `isRuntimeDir(dir, platform)`）、`src/server.ts`（`infererYaml` 二分、`runtimeEnv`、`probeHipDevice`、`cachedHipIndex`、进程组收尾）、`src/world.ts`（`tier()` 回落、`usage()` 认 `rocm`、`PanelState.amd` / `PanelState.platform`）、`src/config.ts`（`tierOptions` / `audioBackendOptions` 按平台裁剪）、`src/i18n.ts`（`tierMac`）、`src/webui/client.ts`、`scripts/build-runtime.sh`、`scripts/rocm-sitecustomize.py`。
+- **测试**：`tests/platform.test.ts`（**新**，14 例，全平台参数化）、`tests/gpu.test.ts`（+2 例非 Windows 短路）、`tests/install.test.ts`（+3 例 `isRuntimeDir` 平台布局）；另有 `tests/server.test.ts` 与路径预检用例。测试不联网。
 - **命令**：
   ```powershell
   cd "D:\Users\HW W\Documents\pr-gpt-sovits\repo"

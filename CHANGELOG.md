@@ -1,5 +1,17 @@
 # Changelog
 
+## 未发布
+
+- **macOS 支持（自备运行时，尚未放开市场）**：内置运行时包仍然只有 win-x64，macOS 在配置里填「自备运行时目录」
+  （`runtime/bin/python3` + `api_v2.py`）即可用；播放改走系统自带的 `afplay`（不再依赖随包的 win32-x64 audify 预编译件），
+  `write()` 先攒 PCM、`flush()` 整段落成临时 WAV 排队播，`cut()` 停掉正在播的那条并清队列。
+  推理服务按平台选解释器（Windows `runtime/python.exe` / macOS `runtime/bin/python3`）、PATH 用平台分隔符，
+  macOS 子进程放进独立进程组、停服务按组收，不留孤儿进程占端口；权重目录在非 Windows 上建普通目录符号链接。
+- **非 Windows 不再跑 Windows 专有探测**：显卡探测（`powershell` / `nvidia-smi`）直接短路成「没有独显」，
+  ROCm 的长路径预检（读注册表）跳过；配置里的推理档只留「自动 / CPU」，音频后端只留「自动」，
+  面板说明改成「需自备运行时，播放走 afplay」。
+- `package.json` 的 `os` **仍是 `["win32"]`**：等 Apple 芯片真机实测通过再放开，本轮不发布。
+
 ## 0.6.1
 
 - **模型版本改成下拉**：不再让人手填，固定三个选项（跟随推理档 / V5 turbo / V2 Pro Plus），写错值也不会进配置。

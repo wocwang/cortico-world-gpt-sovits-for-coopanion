@@ -100,6 +100,34 @@
 
 ---
 
+## macOS（自备运行时）
+
+内置运行时包只有 Windows（win-x64）版，macOS 这边**不下载任何运行时**，走「自备运行时目录」这条已有的入口，播放交给系统自带的 `afplay`。
+
+**准备一个运行时目录**（`python3 -m venv runtime` 生成的布局正好是插件要找的 `runtime/bin/python3`）：
+
+```bash
+git clone https://github.com/RVC-Boss/GPT-SoVITS.git gpt-sovits
+cd gpt-sovits
+python3 -m venv runtime
+runtime/bin/python3 -m pip install -r requirements.txt
+# 权重放 gpt-sovits/pretrained_models/（GPT_SoVITS/pretrained_models 也认）
+```
+
+**在配置里填**：`runtimeDir` = 上面那个 `gpt-sovits` 目录（要能看到 `api_v2.py` 与 `runtime/bin/python3`）。填好后推理档只剩「自动 / CPU」：macOS 没有可下载的运行时包，「自动」就是 CPU 档。
+
+**限制与实测**（Apple M3，官方 GPT-SoVITS + 本插件的 xll 权重，纯 CPU）：
+
+- 自备运行时约 7 GB（Python 依赖 + 权重），插件不会替你下。
+- 播放是「整段落盘交给 `afplay`」：首字延迟等于这句的合成时间（CPU 档本来就这样），打断（`cut`）会立刻停掉并清队列。
+- 输出设备只有「系统默认」，面板不再列设备；音量仍由配置里的 `volume` 控制（`afplay -v`）。
+- 速度参考：11 字 4.6 s、25 字 16.0 s、93 字约 42 s。
+- 训练面板按「自备目录不支持训练」处理；要训模型请在 Windows 那边或另开一份上游仓库。
+
+> 市场里本插件目前仍标为 Windows（`os` 只有 `win32`），等 Apple 芯片真机实测通过后再放开。现在要试，把仓库目录直接放进 `data/extensions/node_modules/@wocwang/cortico-world-gpt-sovits-for-coopanion`（或用 `pnpm add <tgz> --force` 绕过平台检查），重启 Coopanion。
+
+---
+
 ## 进阶配置（可选）
 
 全部在控制台「GPTSovits 语音」的分类页签里（**音色与台词 / 输出与保存 / 与其他插件联动 / 推理服务**），不填就是合理的默认值；原来的「配置」页已移除，两处不再重复。
@@ -145,7 +173,7 @@
 | `autoStart` | true | 启动时自动拉起本机推理服务 |
 | `idleMinutes` | 0 | 本机推理服务空闲这么多分钟就停掉，释放显存与内存；下一句自动重新拉起（会先排队等加载）。0 为不停 |
 | `serverUrl` | 空 | 填了就连这个已有的 api_v2 服务，不在本机启动、不下载运行时 |
-| `runtimeDir` | 空 | 自备运行时目录（含 `runtime/python.exe` 与 `api_v2.py`），填了不下载运行时 |
+| `runtimeDir` | 空 | 自备运行时目录（含 `runtime/` 与 `api_v2.py`；Windows 的 Python 在 `runtime/python.exe`，macOS 在 `runtime/bin/python3`），填了不下载运行时 |
 
 > 同一句话「忽好忽坏」通常是 `seed=-1` 每次重新采样的缘故，不是坏了。想要稳定输出就把 `seed` 固定。
 

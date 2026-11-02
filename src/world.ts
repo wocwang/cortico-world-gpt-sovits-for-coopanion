@@ -1513,6 +1513,7 @@ export class GptSovitsWorld implements World {
     const voice = this.voice();
     return {
       backend: b.kind,
+      platform: process.platform,
       tierSetting: this.cfg.tier,
       tier: this.tier(),
       cudaFound: this.cuda === true,
@@ -1610,6 +1611,8 @@ export interface UsageState {
 
 export interface PanelState {
   backend: Backend['kind'];
+  /** 面板在哪个平台上；macOS 的档位说明与 Windows 不同（没有可下载的运行时包）。 */
+  platform: NodeJS.Platform;
   tierSetting: GptSovitsConfigSection['tier'];
   tier: Tier;
   cudaFound: boolean;

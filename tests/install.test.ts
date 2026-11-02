@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { removeTreeSafely, rocmPathProblem } from '../src/install.ts';
+import { isRuntimeDir, removeTreeSafely, rocmPathProblem } from '../src/install.ts';
 
 describe('removeTreeSafely', () => {
   it('先拆掉目录联接再删运行时，不碰联接目标里的权重', () => {
@@ -61,5 +61,36 @@ describe('ROCm 档的路径预检', () => {
     const defaultDir = 'D:\\Program Files\\Coopanion\\data\\home\\runtimes\\gpt-sovits\\e91506f-1\\rocm';
     expect(rocmPathProblem(defaultDir, false)).toContain('安装路径太长');
     expect(rocmPathProblem(defaultDir, true)).toBeNull();
+  });
+});
+
+describe('isRuntimeDir 按平台认解释器', () => {
+  it('macOS 认 runtime/bin/python3，不认 runtime/python.exe', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gpt-sovits-rt-'));
+    writeFileSync(join(root, 'api_v2.py'), 'x');
+    mkdirSync(join(root, 'runtime', 'bin'), { recursive: true });
+    writeFileSync(join(root, 'runtime', 'bin', 'python3'), 'x');
+    expect(isRuntimeDir(root, 'darwin')).toBe(true);
+    expect(isRuntimeDir(root, 'win32')).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('Windows 认 runtime/python.exe', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gpt-sovits-rt-'));
+    writeFileSync(join(root, 'api_v2.py'), 'x');
+    mkdirSync(join(root, 'runtime'), { recursive: true });
+    writeFileSync(join(root, 'runtime', 'python.exe'), 'x');
+    expect(isRuntimeDir(root, 'win32')).toBe(true);
+    expect(isRuntimeDir(root, 'darwin')).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('缺 api_v2.py 时哪个平台都不算装好', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gpt-sovits-rt-'));
+    mkdirSync(join(root, 'runtime', 'bin'), { recursive: true });
+    writeFileSync(join(root, 'runtime', 'bin', 'python3'), 'x');
+    expect(isRuntimeDir(root, 'darwin')).toBe(false);
+    expect(isRuntimeDir(root, 'win32')).toBe(false);
+    rmSync(root, { recursive: true, force: true });
   });
 });

@@ -7,12 +7,13 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, renameSync, rmSync, rmdirSync, statSync, statfsSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { MODEL_FILES, RUNTIME_ASSETS, RUNTIME_VERSION, UPSTREAM_COMMIT, type ModelVersion, type PinnedFile } from './catalog.ts';
 import type { Tier } from './config.ts';
 import { longPathsEnabled, pathTooLong } from './gpu.ts';
+import { pythonInRuntime, runtimePublished, tarBinary, type Platform } from './platform.ts';
 
 export interface JobState {
   phase: 'absent' | 'working' | 'ready' | 'error';
@@ -182,22 +183,23 @@ export function rocmPathProblem(installDir: string, longPaths: boolean | null): 
   ].join('\n');
 }
 
-/** 装 ROCm 档前调用；路径超限且开关没开时抛出带解决步骤的错误。 */
+/** 装 ROCm 档前调用；路径超限且开关没开时抛出带解决步骤的错误。长路径是 Windows 的限制，别的平台不用查。 */
 export async function assertRocmPaths(dir: string): Promise<void> {
+  if (process.platform !== 'win32') return;
   const problem = rocmPathProblem(dir, await longPathsEnabled());
   if (problem) throw new Error(problem);
 }
 
-/** Windows 10 起自带 bsdtar,能解 zip;PATH 上靠前的 Git tar 不认 zip,所以写全路径。 */
+/** Windows 10 起自带 bsdtar,能解 zip;PATH 上靠前的 Git tar 不认 zip,所以写全路径。macOS 用系统自带的 /usr/bin/tar。 */
 export function extract(archive: string, into: string): Promise<void> {
-  const tar = process.platform === 'win32' ? resolve(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+  const tar = tarBinary();
   return new Promise((done, fail) => {
     const child = spawn(tar, ['-xf', archive, '-C', into], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
     child.stderr.on('data', (d: Buffer) => { err += d.toString(); });
     child.on('error', (err) => {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT') fail(new Error('系统里找不到 tar.exe（Windows 10 1803 起自带）；请升级系统或用「自备运行时目录」'));
+      if (code === 'ENOENT') fail(new Error(`系统里找不到 ${tar}（Windows 10 1803 起自带 tar，macOS 用系统自带的 /usr/bin/tar）；请升级系统或改用「自备运行时目录」`));
       else fail(err);
     });
     child.on('close', (code) => (code === 0 ? done() : fail(new Error(`tar 退出码 ${code}: ${err.trim().slice(0, 300)}`))));
@@ -237,7 +239,7 @@ abstract class Job {
   }
 }
 
-/** 一档运行时;`dir()` 下有 `runtime/python.exe` 与 `api_v2.py` 才算装好。 */
+/** 一档运行时;`dir()` 下有 `runtime/python.exe`（macOS 是 `runtime/bin/python3`）与 `api_v2.py` 才算装好。 */
 export class RuntimeJob extends Job {
   constructor(private readonly root: () => string, private readonly tier: () => Tier) { super(); }
 
@@ -245,9 +247,9 @@ export class RuntimeJob extends Job {
     return join(this.root(), 'gpt-sovits', RUNTIME_VERSION, this.tier());
   }
 
-  /** 这一档有没有发布包。 */
+  /** 这个平台这一档有没有发布包：内置运行时包都是 win-x64，macOS 只能填「自备运行时目录」。 */
   published(): boolean {
-    return RUNTIME_ASSETS[this.tier()].bytes > 0;
+    return runtimePublished(RUNTIME_ASSETS[this.tier()].bytes);
   }
 
   bytes(): number {
@@ -260,6 +262,7 @@ export class RuntimeJob extends Job {
 
   protected async work(signal: AbortSignal): Promise<void> {
     const asset = RUNTIME_ASSETS[this.tier()];
+    if (process.platform !== 'win32') throw new Error('内置运行时包只有 Windows 版；请在配置里填写「自备运行时目录」（含 runtime/ 与 api_v2.py 的 GPT-SoVITS 目录）');
     if (!asset.bytes) throw new Error('这一档还没有发布运行时包');
     const dir = this.dir();
     const partial = `${dir}.partial`;
@@ -334,8 +337,8 @@ export class RuntimeJob extends Job {
   }
 }
 
-export const isRuntimeDir = (dir: string): boolean =>
-  existsSync(join(dir, 'runtime', 'python.exe')) && existsSync(join(dir, 'api_v2.py'));
+export const isRuntimeDir = (dir: string, platform: Platform = process.platform): boolean =>
+  existsSync(pythonInRuntime(dir, platform)) && existsSync(join(dir, 'api_v2.py'));
 
 /** 一个模型版本要的权重文件，放在 `dir()` 下；选中官模预设时再加它那两份。 */
 export class WeightsJob extends Job {

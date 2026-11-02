@@ -1,7 +1,7 @@
 # TODO — 更好的GPTSovits 语音（Coopanion 插件）
 
-> 最后更新：2026-11-02 10:15（Asia/Shanghai）
-> 工作区版本：**0.6.1（已发布 npm latest，已推送）**；本机 `data\extensions` 装的是 **0.6.0**（未升级）
+> 最后更新：2026-11-02 11:30（Asia/Shanghai）
+> 工作区版本：**0.6.1（已发布 npm latest，已推送）**，另有**未发布的 macOS 改动**（本地，`os` 仍只有 `win32`）；本机 `data\extensions` 装的是 **0.6.0**（未升级）
 > 详细交接见 [HANDOFF.md](HANDOFF.md)；ROCm 代验清单见 [docs/rocm-acceptance.md](docs/rocm-acceptance.md)。
 
 ## P0 — 0.6.0 / 0.6.1 发布（已完成，待真机代验）
@@ -42,11 +42,18 @@
       一键写入 QQ 配置会改 QQ 插件配置（认证风险已知）。
 - [ ] 可选：把「逐项复制」按钮作为「不想让插件写配置」的替代交互加回来（0.5.29 的那两个提交还在历史里）。
 
-## P1.5 — macOS（单开一轮）
+## P1.5 — macOS（代码已合入，等 M3 实测）
 
-- [ ] 按 PR #10 的路线实现：`src/platform.ts` 收口解释器/tar/播放差异，`player.ts` 走 `afplay`，自备运行时目录；
-      测试用手上的 `platform.test.ts`；`os` 先**不加** `darwin`，等 #5 作者在 M3 实测通过再放开市场。
-- [ ] 说明写清：自备运行时约 7 GB、`afplay` 只能整段播放（首字延迟变差）、无设备选择与软件音量。
+- [x] 按 #10 的路线实现（2026-11-02）：`src/platform.ts` 收口解释器/tar/PATH/发布判定/播放差异（全部带 `platform` 参数，
+      darwin 分支在 Windows 上也能跑单测）；`player.ts` 走 `afplay`（攒 PCM → 临时 WAV → 排队播，`cut()` 停播+清队列）；
+      `server.ts` / `trainer.ts` / `install.ts` 改用平台解释器与 PATH，macOS 子进程独立进程组按组收，
+      权重目录在非 Windows 上建普通目录符号链接。`tests/platform.test.ts` 14 例。
+- [x] 顺带收口：`gpu.ts` 非 Windows 直接短路（不 spawn `powershell`/`nvidia-smi`）；`assertRocmPaths` 跳过读注册表；
+      `tierOptions` 只给「自动 / CPU」、`audioBackendOptions` 只给「自动」；面板新增 `tierMac` 说明。
+- [x] 说明写清：自备运行时约 7 GB、`afplay` 只整段播（首字延迟＝合成时间）、无设备选择（音量仍走 `afplay -v`）。
+- [ ] **M3 真机实测**（#10 作者 ink1453）：本机只有 Windows，afplay 分支、venv 的 `-I` 隔离、进程组收尾都没跑过真机。
+      实测时 `os` 还没有 `darwin`，需要手工放目录或用 `pnpm add <tgz> --force`；步骤见 README「macOS（自备运行时）」。
+- [ ] 实测通过后再放开市场：`package.json` 的 `os` 加 `darwin`，发 0.6.2，并在 #10 回帖说明。
 
 ## P2 — 冻结项 / 已知但先不动
 

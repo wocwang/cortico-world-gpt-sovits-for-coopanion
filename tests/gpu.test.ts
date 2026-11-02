@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { amdProbeFrom, buildFromRelease, fallbackToCpu, parseHipProbe, pathTooLong, pickHipDevice, pickTier } from '../src/gpu.ts';
+import { amdProbeFrom, buildFromRelease, detectGpus, detectNvidia, fallbackToCpu, parseHipProbe, pathTooLong, pickHipDevice, pickTier } from '../src/gpu.ts';
 
 const supported = (name: string) => amdProbeFrom([name]);
 
@@ -113,5 +113,17 @@ describe('ROCm 设备探针', () => {
     ];
     expect(pickHipDevice(devices, 'gfx1201')).toBe(1);
     expect(pickHipDevice(devices, 'gfx1100')).toBeNull();
+  });
+});
+
+describe('非 Windows 的显卡探测', () => {
+  it('macOS 不去 spawn powershell / nvidia-smi，直接给「没有独显」', async () => {
+    await expect(detectGpus('darwin')).resolves.toEqual({ nvidia: false, amd: { kind: 'none' }, vendor: null });
+    await expect(detectNvidia('darwin')).resolves.toBe(false);
+  });
+
+  it('Linux 同理（运行时包只有 win-x64）', async () => {
+    await expect(detectGpus('linux')).resolves.toMatchObject({ nvidia: false, amd: { kind: 'none' } });
+    await expect(detectNvidia('linux')).resolves.toBe(false);
   });
 });

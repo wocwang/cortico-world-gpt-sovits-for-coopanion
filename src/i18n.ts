@@ -23,6 +23,7 @@ const PANEL = {
     tierRocmUnpublished: (gfx: string): string => `自动：检测到 AMD 显卡（${gfx}），但 ROCm 运行时还没发布，先用 CPU 档`,
     tierAmdUnsupported: (name: string): string => `自动：检测到 ${name}，当前显卡不在支持名单内，使用 CPU 档`,
     tierNoDiscrete: '自动：没有检测到支持的独立显卡，使用 CPU 档',
+    tierMac: 'macOS：没有可下载的运行时包，只能走 CPU 档；运行时与权重需自备（约 7 GB），播放走系统 afplay',
     tierCudaMissing: (vendor: string | null): string => (vendor === 'amd'
       ? '本机是 AMD 显卡，没有 NVIDIA CUDA；要 GPU 加速请选「AMD ROCm」或「自动」'
       : '没有检测到 NVIDIA 显卡，显卡档可能起不来；请改回「自动」或「CPU」'),
@@ -185,6 +186,7 @@ const PANEL = {
     tierRocmUnpublished: (gfx: string) => `Auto: AMD GPU found (${gfx}), but the ROCm runtime is not published yet; using the CPU tier`,
     tierAmdUnsupported: (name: string): string => `Auto: ${name} is not on the supported list; using the CPU tier`,
     tierNoDiscrete: 'Auto: no supported discrete GPU found; using the CPU tier',
+    tierMac: 'macOS: no runtime package is published, so only the CPU tier works; bring your own runtime and weights (about 7 GB); playback uses the system afplay',
     tierCudaMissing: (vendor: string | null) => (vendor === 'amd'
       ? 'This machine has an AMD GPU, not NVIDIA CUDA; pick "AMD ROCm" or Auto for GPU acceleration'
       : 'No NVIDIA GPU found; the GPU tier may fail to start — switch to Auto or CPU'),

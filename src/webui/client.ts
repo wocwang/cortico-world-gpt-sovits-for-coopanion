@@ -137,16 +137,21 @@ const voicePanel: WebUiPanel = {
       // 推理档
       setPill(tierRow.pill, s.tier === 'cuda' ? t.tierCuda : s.tier === 'rocm' ? t.tierRocm : t.tierCpu, 'on');
       // 自动档说明实际选了哪一档；显式选了显卡档但机器不支持时提前警告，别等下了几个 GB 运行时才失败。
-      const explain = s.tierSetting === 'auto'
-        ? (s.cudaFound ? t.tierAuto(true)
-          : s.amd.kind === 'supported'
-            ? (s.tier === 'rocm' ? t.tierAutoRocm(s.amd.gpu.gfx) : t.tierRocmUnpublished(s.amd.gpu.gfx))
-            : s.gpu === 'amd'
-              ? (s.amd.kind === 'unsupported' && s.amd.integrated ? t.tierNoDiscrete : t.tierAmdUnsupported(s.amd.kind === 'unsupported' ? s.amd.name : ''))
-              : t.tierAuto(false))
-        : s.tier === 'cuda' && !s.cudaFound ? t.tierCudaMissing(s.gpu)
-          : s.tier === 'rocm' && s.amd.kind !== 'supported' ? t.tierRocmMissing(s.amd.kind === 'unsupported' ? s.amd.name : null)
-            : '';
+      // macOS 没有可下载的运行时包：直接说明要走自备运行时，别落到「没有检测到独立显卡」那种说法上。
+      const explain = s.platform !== 'win32'
+        ? (s.tier === 'cuda' ? t.tierCudaMissing(s.gpu)
+          : s.tier === 'rocm' ? t.tierRocmMissing(null)
+            : t.tierMac)
+        : s.tierSetting === 'auto'
+          ? (s.cudaFound ? t.tierAuto(true)
+            : s.amd.kind === 'supported'
+              ? (s.tier === 'rocm' ? t.tierAutoRocm(s.amd.gpu.gfx) : t.tierRocmUnpublished(s.amd.gpu.gfx))
+              : s.gpu === 'amd'
+                ? (s.amd.kind === 'unsupported' && s.amd.integrated ? t.tierNoDiscrete : t.tierAmdUnsupported(s.amd.kind === 'unsupported' ? s.amd.name : ''))
+                : t.tierAuto(false))
+          : s.tier === 'cuda' && !s.cudaFound ? t.tierCudaMissing(s.gpu)
+            : s.tier === 'rocm' && s.amd.kind !== 'supported' ? t.tierRocmMissing(s.amd.kind === 'unsupported' ? s.amd.name : null)
+              : '';
       tierRow.detail.textContent = [explain, t.modelLine(s.version === 'v5turbo' ? 'V5 turbo' : 'V2 Pro Plus')].filter(Boolean).join(' · ');
       // 运行时与权重
       const managed = s.backend === 'managed';

@@ -7,6 +7,7 @@
  */
 import { execFile } from 'node:child_process';
 import type { Tier, TierSetting } from './config.ts';
+import type { Platform } from './platform.ts';
 
 export type GpuVendor = 'amd' | 'intel' | 'other';
 
@@ -76,15 +77,23 @@ export function pickTier(setting: TierSetting, nvidia: boolean, amd: AmdProbe): 
   return amd.kind === 'supported' ? 'rocm' : 'cpu';
 }
 
-/** nvidia-smi 能列出至少一块显卡就算有 NVIDIA 显卡。 */
-export function detectNvidia(): Promise<boolean> {
+/**
+ * nvidia-smi 能列出至少一块显卡就算有 NVIDIA 显卡。
+ * 显卡档只在 Windows 上有运行时包，其它平台不必去 spawn 一个不存在的命令。
+ */
+export function detectNvidia(platform: Platform = process.platform): Promise<boolean> {
+  if (platform !== 'win32') return Promise.resolve(false);
   return new Promise((done) => {
     execFile('nvidia-smi', ['-L'], { windowsHide: true, timeout: 5000 }, (err, stdout) => done(!err && /GPU \d+:/.test(stdout)));
   });
 }
 
-/** 一次 PowerShell 取回显卡名与驱动版本，再判 NVIDIA / AMD。失败按「没检测到」处理，不抛。 */
-export function detectGpus(): Promise<GpuInfo> {
+/**
+ * 一次 PowerShell 取回显卡名与驱动版本，再判 NVIDIA / AMD。失败按「没检测到」处理，不抛。
+ * 非 Windows 直接给「没有独显」：那里没有 PowerShell 也没有 ROCm 运行时包，探测只会白跑一遍。
+ */
+export function detectGpus(platform: Platform = process.platform): Promise<GpuInfo> {
+  if (platform !== 'win32') return Promise.resolve({ nvidia: false, amd: { kind: 'none' }, vendor: null });
   return new Promise((done) => {
     execFile(
       'powershell.exe',
@@ -96,7 +105,7 @@ export function detectGpus(): Promise<GpuInfo> {
         const drivers = lines.map((line) => (line.split('|')[1] ?? '').trim() || null);
         const joined = names.join(';').toLowerCase();
         const vendor: GpuVendor | null = /amd|radeon/.test(joined) ? 'amd' : /intel/.test(joined) ? 'intel' : names.length ? 'other' : null;
-        void detectNvidia().then((nvidia) => done({ nvidia, amd: amdProbeFrom(names, drivers), vendor }));
+        void detectNvidia(platform).then((nvidia) => done({ nvidia, amd: amdProbeFrom(names, drivers), vendor }));
       },
     );
   });
