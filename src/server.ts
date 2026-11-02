@@ -14,7 +14,7 @@ import { weightPaths, type ModelVersion } from './catalog.ts';
 import type { Tier } from './config.ts';
 import { parseHipProbe, pickHipDevice, type AmdGfx } from './gpu.ts';
 import { ensureNltkData, isLinkEntry, removeLink } from './install.ts';
-import { envWithRuntime, pythonInRuntime } from './platform.ts';
+import { envWithRuntime, missingRuntimePart, pythonInRuntime } from './platform.ts';
 import { patchRuntime } from './runtime-patch.ts';
 import type { TrainedWeights } from './weights.ts';
 
@@ -260,6 +260,10 @@ export class SovitsServer {
 
   private async launch(spec: LaunchSpec): Promise<void> {
     const started = Date.now();
+    // 自备运行时最常见的是路径填错（macOS 尤其：解释器在 runtime/bin/python3）。先给一句带路径的错误，
+    // 比等 spawn 抛 ENOENT 强。
+    const missing = missingRuntimePart(spec.runtimeDir);
+    if (missing) throw new Error(missing);
     this.tail = [];
     if (spec.patchRuntime) {
       const result = patchRuntime(spec.runtimeDir);

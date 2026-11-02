@@ -7,6 +7,8 @@
  *
  * 路径与分隔符都按「传入的平台」拼，不按跑测试的机器，这样两边都能用同一份断言。
  */
+import { existsSync } from 'node:fs';
+
 export type Platform = NodeJS.Platform;
 
 /** 该平台有没有可下载的托管运行时包：内置包都是 win-x64。 */
@@ -43,3 +45,18 @@ export function envWithRuntime(runtimeDir: string, env: NodeJS.ProcessEnv = proc
 
 /** 是不是用系统自带播放器（macOS 的 afplay）而不是 audify。 */
 export const useSystemPlayer = (platform: Platform = process.platform): boolean => platform === 'darwin';
+
+/**
+ * 自备运行时目录的预检：缺解释器或 `api_v2.py` 时返回一句人话（带完整路径），否则 null。
+ * macOS 那套布局和 Windows 不同（`runtime/bin/python3`），填错时给路径比给 ENOENT 有用。
+ */
+export function missingRuntimePart(runtimeDir: string, platform: Platform = process.platform): string | null {
+  const root = trimEnd(runtimeDir);
+  const python = pythonInRuntime(root, platform);
+  if (!existsSync(python)) {
+    return `运行时不完整：找不到解释器 ${python}（Windows 需要 runtime\\python.exe，macOS 需要 runtime/bin/python3）`;
+  }
+  const entry = `${root}${platform === 'win32' ? '\\' : '/'}api_v2.py`;
+  if (!existsSync(entry)) return `运行时不完整：找不到 ${entry}`;
+  return null;
+}

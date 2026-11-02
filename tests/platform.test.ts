@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { envWithRuntime, pythonInRuntime, runtimeBinDir, runtimePublished, tarBinary, useSystemPlayer } from '../src/platform.ts';
+import { envWithRuntime, missingRuntimePart, pythonInRuntime, runtimeBinDir, runtimePublished, tarBinary, useSystemPlayer } from '../src/platform.ts';
 
 describe('pythonInRuntime', () => {
   it('Windows 用 runtime/python.exe', () => {
@@ -72,5 +75,34 @@ describe('useSystemPlayer', () => {
     expect(useSystemPlayer('darwin')).toBe(true);
     expect(useSystemPlayer('win32')).toBe(false);
     expect(useSystemPlayer('linux')).toBe(false);
+  });
+});
+
+describe('自备运行时预检', () => {
+  it('缺解释器时给出带路径的提示（macOS 在 runtime/bin/python3）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gsv-rt-'));
+    mkdirSync(join(dir, 'runtime', 'bin'), { recursive: true });
+    writeFileSync(join(dir, 'api_v2.py'), '');
+    const problem = missingRuntimePart(dir, 'darwin');
+    expect(problem).toContain('runtime/bin/python3');
+    expect(problem).toContain('找不到解释器');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('解释器在但缺 api_v2.py 时同样拒绝', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gsv-rt-'));
+    mkdirSync(join(dir, 'runtime', 'bin'), { recursive: true });
+    writeFileSync(join(dir, 'runtime', 'bin', 'python3'), '');
+    expect(missingRuntimePart(dir, 'darwin')).toContain('api_v2.py');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('两样都齐就放行', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gsv-rt-'));
+    mkdirSync(join(dir, 'runtime', 'bin'), { recursive: true });
+    writeFileSync(join(dir, 'runtime', 'bin', 'python3'), '');
+    writeFileSync(join(dir, 'api_v2.py'), '');
+    expect(missingRuntimePart(dir, 'darwin')).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
