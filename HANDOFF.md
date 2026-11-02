@@ -71,6 +71,7 @@
 | 0.6.1 | 模型版本改下拉；`cut5`→`cut2`（#11）；音频后端 WASAPI/DirectSound 回退（#4/#8）；联接失败不再拖垮 App（#9） | **已发布**（npm latest，`a9bbc01` 已推送）；issue #2/#3/#4/#5/#6/#7/#9/#11 已回复，#9/#11 已关 |
 | 0.6.2 | ROCm 档改整句非流式（修 Chen Shaoju 的 `terminated`）+ 连接断开重试；macOS 平台代码并入但 `os` 仍只 win32 | **已发布**（npm latest，`ffeca3e` 已推送）；#228 已回复；市场同步 issue #662 |
 | 0.6.3 | ROCm 运行时缺 NLTK `cmudict`：启动前自动补 9.5 MB 语料并设 `NLTK_DATA`，构建脚本加校验 | **已发布**（npm latest，`449a472` 已推送）；#228 已回复；市场同步 issue #663 |
+| 0.6.4 | 自备运行时预检；`audioBackend` 归一化；开流后 120 ms `isStreamRunning` 探针，自动档识别「开流成功但没声音」退 DirectSound（#8） | **已发布**（npm latest，`3e318ad` 已推送）；#8 已回复；市场同步 issue #679 |
 | （未编号） | macOS：`platform.ts` + `afplay` 播放 + 平台解释器/PATH/进程组 + 非 Windows 短路与选项裁剪 | **本地已合入 main，未 push、未发布**；`os` 仍只有 `win32`，等 M3 实测 |
 
 ## 3. 关键假设与决策
