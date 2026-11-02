@@ -1,6 +1,6 @@
 # Changelog
 
-## 未发布
+## 0.6.4
 
 - **自备运行时预检**：启动前检查解释器与 `api_v2.py`，缺了直接报完整路径（macOS 是 `runtime/bin/python3`），
   不再等 `spawn` 抛一个没上下文的 `ENOENT`。为 #5 的 macOS 实测准备。
