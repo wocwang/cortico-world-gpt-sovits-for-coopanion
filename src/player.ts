@@ -33,6 +33,8 @@ interface RtAudioLike {
   getDevices(): Array<{ id: number; name: string; outputChannels: number }>;
   getDefaultOutputDevice(): number;
   isStreamOpen(): boolean;
+  /** 开流成功但没在跑（issue #8 的 WASAPI）时会是 false；随包 audify 有这个符号，旧包没有。 */
+  isStreamRunning?(): boolean;
   outputVolume: number;
 }
 
@@ -81,15 +83,27 @@ export function applyGain(pcm: Buffer, gain: number): Buffer {
 }
 
 /**
+ * 手动改 `config.json` 时很容易照着描述写成 `DirectSound`、`WASAPI` 或带空格。
+ * `?? 'auto'` 挡不住「存在但非法」的值，所以统一在这里归一化；认不出的按 `auto`。
+ */
+export function normalizeAudioBackend(setting: unknown): AudioBackend {
+  const value = typeof setting === 'string' ? setting.trim().toLowerCase() : '';
+  if (value === 'wasapi') return 'wasapi';
+  if (value === 'directsound' || value === 'direct sound' || value === 'ds') return 'directsound';
+  return 'auto';
+}
+
+/**
  * 后端候选顺序。Windows 上 RtAudio 自选会先挑 ASIO（厂商 ASIO 驱动不认请求的帧长，第一次写入就越界），
  * 所以默认先 WASAPI；WASAPI 枚举不到设备（issue #4）或打不开时再退 DirectSound（issue #8 的机器也只有它出声）。
  */
-export function backendCandidates(setting: AudioBackend): Array<{ api: number | undefined; label: string }> {
+export function backendCandidates(setting: string): Array<{ api: number | undefined; label: string }> {
   if (process.platform !== 'win32') return [{ api: undefined, label: '默认后端' }];
   const wasapi = { api: 7, label: BACKEND_LABEL.wasapi };
   const ds = { api: 8, label: BACKEND_LABEL.directsound };
-  if (setting === 'wasapi') return [wasapi];
-  if (setting === 'directsound') return [ds];
+  const backend = normalizeAudioBackend(setting);
+  if (backend === 'wasapi') return [wasapi];
+  if (backend === 'directsound') return [ds];
   return [wasapi, ds];
 }
 
@@ -157,6 +171,8 @@ export class Player {
   private afplayDir: string | null = null;
   /** macOS：正在播的那一条 afplay。 */
   private afplayChild: ChildProcess | null = null;
+  /** 只提醒一次「后端配置认不出」，别每帧刷日志。 */
+  private warnedBackend = false;
   /** macOS：排着的临时 WAV 与它的时长。 */
   private afplayQueue: Array<{ file: string; ms: number }> = [];
   private afplaySeq = 0;
@@ -183,7 +199,7 @@ export class Player {
       await this.drain();
       this.close();
     }
-    if (!this.rt) this.open(sampleRate, device);
+    if (!this.rt) await this.open(sampleRate, device);
     const rt = this.rt!;
     rt.outputVolume = Math.max(0, Math.min(1, this.opts.volume()));
     let buf = this.carry.length ? Buffer.concat([this.carry, pcm]) : pcm;
@@ -313,15 +329,20 @@ export class Player {
 
   /**
    * 依次尝试后端：枚举不到设备或打不开就换下一个，全失败才抛错，并把每一家的原因带上。
-   * WASAPI 在部分机器上枚举为空（issue #4），有的机器枚举正常但写进去没声音（issue #8，DirectSound 正常），
-   * 所以不能只写一个后端。
+   * WASAPI 在部分机器上枚举为空（issue #4），有的机器枚举正常、开流也成功但写进去没声音（issue #8），
+   * 所以不能只写一个后端，还要在开流后验一下它是不是真的在跑。
    */
-  private open(sampleRate: number, device: string): void {
+  private async open(sampleRate: number, device: string): Promise<void> {
     this.audify ??= loadAudify();
     const audify = this.audify;
     const frameSize = Math.round(sampleRate * FRAME_MS / 1000);
     const reasons: string[] = [];
-    for (const candidate of backendCandidates(this.opts.backend())) {
+    const requested = this.opts.backend();
+    if (!this.warnedBackend && normalizeAudioBackend(requested) !== requested) {
+      this.warnedBackend = true;
+      this.opts.log.warn('音频后端配置无法识别，按 auto 处理', { value: String(requested) });
+    }
+    for (const candidate of backendCandidates(requested)) {
       let rt: RtAudioLike;
       try {
         rt = candidate.api === undefined ? new audify.RtAudio() : new audify.RtAudio(candidate.api);
@@ -343,6 +364,7 @@ export class Player {
       const wanted = device ? devices.find((d) => d.name === device) ?? devices.find((d) => d.name.includes(device)) : undefined;
       const deviceId = wanted?.id ?? pickDefaultDevice(devices, rt.getDefaultOutputDevice());
       const channels = Math.min(2, Math.max(1, devices.find((d) => d.id === deviceId)?.outputChannels ?? 2));
+      const frameBytes = frameSize * 2;
       try {
         rt.openStream({ deviceId, nChannels: channels, firstChannel: 0 }, null, audify.RtAudioFormat.RTAUDIO_SINT16, sampleRate, frameSize, 'cortico-gpt-sovits', null, null);
         rt.start();
@@ -351,13 +373,28 @@ export class Player {
         try { if (rt.isStreamOpen()) rt.closeStream(); } catch { /* 已断开 */ }
         continue;
       }
+      // 开流 + start 都成功也可能是「假成功」：issue #8 的机器上 WASAPI 约 100 ms 内自己停掉，
+      // 看起来一切正常但没有声音。写两帧静音等 120 ms 再查 isStreamRunning，就能把这类机器挑出来。
+      if (typeof rt.isStreamRunning === 'function') {
+        let running = false;
+        try {
+          rt.write(Buffer.alloc(frameBytes * channels * 2));
+          await new Promise((done) => setTimeout(done, 120));
+          running = rt.isStreamRunning();
+        } catch { running = false; }
+        if (!running) {
+          reasons.push(`${candidate.label}：开流成功但 120 ms 内停止运行（能开流却没声音，issue #8）`);
+          try { if (rt.isStreamOpen()) rt.closeStream(); } catch { /* 已断开 */ }
+          continue;
+        }
+      }
       this.rt = rt;
       this.api = candidate.api;
       this.rate = sampleRate;
       this.openedDevice = device;
       this.defaultId = deviceId;
       this.defaultCheckedAt = Date.now();
-      this.frameBytes = frameSize * 2;
+      this.frameBytes = frameBytes;
       this.channels = channels;
       this.endsAt = 0;
       this.opts.log.info(`音频输出已打开：${candidate.label}`, { devices: devices.length, device: devices.find((d) => d.id === deviceId)?.name ?? deviceId });
