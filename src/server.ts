@@ -301,7 +301,14 @@ export class SovitsServer {
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
       // PATH 由 envWithRuntime 给（运行时目录在最前）；runtimeEnv 只给档位相关的变量，别让它把 PATH 覆盖掉。
-      env: { ...envWithRuntime(spec.runtimeDir), ...runtimeEnv(spec.tier, { miopenDir, deviceIndex, nltkDir }) },
+      env: {
+        ...envWithRuntime(spec.runtimeDir),
+        // 上游 api_v2.py 在设置 sys.path 之前就 `from tools.portable_runtime import …`；`-I` 不把脚本目录
+        // 放进 sys.path，自备运行时会 ModuleNotFoundError: No module named 'tools'。显式给 PYTHONPATH，
+        // 用户不必去改运行时里的 api_v2.py。
+        PYTHONPATH: [spec.runtimeDir, process.env.PYTHONPATH].filter(Boolean).join(process.platform === 'win32' ? ';' : ':'),
+        ...runtimeEnv(spec.tier, { miopenDir, deviceIndex, nltkDir }),
+      },
     });
     this.child = child;
     this.st = { phase: 'starting', url, pid: child.pid ?? null, detail: null, startMs: null };
@@ -319,7 +326,7 @@ export class SovitsServer {
       if (this.child !== child) return;
       this.child = null;
       const last = this.tail.slice(-3).join(' | ');
-      this.st = { phase: 'error', url: null, pid: null, detail: `推理服务退出(${code}):${last}`, startMs: null };
+      this.st = { phase: 'error', url: null, pid: null, detail: `推理服务退出(${code}):${last}${startFailureHint(this.tail)}`, startMs: null };
       this.log.warn('GPT-SoVITS 推理服务退出', { code, tail: this.tail.slice(-10) });
       this.onExit(this.st.detail ?? '');
     });
@@ -341,6 +348,18 @@ export class SovitsServer {
       this.st = { phase: 'error', url: null, pid: null, detail: `推理服务 ${READY_TIMEOUT_MS / 1000} 秒内没有就绪`, startMs: null };
     }
   }
+}
+
+/**
+ * 子进程退出时补一句人话：自备运行时最常见的是 pretrained_models 不全（macOS 的 CPU 档要的是
+ * V2 Pro Plus 那套，不是 V5 turbo），上游只抛一行 FileNotFoundError，不告诉人缺哪个文件。
+ */
+export function startFailureHint(tail: readonly string[]): string {
+  const text = tail.join('\n');
+  if (!/FileNotFoundError/.test(text) || !/pretrained_models/.test(text)) return '';
+  const hit = /pretrained_models[\\/]([^'"\r\n]+)/.exec(text)?.[1]?.trim();
+  const which = hit ? `「${hit}」` : '一些文件';
+  return `（运行时缺 GPT_SoVITS/pretrained_models 下的权重${which}；CPU 档需要 v2Pro/s2Gv2ProPlus.pth 与 sv/pretrained_eres2netv2w24s4ep4.ckpt，下载地址见 README 的「内置底模」）`;
 }
 
 /** api_v2 起来之前连接被拒;FastAPI 的 /docs 页起来就有。 */

@@ -1,5 +1,14 @@
 # Changelog
 
+## 未发布
+
+- **自备运行时不再要求改 `api_v2.py`**：子进程环境带上 `PYTHONPATH=<运行时目录>`。上游 `api_v2.py` 在设置
+  `sys.path` 之前就 `from tools.portable_runtime import …`，而 `-I` 不把脚本目录放进 `sys.path`，
+  macOS 实测会 `ModuleNotFoundError: No module named 'tools'`。
+- **缺权重时点名缺哪个文件**：启动失败原因里附上 `pretrained_models` 下缺失的文件，并提示 CPU 档需要
+  `v2Pro/s2Gv2ProPlus.pth` 与 `sv/pretrained_eres2netv2w24s4ep4.ckpt`。
+- README 的 macOS 权重清单改正（CPU 档是 V2 Pro Plus，不是 V5 turbo），并写明新句**排队**、不打断正在播的那句。
+
 ## 0.6.4
 
 - **自备运行时预检**：启动前检查解释器与 `api_v2.py`，缺了直接报完整路径（macOS 是 `runtime/bin/python3`），

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cachedHipIndex, infererYaml, runtimeEnv } from '../src/server.ts';
+import { cachedHipIndex, infererYaml, runtimeEnv, startFailureHint } from '../src/server.ts';
 
 describe('api_v2 配置', () => {
   it('ROCm 档和显卡档一样写 cuda + fp16', () => {
@@ -43,6 +43,22 @@ describe('ROCm 子进程环境', () => {
     expect(runtimeEnv('cuda', { miopenDir, deviceIndex: null, nltkDir })).toEqual({ NLTK_DATA: nltkDir });
     expect(runtimeEnv('cpu', { miopenDir, deviceIndex: null, nltkDir })).toEqual({ NLTK_DATA: nltkDir });
     expect(runtimeEnv('rocm', { miopenDir, deviceIndex: 1, nltkDir }).NLTK_DATA).toBe(nltkDir);
+  });
+});
+
+describe('启动失败提示', () => {
+  it('缺权重时点名缺哪个文件，并说明 CPU 档要 V2 Pro Plus 那套', () => {
+    const hint = startFailureHint([
+      'Traceback (most recent call last):',
+      "FileNotFoundError: [Errno 2] No such file or directory: 'GPT_SoVITS/pretrained_models/v2Pro/s2Gv2ProPlus.pth'",
+    ]);
+    expect(hint).toContain('v2Pro/s2Gv2ProPlus.pth');
+    expect(hint).toContain('CPU 档');
+  });
+
+  it('别的退出原因不加提示', () => {
+    expect(startFailureHint(['Address already in use'])).toBe('');
+    expect(startFailureHint(['ModuleNotFoundError: No module named "tools"'])).toBe('');
   });
 });
 

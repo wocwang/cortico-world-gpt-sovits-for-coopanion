@@ -111,18 +111,33 @@ git clone https://github.com/RVC-Boss/GPT-SoVITS.git gpt-sovits
 cd gpt-sovits
 python3 -m venv runtime
 runtime/bin/python3 -m pip install -r requirements.txt
-# 权重放 gpt-sovits/pretrained_models/（GPT_SoVITS/pretrained_models 也认）
 ```
+
+**权重**：macOS 只有 CPU 档，而 CPU 档固定用 **V2 Pro Plus**（V5 turbo 在 CPU 上跑不动，配置里选了也会退回）。
+`GPT_SoVITS/pretrained_models/` 下要有：
+
+| 文件 | 字节 | 地址 |
+|---|---|---|
+| `s1v3.ckpt` | 155,284,856 | `https://www.modelscope.cn/models/XXXXRT/GPT-SoVITS-Pretrained/resolve/master/pretrained_models/s1v3.ckpt` |
+| `chinese-hubert-base/`（3 个文件） | 188,812,078 | 同目录 `chinese-hubert-base/…` |
+| `chinese-roberta-wwm-ext-large/`（3 个文件） | 651,495,070 | 同目录 `chinese-roberta-wwm-ext-large/…` |
+| `fast_langdetect/lid.176.bin` | 131,266,198 | 同目录 `fast_langdetect/lid.176.bin` |
+| `v2Pro/s2Gv2ProPlus.pth` | 200,125,741 | 同目录 `v2Pro/s2Gv2ProPlus.pth` |
+| `sv/pretrained_eres2netv2w24s4ep4.ckpt` | 107,528,697 | 同目录 `sv/pretrained_eres2netv2w24s4ep4.ckpt` |
+
+缺文件时 0.6.5 起会在启动失败的原因里点名缺哪个（以及上面这两条 CPU 档专用权重）。
 
 **在配置里填**：`runtimeDir` = 上面那个 `gpt-sovits` 目录（要能看到 `api_v2.py` 与 `runtime/bin/python3`）。填好后推理档只剩「自动 / CPU」：macOS 没有可下载的运行时包，「自动」就是 CPU 档。
 
 **限制与实测**（Apple M3，官方 GPT-SoVITS + 本插件的 xll 权重，纯 CPU）：
 
 - 自备运行时约 7 GB（Python 依赖 + 权重），插件不会替你下。
-- 播放是「整段落盘交给 `afplay`」：首字延迟等于这句的合成时间（CPU 档本来就这样），打断（`cut`）会立刻停掉并清队列。
+- 播放是「整段落盘交给 `afplay`」：首字延迟等于这句的合成时间（CPU 档本来就这样）。
+- 新台词**排队**，不会打断正在播的那句；要停用「停止播放」（`sovits_hush` / 面板停止），0.1 秒内 `afplay` 退出并清队列。
 - 输出设备只有「系统默认」，面板不再列设备；音量仍由配置里的 `volume` 控制（`afplay -v`）。
 - 速度参考：11 字 4.6 s、25 字 16.0 s、93 字约 42 s。
 - 训练面板按「自备目录不支持训练」处理；要训模型请在 Windows 那边或另开一份上游仓库。
+- 上游 `api_v2.py` 在设置 `sys.path` 之前就 `from tools.portable_runtime import …`，0.6.5 起插件给子进程设了 `PYTHONPATH=<运行时目录>`，不必再改运行时的 `api_v2.py`；更早的版本会报 `No module named 'tools'`。
 
 > 市场里本插件目前仍标为 Windows（`os` 只有 `win32`），等 Apple 芯片真机实测通过后再放开。现在要试，把仓库目录直接放进 `data/extensions/node_modules/@wocwang/cortico-world-gpt-sovits-for-coopanion`（或用 `pnpm add <tgz> --force` 绕过平台检查），重启 Coopanion。
 
