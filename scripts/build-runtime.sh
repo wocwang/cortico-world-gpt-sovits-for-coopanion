@@ -110,6 +110,13 @@ find "$SP" \( -name '*.pdb' -o -name '*.lib' \) -delete
 rm -rf "$SP/torch/include" "$OUT/runtime/include" "$OUT/runtime/libs" "$OUT/runtime/tcl"
 rm -rf "$OUT/GPT_SoVITS/pretrained_models" && mkdir -p "$OUT/GPT_SoVITS/pretrained_models"
 
+# NLTK 语料（cmudict）缺了，中文台词里夹一个英文单词就会 `Resource 'cmudict' not found` 整句失败；
+# 0.6.0 的 ROCm 包就是因为手搓打包漏了它（0.6.3 用补齐包兜底）。缺了不打包。
+if [ ! -d "$OUT/runtime/nltk_data/corpora/cmudict" ]; then
+  echo "missing runtime/nltk_data/corpora/cmudict" >&2
+  exit 1
+fi
+
 # 打包与分片
 ZIP="$WORK/$NAME.zip"
 rm -f "$ZIP" "$ZIP".part*

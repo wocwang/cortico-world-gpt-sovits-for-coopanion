@@ -10,7 +10,8 @@ import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, 
 import { dirname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { MODEL_FILES, RUNTIME_ASSETS, RUNTIME_VERSION, UPSTREAM_COMMIT, type ModelVersion, type PinnedFile } from './catalog.ts';
+import type { Logger } from 'cortico/core/types.ts';
+import { MODEL_FILES, NLTK_ASSET, RUNTIME_ASSETS, RUNTIME_VERSION, UPSTREAM_COMMIT, type ModelVersion, type PinnedFile } from './catalog.ts';
 import type { Tier } from './config.ts';
 import { longPathsEnabled, pathTooLong } from './gpu.ts';
 import { pythonInRuntime, runtimePublished, tarBinary, type Platform } from './platform.ts';
@@ -392,5 +393,34 @@ export class WeightsJob extends Job {
       });
       renameSync(partial, dest);
     }
+  }
+}
+
+/** 运行时里有没有 NLTK 的 cmudict——ROCm 包曾经把它漏掉，英文单词一进场就崩。 */
+export function hasNltkData(runtimeDir: string): boolean {
+  return existsSync(join(runtimeDir, 'runtime', 'nltk_data', 'corpora', 'cmudict'));
+}
+
+/**
+ * 缺 NLTK 语料时下一份补齐包到 `dataDir/nltk_data`，返回该目录给 `NLTK_DATA` 用。
+ * 只影响「台词里夹英文」的句子；下载失败只记日志、返回 null，不拦启动。
+ */
+export async function ensureNltkData(runtimeDir: string, dataDir: string, log: Logger): Promise<string | null> {
+  if (hasNltkData(runtimeDir)) return null;
+  const dir = join(dataDir, 'nltk_data');
+  if (existsSync(join(dir, 'corpora', 'cmudict'))) return dir;
+  const zip = join(dataDir, NLTK_ASSET.path);
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    await fetchVerified(NLTK_ASSET.sources, zip, NLTK_ASSET.bytes, NLTK_ASSET.sha256, () => {}, new AbortController().signal);
+    await extract(zip, dataDir);
+    rmSync(zip, { force: true });
+    if (!existsSync(join(dir, 'corpora', 'cmudict'))) throw new Error('补齐包里没有 cmudict');
+    log.info('已补齐 NLTK 语料（cmudict）', { dir });
+    return dir;
+  } catch (err) {
+    rmSync(zip, { force: true });
+    log.warn('NLTK 语料没下成，含英文的台词可能合成失败', { err: String(err) });
+    return null;
   }
 }

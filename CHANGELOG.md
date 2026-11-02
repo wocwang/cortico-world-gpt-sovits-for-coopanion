@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.3
+
+- **ROCm 档不再因为一个英文单词整句失败**：0.6.0 的 ROCm 运行时漏打了 NLTK 语料，台词里夹英文时
+  `nltk` 找不到 `cmudict`，整句报 `tts failed: Resource 'cmudict' not found`（中文纯汉字不受影响）。
+  现在启动前检查运行时有没有 `nltk_data/corpora/cmudict`，缺了自动下 9.5 MB 补齐包到数据目录并设
+  `NLTK_DATA`；构建脚本也加了校验，缺语料直接不打包。
+- 连接断开重试、失败日志里的 `tier` / `streaming` 仍是 0.6.2 的行为，本次不动。
+
 ## 0.6.2
 
 - **ROCm 档连着说话不再断**：0.6.1 在 RX 9070 上「试听正常、实际台词频繁 `terminated`」。根因是长句被切成多段后

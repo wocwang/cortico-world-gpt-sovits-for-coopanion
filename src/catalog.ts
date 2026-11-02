@@ -105,6 +105,18 @@ export function resolveModelVersion(setting: VoiceModelSetting, tier: Tier): Mod
   return setting === 'auto' ? TIER_MODEL[tier] : setting;
 }
 
+/**
+ * ROCm 运行时包漏了 NLTK 语料（cmudict / averaged_perceptron_tagger）。英文单词走 g2p_en 的
+ * `nltk.pos_tag` 时会直接抛 `Resource 'cmudict' not found`，中文里夹英文就整句失败。
+ * 这是一份补齐包：解压到数据目录的 `nltk_data/`，用 `NLTK_DATA` 指过去；运行时自带的就跳过。
+ */
+export const NLTK_ASSET: PinnedFile = {
+  path: 'nltk-data.zip',
+  bytes: 9_925_497,
+  sha256: 'ae0f5ea4e82870a6ee3d2f366456ce67d3e7673d5c8f2c0544de2bbdbe91a96a',
+  sources: [`${MS_SELF}/runtime/nltk-data.zip`],
+};
+
 /** 运行时解压后大约占多少字节（实测），面板上估算可释放空间用；精确值要递归扫几万个文件，太慢。 */
 export const RUNTIME_EXTRACT_BYTES: Readonly<Record<Tier, number>> = {
   cuda: 11_300_000_000,

@@ -37,6 +37,13 @@ describe('ROCm 子进程环境', () => {
     expect(runtimeEnv('rocm', { miopenDir, deviceIndex: 1 }).HIP_VISIBLE_DEVICES).toBe('1');
     expect(runtimeEnv('rocm', { miopenDir, deviceIndex: null })).not.toHaveProperty('HIP_VISIBLE_DEVICES');
   });
+
+  it('缺 NLTK 语料时把补齐目录传给每个档位（英文单词要用 cmudict）', () => {
+    const nltkDir = 'D:\\data\\gpt-sovits\\nltk_data';
+    expect(runtimeEnv('cuda', { miopenDir, deviceIndex: null, nltkDir })).toEqual({ NLTK_DATA: nltkDir });
+    expect(runtimeEnv('cpu', { miopenDir, deviceIndex: null, nltkDir })).toEqual({ NLTK_DATA: nltkDir });
+    expect(runtimeEnv('rocm', { miopenDir, deviceIndex: 1, nltkDir }).NLTK_DATA).toBe(nltkDir);
+  });
 });
 
 describe('设备探针缓存', () => {

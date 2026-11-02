@@ -13,7 +13,7 @@ import type { Logger } from 'cortico/core/types.ts';
 import { weightPaths, type ModelVersion } from './catalog.ts';
 import type { Tier } from './config.ts';
 import { parseHipProbe, pickHipDevice, type AmdGfx } from './gpu.ts';
-import { isLinkEntry, removeLink } from './install.ts';
+import { ensureNltkData, isLinkEntry, removeLink } from './install.ts';
 import { envWithRuntime, pythonInRuntime } from './platform.ts';
 import { patchRuntime } from './runtime-patch.ts';
 import type { TrainedWeights } from './weights.ts';
@@ -122,13 +122,14 @@ export function infererYaml(tier: Tier, version: ModelVersion, trained: TrainedW
  * 子进程环境：ROCm 档要把 MIOpen 的 solver 搜索压到快速启发式，并指定一个确定可写的缓存目录。
  * 原生库直接读进程环境，`python -I` 只隔离 `PYTHON*`，不影响这些变量。
  */
-export function runtimeEnv(tier: Tier, opts: { miopenDir: string; deviceIndex: number | null }): NodeJS.ProcessEnv {
-  if (tier !== 'rocm') return {};
-  const env: NodeJS.ProcessEnv = {
-    MIOPEN_FIND_MODE: 'FAST',
-    MIOPEN_USER_DB_PATH: opts.miopenDir,
-    MIOPEN_CUSTOM_CACHE_DIR: opts.miopenDir,
-  };
+export function runtimeEnv(tier: Tier, opts: { miopenDir: string; deviceIndex: number | null; nltkDir?: string | null }): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  // 运行时自带 nltk_data 时不需要；缺了就把补齐目录告诉 NLTK，所有档位都适用。
+  if (opts.nltkDir) env.NLTK_DATA = opts.nltkDir;
+  if (tier !== 'rocm') return env;
+  env.MIOPEN_FIND_MODE = 'FAST';
+  env.MIOPEN_USER_DB_PATH = opts.miopenDir;
+  env.MIOPEN_CUSTOM_CACHE_DIR = opts.miopenDir;
   if (opts.deviceIndex !== null) env.HIP_VISIBLE_DEVICES = String(opts.deviceIndex);
   return env;
 }
@@ -279,6 +280,9 @@ export class SovitsServer {
     const yaml = join(spec.dataDir, `tts_infer.${spec.tier}.yaml`);
     writeFileSync(yaml, infererYaml(spec.tier, spec.version, spec.trained));
     const miopenDir = join(spec.dataDir, 'miopen');
+    // ROCm 包漏了 NLTK 语料，中文里夹一个英文单词就会 `Resource 'cmudict' not found`；
+    // 缺就补到数据目录并用 NLTK_DATA 指过去（下载失败只记日志，不拦启动）。
+    const nltkDir = await ensureNltkData(spec.runtimeDir, spec.dataDir, this.log);
     let deviceIndex: number | null = null;
     if (spec.tier === 'rocm') {
       mkdirSync(miopenDir, { recursive: true });
@@ -293,7 +297,7 @@ export class SovitsServer {
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
       // PATH 由 envWithRuntime 给（运行时目录在最前）；runtimeEnv 只给档位相关的变量，别让它把 PATH 覆盖掉。
-      env: { ...envWithRuntime(spec.runtimeDir), ...runtimeEnv(spec.tier, { miopenDir, deviceIndex }) },
+      env: { ...envWithRuntime(spec.runtimeDir), ...runtimeEnv(spec.tier, { miopenDir, deviceIndex, nltkDir }) },
     });
     this.child = child;
     this.st = { phase: 'starting', url, pid: child.pid ?? null, detail: null, startMs: null };
