@@ -1,7 +1,7 @@
 # TODO — 更好的GPTSovits 语音（Coopanion 插件）
 
-> 最后更新：2026-11-02 11:30（Asia/Shanghai）
-> 工作区版本：**0.6.1（已发布 npm latest，已推送）**，另有**未发布的 macOS 改动**（本地，`os` 仍只有 `win32`）；本机 `data\extensions` 装的是 **0.6.0**（未升级）
+> 最后更新：2026-11-02 11:40（Asia/Shanghai）
+> 工作区版本：**0.6.2（已发布 npm latest，已推送）**，macOS 代码已并入但 `os` 仍只有 `win32`；本机 `data\extensions` 装的是 **0.6.0**（未升级）
 > 详细交接见 [HANDOFF.md](HANDOFF.md)；ROCm 代验清单见 [docs/rocm-acceptance.md](docs/rocm-acceptance.md)。
 
 ## P0 — 0.6.0 / 0.6.1 发布（已完成，待真机代验）
