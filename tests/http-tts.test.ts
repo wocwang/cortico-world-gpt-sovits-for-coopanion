@@ -17,7 +17,7 @@ afterEach(async () => {
   handle = null;
 });
 
-async function boot(opts: { token?: string; ready?: boolean; slow?: boolean; post?: (wav: Buffer) => Promise<Buffer>; sing?: (lyrics: string) => Promise<Buffer> } = {}): Promise<{ base: string; jobs: TtsJob[]; order: string[]; sang: string[] }> {
+async function boot(opts: { token?: string; ready?: boolean; slow?: boolean; post?: (wav: Buffer) => Promise<Buffer>; sing?: (lyrics: string) => Promise<Buffer>; timing?: { firstMs: number; totalMs: number } } = {}): Promise<{ base: string; jobs: TtsJob[]; order: string[]; sang: string[] }> {
   const jobs: TtsJob[] = [];
   const order: string[] = [];
   const sang: string[] = [];
@@ -37,7 +37,7 @@ async function boot(opts: { token?: string; ready?: boolean; slow?: boolean; pos
         jobs.push(job);
         if (opts.slow) await new Promise((r) => setTimeout(r, 30));
         busy = false;
-        return fakeWav();
+        return opts.timing ? { wav: fakeWav(), ...opts.timing } : fakeWav();
       },
     },
   });
@@ -45,6 +45,31 @@ async function boot(opts: { token?: string; ready?: boolean; slow?: boolean; pos
 }
 
 describe('HTTP 语音接口', () => {
+  it('响应头带首块就绪、合成耗时与音频时长（#7 的需求方要靠这三个数撑气泡）', async () => {
+    const { base } = await boot({ timing: { firstMs: 1234, totalMs: 4567 } });
+    const res = await fetch(`${base}/tts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: '念这一句' }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-sovits-first-chunk-ms')).toBe('1234');
+    expect(res.headers.get('x-sovits-synthesis-ms')).toBe('4567');
+    // fakeWav 是 0.05 s 的 48 kHz 静音 → 50 ms
+    expect(res.headers.get('x-sovits-duration-ms')).toBe('50');
+  });
+
+  it('没有计时信息时也给得出时长（老的合成器只回音频）', async () => {
+    const { base } = await boot();
+    const res = await fetch(`${base}/tts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: '念这一句' }),
+    });
+    expect(res.headers.get('x-sovits-duration-ms')).toBe('50');
+    expect(res.headers.get('x-sovits-first-chunk-ms')).toBeNull();
+  });
+
   it('OpenAI 形状：POST /audio/speech（含 /v1 前缀）返回 WAV', async () => {
     const { base, jobs } = await boot();
     const res = await fetch(`${base}/v1/audio/speech`, {

@@ -7,6 +7,28 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Logger } from 'cortico/core/types.ts';
+import { parseWavHeader } from './synth.ts';
+
+/**
+ * 合成结果：音频本体，外加可选的计时。调用方（#7 的需求方）想知道「首块就绪用了多久」与
+ * 「这句有多长」，好让气泡按真实时长收尾——这两个数就放在响应头里。
+ */
+export interface SynthResult {
+  wav: Buffer;
+  /** 从收到请求到第一块音频就绪，用了多少毫秒。 */
+  firstMs?: number;
+  /** 整句合成完用了多少毫秒。 */
+  totalMs?: number;
+}
+
+/** WAV 的实际时长（毫秒）；不是 WAV 头返回 null。 */
+export function wavDurationMs(wav: Buffer): number | null {
+  const head = parseWavHeader(wav);
+  if (!head) return null;
+  const bytes = wav.length - head.dataStart;
+  if (bytes <= 0) return null;
+  return (bytes / (head.sampleRate * head.channels * 2)) * 1000;
+}
 
 /** 一次合成请求；`voice` 是调用方点名的音色（预设 id 或自定义音色名），空为插件当前音色。 */
 export interface TtsJob {
@@ -20,7 +42,7 @@ export interface TtsJob {
 
 export interface HttpTtsDeps {
   /** 合成一句，不播放；失败抛错（回 502）。 */
-  synthesize: (job: TtsJob, signal: AbortSignal) => Promise<Buffer>;
+  synthesize: (job: TtsJob, signal: AbortSignal) => Promise<Buffer | SynthResult>;
   /**
    * 把一句歌词交给唱歌插件（DiffSinger）。不提供时带唱标记的正文照普通语音念。
    * 失败抛错即可，这里会退回普通语音，不影响调用方。
@@ -90,8 +112,8 @@ export function startHttpTts(opts: { port: number; token?: string; deps: HttpTts
     tail = next.catch(() => undefined);
     return next;
   };
-  const send = (res: ServerResponse, code: number, body: Buffer | string, type: string): void => {
-    res.writeHead(code, { 'content-type': type, 'content-length': Buffer.byteLength(body) });
+  const send = (res: ServerResponse, code: number, body: Buffer | string, type: string, extra?: Record<string, string>): void => {
+    res.writeHead(code, { 'content-type': type, 'content-length': Buffer.byteLength(body), ...(extra ?? {}) });
     res.end(body);
   };
   const json = (res: ServerResponse, code: number, obj: unknown): void =>
@@ -142,17 +164,24 @@ export function startHttpTts(opts: { port: number; token?: string; deps: HttpTts
     const timer = setTimeout(() => ctrl.abort(), SYNTH_TIMEOUT_MS);
     const at = Date.now();
     try {
-      const wav = await run(() => deps.synthesize(job, ctrl.signal));
-      let out = wav;
+      const raw = await run(() => deps.synthesize(job, ctrl.signal));
+      const result = Buffer.isBuffer(raw) ? { wav: raw } : raw;
+      let out = result.wav;
       if (deps.post) {
         try {
-          out = await deps.post(wav);
+          out = await deps.post(result.wav);
         } catch {
-          out = wav;
+          out = result.wav;
         }
       }
       deps.log.info('HTTP 语音接口合成完', { path, chars: [...spoken].length, voice: job.voice ?? '', ms: Date.now() - at });
-      send(res, 200, out, 'audio/wav');
+      // 计时与时长给调用方（#7）：气泡可以按真实时长收尾，也知道首块要等多久。
+      const headers: Record<string, string> = {};
+      if (typeof result.firstMs === 'number') headers['x-sovits-first-chunk-ms'] = String(Math.round(result.firstMs));
+      if (typeof result.totalMs === 'number') headers['x-sovits-synthesis-ms'] = String(Math.round(result.totalMs));
+      const duration = wavDurationMs(out);
+      if (duration !== null) headers['x-sovits-duration-ms'] = String(Math.round(duration));
+      send(res, 200, out, 'audio/wav', headers);
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       deps.log.warn('HTTP 语音接口合成失败', { path, err: why });

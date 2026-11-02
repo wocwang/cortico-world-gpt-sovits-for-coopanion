@@ -23,7 +23,7 @@ import { dirBytes, topLevelBytes } from './disk.ts';
 import { detectGpus, fallbackToCpu, pickTier, type AmdProbe, type GpuVendor } from './gpu.ts';
 import { configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, RVC_INDEX_MAX, RVC_INDEX_MIN, RVC_PROTECT_MAX, RVC_PROTECT_MIN, RVC_TIMEOUT_MAX, RVC_TIMEOUT_MIN, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
-import { startHttpTts, SING_MARK, type HttpTtsHandle, type TtsJob } from './http-tts.ts';
+import { startHttpTts, SING_MARK, type HttpTtsHandle, type SynthResult, type TtsJob } from './http-tts.ts';
 import { channelWords, languageWords, panelText, shareWords, stateWords } from './i18n.ts';
 import { isLinkEntry, isRuntimeDir, removeTreeSafely, RuntimeJob, WeightsJob, type JobState } from './install.ts';
 import { Player, applyGain, listOutputDevices } from './player.ts';
@@ -942,7 +942,7 @@ export class GptSovitsWorld implements World {
    * HTTP 接口要的一句音频：用点名或当前的音色合成，只回 WAV —— 不播放、不进播放队列。
    * 服务没起（冷启动）或睡着了都先拉起来；失败抛错，由接口回 502。
    */
-  private async synthesizeForApi(job: TtsJob, signal: AbortSignal): Promise<Buffer> {
+  private async synthesizeForApi(job: TtsJob, signal: AbortSignal): Promise<SynthResult> {
     // `voice` 是调用方明确点名；`voice_desc`（VoxCPM 形状）只是描述，能对上已知音色才采用。
     const voice = this.voiceByName(job.voice)
       ?? (job.voiceHint ? this.voiceByName(job.voiceHint, false) : null)
@@ -962,17 +962,21 @@ export class GptSovitsWorld implements World {
     const req = this.request(spoken, voice);
     const chunks: Buffer[] = [];
     let rate = 0;
+    // 从收到请求算起：冷启动拉服务也算进去，调用方要的就是「等多久才有声音」。
+    const started = Date.now();
+    let firstMs: number | undefined;
     const asked: SynthRequest = {
       ...req,
       ...(typeof job.speed === 'number' && job.speed > 0 ? { speed: job.speed } : {}),
       ...(typeof job.seed === 'number' && job.seed >= 0 ? { seed: job.seed } : {}),
     };
     for await (const c of synthesize(url, asked, signal)) {
+      if (firstMs === undefined) firstMs = Date.now() - started;
       rate = c.sampleRate;
       chunks.push(applyGain(c.pcm, gain));
     }
     if (!chunks.length) throw new Error('synthesized nothing');
-    return wavBytes(Buffer.concat(chunks), rate);
+    return { wav: wavBytes(Buffer.concat(chunks), rate), firstMs, totalMs: Date.now() - started };
   }
 
   /**
@@ -1311,7 +1315,7 @@ export class GptSovitsWorld implements World {
     const timer = setTimeout(() => ctrl.abort(), 120_000);
     timer.unref();
     try {
-      const wav = await this.synthesizeForApi({ text }, ctrl.signal);
+      const { wav } = await this.synthesizeForApi({ text }, ctrl.signal);
       const out = await this.rvc.convert(wav);
       return { $binary: { mime: 'audio/wav', base64: out.toString('base64') } };
     } finally {
