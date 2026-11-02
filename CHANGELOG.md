@@ -1,7 +1,12 @@
 # Changelog
 
-## 未发布
+## 0.6.5
 
+- **修 0.6.4 的静音回归**：0.6.4 的「后端探针」把**两帧**静音写给了 audify（`write()` 只接受正好一帧），
+  抛出的 `Invalid size of the PCM data!` 被 catch 吞掉 → 两只后端都被判成「开流成功但没在跑」→
+  **0.6.4 在 Windows 上完全没声**（与 `audioBackend` 取什么无关；从 0.6.3 升上来会突然哑掉）。
+  现在探针只写一帧，长度统一走 `oneFrameBytes()`（与播放路径同一套算法），而且**探针自己失败不再判后端死刑**，
+  只记一行 warn 后放行；只有「流真的停了」才换下一个后端。
 - **自备运行时不再要求改 `api_v2.py`**：解释器参数从 `-I` 改成 `-s`（`-I` 会把脚本目录踢出 `sys.path`，
   还连带 `-E` 忽略 `PYTHONPATH`，自备运行时的 venv python 因此 `import tools` 失败），同时给子进程带上
   `PYTHONPATH=<运行时目录>`。上游 `api_v2.py` 在设置

@@ -68,6 +68,26 @@ export function upmix(mono: Buffer, channels: number): Buffer {
   return out;
 }
 
+/**
+ * audify 的 `write()` 只接受**正好一帧**：`frameSize` 个采样 × 声道数 × 2 字节。
+ * 少一个字节、多一帧都抛 `Invalid size of the PCM data!`。
+ * 0.6.4 的探针送了两帧（`frameBytes * channels * 2`），抛错被吞掉后两只后端都被判死，
+ * 结果那版在 Windows 上全员静音——长度只能有一处算法，并且要有单测盯着。
+ */
+export function oneFrameBytes(frameSize: number, channels: number): number {
+  return frameSize * channels * 2;
+}
+
+/**
+ * 探针结论：只有「写帧成功、而且流停了」才判这个后端死了。
+ * 探针自己写失败（长度算错之类）没有证据力，放行后端——0.6.4 就是把写失败当成「流停了」，
+ * 结果两只后端全被判死，所有人静音。
+ */
+export function probeVerdict(writeOk: boolean, running: boolean): 'alive' | 'dead' | 'unknown' {
+  if (!writeOk) return 'unknown';
+  return running ? 'alive' : 'dead';
+}
+
 /** 乘增益;超过拐点的部分平滑压缩，不硬削顶。 */
 export function applyGain(pcm: Buffer, gain: number): Buffer {
   if (gain === 1) return pcm;
@@ -374,15 +394,21 @@ export class Player {
         continue;
       }
       // 开流 + start 都成功也可能是「假成功」：issue #8 的机器上 WASAPI 约 100 ms 内自己停掉，
-      // 看起来一切正常但没有声音。写两帧静音等 120 ms 再查 isStreamRunning，就能把这类机器挑出来。
+      // 看起来一切正常但没有声音。写**正好一帧**静音等 120 ms 再查 isStreamRunning，就能把这类机器挑出来。
       if (typeof rt.isStreamRunning === 'function') {
-        let running = false;
+        let writeOk = true;
+        let running = true;
         try {
-          rt.write(Buffer.alloc(frameBytes * channels * 2));
+          rt.write(Buffer.alloc(oneFrameBytes(frameSize, channels)));
           await new Promise((done) => setTimeout(done, 120));
           running = rt.isStreamRunning();
-        } catch { running = false; }
-        if (!running) {
+        } catch (err) {
+          // 探针自己写失败（长度算错之类）**不能**据此判后端死刑——0.6.4 就是这么把所有人的声音掐掉的。
+          // 探测不出来就当「没证据」，放行这个后端，并把原因写进日志。
+          writeOk = false;
+          this.opts.log.warn('音频后端探针写帧失败，跳过这次探测', { backend: candidate.label, err: String(err) });
+        }
+        if (probeVerdict(writeOk, running) === 'dead') {
           reasons.push(`${candidate.label}：开流成功但 120 ms 内停止运行（能开流却没声音，issue #8）`);
           try { if (rt.isStreamOpen()) rt.closeStream(); } catch { /* 已断开 */ }
           continue;
