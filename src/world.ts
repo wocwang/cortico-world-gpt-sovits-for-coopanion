@@ -205,7 +205,12 @@ export class GptSovitsWorld implements World {
     this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
     this.weights = new WeightsJob(opts.modelsRoot, () => this.version(), () => officialVoice(this.cfg.voice.preset)?.files ?? []);
     this.server = new SovitsServer(this.log);
-    this.player = new Player({ device: () => opts.cfg.outputDevice, volume: () => opts.cfg.volume, log: { warn: (msg, meta) => this.log.warn(msg, meta) } as Logger });
+    this.player = new Player({
+      device: () => opts.cfg.outputDevice,
+      backend: () => opts.cfg.audioBackend ?? 'auto',
+      volume: () => opts.cfg.volume,
+      log: { warn: (msg, meta) => this.log.warn(msg, meta), info: (msg, meta) => this.log.info(msg, meta) } as Logger,
+    });
     this.rvc = new RvcLink(() => opts.cfg.rvc, () => this.log);
     registerCustomVoiceOptions(() => (this.cfg.voices ?? []).map((v) => {
       // 选项名自带状态、音频文件名与台本片段：下拉每次点开都重新拉取，不看下面字段也能确认配了什么。

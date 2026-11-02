@@ -2,6 +2,7 @@ import type { ConfigGroup } from 'cortico/core/types.ts';
 import { pick, type Language } from 'cortico/core/language.ts';
 import type { CustomVoice } from './custom-voice.ts';
 import type { VoiceModelSetting } from './catalog.ts';
+import type { AudioBackend } from './player.ts';
 import type { RvcLinkConfig } from './rvc-link.ts';
 import type { SpeechLang } from './synth.ts';
 import { DEFAULT_PRESET } from './voices.ts';
@@ -105,6 +106,8 @@ export interface GptSovitsConfigSection {
   volume: number;
   /** 输出设备名;空为系统默认设备。 */
   outputDevice: string;
+  /** 本机播放走哪套 Windows 音频接口；`auto` 先 WASAPI、失败退 DirectSound。 */
+  audioBackend: AudioBackend;
   /** 发给模型的环境提示词语言。 */
   promptLanguage: 'zh' | 'en';
 }
@@ -155,6 +158,7 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   seed: SEED_RANDOM,
   volume: 1,
   outputDevice: '',
+  audioBackend: 'auto',
   promptLanguage: 'zh',
 };
 
@@ -163,7 +167,12 @@ const K = `worlds.${GPT_SOVITS_ID}`;
 /** `x-options` 的选项源，由定义的 `configOptions` 给出。 */
 export const TIER_OPTIONS = `${GPT_SOVITS_ID}:tier`;
 export const MODEL_VERSION_OPTIONS = `${GPT_SOVITS_ID}:model-version`;
+/** 模型版本的可选值；schema 的 enum 与下拉选项共用，避免两处漂移。 */
+export const MODEL_VERSION_VALUES = ['auto', 'v5turbo', 'v2ProPlus'] as const;
 export const DEVICE_OPTIONS = `${GPT_SOVITS_ID}:output-device`;
+export const AUDIO_BACKEND_OPTIONS = `${GPT_SOVITS_ID}:audio-backend`;
+/** 音频后端的可选值；schema 的 enum 与下拉共用。 */
+export const AUDIO_BACKEND_VALUES = ['auto', 'wasapi', 'directsound'] as const;
 export const PROMPT_LANGUAGE_OPTIONS = `${GPT_SOVITS_ID}:prompt-language`;
 export const TEXT_LANGUAGE_OPTIONS = `${GPT_SOVITS_ID}:text-language`;
 export const VOICE_OPTIONS = `${GPT_SOVITS_ID}:voice`;
@@ -211,6 +220,7 @@ const TEXT = {
     seed: { title: '采样种子', description: '-1 每次重新采样（同一句每次听起来都不同）；填 0 或正整数可固定，同一句每次逐字节一致。' },
     volume: { title: '音量' },
     outputDevice: { title: '输出设备', description: '留空使用系统默认设备。', system: '系统默认' },
+    audioBackend: { title: '音频后端', auto: '自动（WASAPI 优先）', wasapi: 'WASAPI', directsound: 'DirectSound', description: '本机播放用哪套 Windows 音频接口。自动先用 WASAPI，枚举不到设备或打不开时自动退 DirectSound；有的机器 WASAPI 能开流却没声音，这时手动选 DirectSound。改完下一句生效。' },
     autoStart: { title: '随 Cortico 启动推理服务' },
     idle: { title: '闲置停服', description: '多久不说话就停掉本机推理服务，把显存和内存让出来；下一句会自动重新加载（显卡档通常十几秒）。0 为不停。只对本机服务生效。' },
     serverUrl: { title: '已有的 GPT-SoVITS 地址', description: '填写后连接这个 api_v2 服务，不在本机启动，也不下载运行时。' },
@@ -259,6 +269,7 @@ const TEXT = {
     seed: { title: 'Sampling seed', description: '-1 resamples every time (the same line sounds different each run); 0 or a positive integer fixes it, making the same line byte-identical.' },
     volume: { title: 'Volume' },
     outputDevice: { title: 'Output device', description: 'Empty for the system default.', system: 'System default' },
+    audioBackend: { title: 'Audio backend', auto: 'Auto (WASAPI first)', wasapi: 'WASAPI', directsound: 'DirectSound', description: 'Which Windows audio interface plays the voice here. Auto tries WASAPI first and falls back to DirectSound when it finds no device or cannot open one; on some machines WASAPI opens a stream but stays silent, so pick DirectSound by hand. Takes effect on the next line.' },
     autoStart: { title: 'Start the inference server with Cortico' },
     idle: { title: 'Stop when idle', description: 'Stops the local inference server after this many minutes without speech, freeing VRAM and RAM; the next line reloads it (usually ten-odd seconds on GPU). 0 keeps it running. Local server only.' },
     serverUrl: { title: 'Existing GPT-SoVITS address', description: 'Connects to this api_v2 server instead of starting one here; nothing is downloaded.' },
@@ -275,6 +286,11 @@ export function tierOptions(language: Language): Array<{ value: string; label: s
 export function modelVersionOptions(language: Language): Array<{ value: string; label: string }> {
   const t = pick(language, TEXT).voiceModel;
   return [{ value: 'auto', label: t.auto }, { value: 'v5turbo', label: t.v5turbo }, { value: 'v2ProPlus', label: t.v2ProPlus }];
+}
+
+export function audioBackendOptions(language: Language): Array<{ value: string; label: string }> {
+  const t = pick(language, TEXT).audioBackend;
+  return [{ value: 'auto', label: t.auto }, { value: 'wasapi', label: t.wasapi }, { value: 'directsound', label: t.directsound }];
 }
 
 export const promptLanguageOptions = (): Array<{ value: string; label: string }> =>
@@ -329,6 +345,7 @@ export function configGroups(language: Language): ConfigGroup[] {
           [`${K}.playLocally`]: { type: 'boolean', title: t.playLocally.title, description: t.playLocally.description, 'x-hot': true },
           [`${K}.volume`]: { type: 'number', title: t.volume.title, minimum: 0, maximum: 1, multipleOf: .05, 'x-hot': true },
           [`${K}.outputDevice`]: { type: 'string', title: t.outputDevice.title, description: t.outputDevice.description, 'x-options': DEVICE_OPTIONS, 'x-hot': true },
+          [`${K}.audioBackend`]: { type: 'string', title: t.audioBackend.title, description: t.audioBackend.description, enum: [...AUDIO_BACKEND_VALUES], 'x-options': AUDIO_BACKEND_OPTIONS, 'x-hot': true },
           [`${K}.saveAudio`]: { type: 'boolean', title: t.saveAudio.title, description: t.saveAudio.description, 'x-hot': true },
           [`${K}.saveDir`]: { type: 'string', title: t.saveDir.title, description: t.saveDir.description, 'x-path': { kind: 'directory' }, 'x-hot': true },
           [`${K}.saveKeepHours`]: { type: 'number', title: t.saveKeepHours.title, description: t.saveKeepHours.description, minimum: 0, multipleOf: 1, 'x-hot': true },
@@ -368,7 +385,15 @@ export function configGroups(language: Language): ConfigGroup[] {
         description: t.groupService.description,
         properties: {
           [`${K}.tier`]: { type: 'string', title: t.tier.title, description: t.tier.description, 'x-options': TIER_OPTIONS, 'x-hot': true },
-          [`${K}.voiceModel`]: { type: 'string', title: t.voiceModel.title, description: t.voiceModel.description, 'x-options': MODEL_VERSION_OPTIONS, 'x-hot': true },
+          // 也写一份 enum：有的渲染器只认 enum 才画下拉，光有 x-options 会退化成一个手填的输入框。
+          [`${K}.voiceModel`]: {
+            type: 'string',
+            title: t.voiceModel.title,
+            description: t.voiceModel.description,
+            enum: [...MODEL_VERSION_VALUES],
+            'x-options': MODEL_VERSION_OPTIONS,
+            'x-hot': true,
+          },
           [`${K}.autoStart`]: { type: 'boolean', title: t.autoStart.title, 'x-hot': true },
           [`${K}.idleMinutes`]: { type: 'number', title: t.idle.title, description: t.idle.description, minimum: 0, multipleOf: 1, 'x-hot': true },
           [`${K}.serverUrl`]: { type: 'string', title: t.serverUrl.title, description: t.serverUrl.description, 'x-hot': true },

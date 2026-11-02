@@ -259,7 +259,15 @@ export class SovitsServer {
       else if (result !== 'already') this.log.warn('托管运行时没能打上按需加载补丁，按原样启动', { result, dir: spec.runtimeDir });
     }
     ensureRuntimeAr(spec.runtimeDir, this.log);
-    if (spec.weightsDir) linkWeights(join(spec.runtimeDir, 'GPT_SoVITS', 'pretrained_models'), spec.weightsDir);
+    if (spec.weightsDir) {
+      // 联接失败（被占用、权限、残留目录）只影响这一档，不能再让异常冒到宿主把整个 App 带走。
+      try {
+        linkWeights(join(spec.runtimeDir, 'GPT_SoVITS', 'pretrained_models'), spec.weightsDir);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code ?? '';
+        throw new Error(`接不上权重目录${code ? `（${code}）` : ''}：${err instanceof Error ? err.message : String(err)}。请确认运行时目录没有被其他程序占用。`);
+      }
+    }
     mkdirSync(spec.dataDir, { recursive: true });
     const yaml = join(spec.dataDir, `tts_infer.${spec.tier}.yaml`);
     writeFileSync(yaml, infererYaml(spec.tier, spec.version, spec.trained));

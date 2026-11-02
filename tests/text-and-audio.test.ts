@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { INLINE_TAG_MAX, promptLanguageOf, spokenReceipt, speechText, ttsPlain, ttsSafe } from '../src/speech-text.ts';
 import { parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth.ts';
+
+describe('切句方法', () => {
+  it('用 cut2 凑句，不用 cut5（2–4 字碎片会被 api_v2 吞掉，issue #11）', () => {
+    const body = ttsBody({ text: '好。晚安，我在这儿。', refAudio: 'a.wav', refText: '台本', speed: 1 });
+    expect(body.text_split_method).toBe('cut2');
+  });
+});
 import { applyGain, upmix } from '../src/player.ts';
 import { wavBytes } from '../src/wav.ts';
 import { languageWords, shareWords } from '../src/i18n.ts';

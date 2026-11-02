@@ -30,8 +30,13 @@ interface RtAudioLike {
 interface AudifyModule {
   RtAudio: new (api?: number) => RtAudioLike;
   RtAudioFormat: { RTAUDIO_SINT16: number };
-  RtAudioApi: { WINDOWS_WASAPI: number };
+  RtAudioApi: { WINDOWS_WASAPI: number; WINDOWS_DS: number };
 }
+
+/** 音频后端：`auto` 先 WASAPI、枚举不到或打不开再退 DirectSound（issue #4 的机器上 WASAPI 返回空表）。 */
+export type AudioBackend = 'auto' | 'wasapi' | 'directsound';
+
+const BACKEND_LABEL: Record<Exclude<AudioBackend, 'auto'>, string> = { wasapi: 'WASAPI', directsound: 'DirectSound' };
 
 /**
  * 每次写入的帧长:40 ms。原来是 20 ms，合成稍慢或网络抖一下就会出现「写不进去 → 空一段 → 再续上」的断续，
@@ -67,9 +72,22 @@ export function applyGain(pcm: Buffer, gain: number): Buffer {
 }
 
 /**
- * Windows 上指定 WASAPI:RtAudio 自选时会先挑 ASIO,厂商 ASIO 驱动不认请求的帧长，第一次写入就越界。
+ * 后端候选顺序。Windows 上 RtAudio 自选会先挑 ASIO（厂商 ASIO 驱动不认请求的帧长，第一次写入就越界），
+ * 所以默认先 WASAPI；WASAPI 枚举不到设备（issue #4）或打不开时再退 DirectSound（issue #8 的机器也只有它出声）。
  */
-const apiOf = (a: AudifyModule): number | undefined => (process.platform === 'win32' ? a.RtAudioApi.WINDOWS_WASAPI : undefined);
+export function backendCandidates(setting: AudioBackend): Array<{ api: number | undefined; label: string }> {
+  if (process.platform !== 'win32') return [{ api: undefined, label: '默认后端' }];
+  const wasapi = { api: 7, label: BACKEND_LABEL.wasapi };
+  const ds = { api: 8, label: BACKEND_LABEL.directsound };
+  if (setting === 'wasapi') return [wasapi];
+  if (setting === 'directsound') return [ds];
+  return [wasapi, ds];
+}
+
+/** 没有默认设备（RtAudio 返回 0）时，从枚举结果里挑第一个可用设备。 */
+export function pickDefaultDevice(devices: Array<{ id: number }>, defaultId: number): number {
+  return devices.some((device) => device.id === defaultId) ? defaultId : devices[0]?.id ?? 0;
+}
 
 /**
  * 用到时才加载原生模块;加载失败时抛出，由调用方报告。
@@ -79,21 +97,30 @@ const apiOf = (a: AudifyModule): number | undefined => (process.platform === 'wi
  */
 function loadAudify(): AudifyModule {
   const binding = createRequire(import.meta.url)('../vendor/audify/audify.node') as Pick<AudifyModule, 'RtAudio'>;
-  return { RtAudio: binding.RtAudio, RtAudioFormat: { RTAUDIO_SINT16: 0x2 }, RtAudioApi: { WINDOWS_WASAPI: 7 } };
+  return { RtAudio: binding.RtAudio, RtAudioFormat: { RTAUDIO_SINT16: 0x2 }, RtAudioApi: { WINDOWS_WASAPI: 7, WINDOWS_DS: 8 } };
 }
 
 export interface OutputDevice { id: number; name: string; isDefault: boolean }
 
-export function listOutputDevices(): OutputDevice[] {
+export function listOutputDevices(backend: AudioBackend = 'auto'): OutputDevice[] {
   const audify = loadAudify();
-  const rt = new audify.RtAudio(apiOf(audify));
-  const def = rt.getDefaultOutputDevice();
-  return rt.getDevices().filter((d) => d.outputChannels > 0).map((d) => ({ id: d.id, name: d.name, isDefault: d.id === def }));
+  for (const candidate of backendCandidates(backend)) {
+    try {
+      const rt = candidate.api === undefined ? new audify.RtAudio() : new audify.RtAudio(candidate.api);
+      const devices = rt.getDevices().filter((d) => d.outputChannels > 0);
+      if (!devices.length) continue;
+      const def = pickDefaultDevice(devices, rt.getDefaultOutputDevice());
+      return devices.map((d) => ({ id: d.id, name: d.name, isDefault: d.id === def }));
+    } catch { /* 换下一个后端 */ }
+  }
+  return [];
 }
 
 export interface PlayerOptions {
   /** 输出设备名;空或找不到时用系统默认设备。现读。 */
   device(): string;
+  /** 音频后端；现读。 */
+  backend(): AudioBackend;
   /** 0–1,现读。 */
   volume(): number;
   log: Logger;
@@ -103,6 +130,8 @@ export class Player {
   private audify: AudifyModule | null = null;
   private rt: RtAudioLike | null = null;
   private rate = 0;
+  /** 当前流用的 RtAudio 后端；默认设备变化时要用同一个后端去查。 */
+  private api: number | undefined;
   private openedDevice = '';
   /** 默认设备模式下，流实际打开的设备 id；用来发现系统默认设备被切换。 */
   private defaultId = 0;
@@ -179,50 +208,67 @@ export class Player {
     this.defaultCheckedAt = now;
     try {
       const audify = this.audify ??= loadAudify();
-      const rt = new audify.RtAudio(apiOf(audify));
-      return rt.getDefaultOutputDevice() !== this.defaultId;
+      const rt = this.api === undefined ? new audify.RtAudio() : new audify.RtAudio(this.api);
+      const devices = rt.getDevices().filter((d) => d.outputChannels > 0);
+      if (!devices.length) return false;
+      return pickDefaultDevice(devices, rt.getDefaultOutputDevice()) !== this.defaultId;
     } catch {
       return false;
     }
   }
 
+  /**
+   * 依次尝试后端：枚举不到设备或打不开就换下一个，全失败才抛错，并把每一家的原因带上。
+   * WASAPI 在部分机器上枚举为空（issue #4），有的机器枚举正常但写进去没声音（issue #8，DirectSound 正常），
+   * 所以不能只写一个后端。
+   */
   private open(sampleRate: number, device: string): void {
     this.audify ??= loadAudify();
     const audify = this.audify;
-    let rt = new audify.RtAudio(apiOf(audify));
-    let devices = rt.getDevices().filter((d) => d.outputChannels > 0);
-    const wanted = device ? devices.find((d) => d.name === device) ?? devices.find((d) => d.name.includes(device)) : undefined;
-    let deviceId = wanted?.id ?? rt.getDefaultOutputDevice();
     const frameSize = Math.round(sampleRate * FRAME_MS / 1000);
-    const channelsOf = (id: number): number => Math.min(2, Math.max(1, devices.find((d) => d.id === id)?.outputChannels ?? 2));
-    const openOn = (): number => {
-      rt.openStream({ deviceId, nChannels: channelsOf(deviceId), firstChannel: 0 }, null, audify.RtAudioFormat.RTAUDIO_SINT16, sampleRate, frameSize, 'cortico-gpt-sovits', null, null);
-      rt.start();
-      return channelsOf(deviceId);
-    };
-    let channels: number;
-    try {
-      channels = openOn();
-    } catch (err) {
-      // 设备刚切换/驱动重排时可能瞬间打不开：换一个新实例再试一次。
-      if (wanted) this.opts.log.warn('指定输出设备打不开，改用系统默认', { device, err: String(err) });
-      try { if (rt.isStreamOpen()) rt.closeStream(); } catch { /* 已断开 */ }
-      rt = new audify.RtAudio(apiOf(audify));
-      devices = rt.getDevices().filter((d) => d.outputChannels > 0);
-      deviceId = rt.getDefaultOutputDevice();
+    const reasons: string[] = [];
+    for (const candidate of backendCandidates(this.opts.backend())) {
+      let rt: RtAudioLike;
       try {
-        channels = openOn();
-      } catch (again) {
-        throw new Error(`打不开输出设备：${String(again)}。请在「输出与保存」里换一个设备，或留空用系统默认。`);
+        rt = candidate.api === undefined ? new audify.RtAudio() : new audify.RtAudio(candidate.api);
+      } catch (err) {
+        reasons.push(`${candidate.label}：${String(err)}`);
+        continue;
       }
+      let devices: Array<{ id: number; name: string; outputChannels: number }>;
+      try {
+        devices = rt.getDevices().filter((d) => d.outputChannels > 0);
+      } catch (err) {
+        reasons.push(`${candidate.label}：枚举设备失败（${String(err)}）`);
+        continue;
+      }
+      if (!devices.length) {
+        reasons.push(`${candidate.label}：没有枚举到播放设备`);
+        continue;
+      }
+      const wanted = device ? devices.find((d) => d.name === device) ?? devices.find((d) => d.name.includes(device)) : undefined;
+      const deviceId = wanted?.id ?? pickDefaultDevice(devices, rt.getDefaultOutputDevice());
+      const channels = Math.min(2, Math.max(1, devices.find((d) => d.id === deviceId)?.outputChannels ?? 2));
+      try {
+        rt.openStream({ deviceId, nChannels: channels, firstChannel: 0 }, null, audify.RtAudioFormat.RTAUDIO_SINT16, sampleRate, frameSize, 'cortico-gpt-sovits', null, null);
+        rt.start();
+      } catch (err) {
+        reasons.push(`${candidate.label}：打不开「${devices.find((d) => d.id === deviceId)?.name ?? deviceId}」（${String(err)}）`);
+        try { if (rt.isStreamOpen()) rt.closeStream(); } catch { /* 已断开 */ }
+        continue;
+      }
+      this.rt = rt;
+      this.api = candidate.api;
+      this.rate = sampleRate;
+      this.openedDevice = device;
+      this.defaultId = deviceId;
+      this.defaultCheckedAt = Date.now();
+      this.frameBytes = frameSize * 2;
+      this.channels = channels;
+      this.endsAt = 0;
+      this.opts.log.info(`音频输出已打开：${candidate.label}`, { devices: devices.length, device: devices.find((d) => d.id === deviceId)?.name ?? deviceId });
+      return;
     }
-    this.rt = rt;
-    this.rate = sampleRate;
-    this.openedDevice = device;
-    if (!wanted) this.defaultId = deviceId;
-    this.defaultCheckedAt = Date.now();
-    this.frameBytes = frameSize * 2;
-    this.channels = channels;
-    this.endsAt = 0;
+    throw new Error(`打不开输出设备：${reasons.join('；')}。请在「输出与保存」里换一个设备或后端，或留空用系统默认。`);
   }
 }
