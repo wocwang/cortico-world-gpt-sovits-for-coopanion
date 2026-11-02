@@ -13,7 +13,7 @@
 - **一句话目标**：让 Coopanion 桌宠用自己的声音说话——本机 GPT-SoVITS 合成、从声卡播出；现在再加一档：官方支持的 AMD 显卡用 ROCm 跑 V5 turbo，其余 AMD 继续 CPU 档。
 - **本轮已完成**：按主人要求把 0.5.29（认证整改）整体回退，恢复到 0.5.28 的「一键写入 QQ 配置」；在这条线上实现 `rocm` 推理档（代码与测试完成，运行时包未构建）。
 - **验收标准**：
-  - 包内：`pnpm typecheck` 通过、`pnpm test` 全绿（当前 14 文件 150 例）、`pnpm build` 产出 `dist/webui.js`；
+  - 包内：`pnpm typecheck` 通过、`pnpm test` 全绿（当前 16 文件 189 例）、`pnpm build` 产出 `dist/webui.js`；
   - 二级：Cortico checkout 里 `describe:extension` + `check:extension` 通过（本轮已过，见 §2）；
   - 三级：由有 A 卡的人按 [docs/rocm-acceptance.md](docs/rocm-acceptance.md) 实测并在 #228 回帖；
   - 发布：ROCm 运行时包上传后回填 `catalog.ts` 的 bytes/SHA-256/分片，再 `npm publish`。
@@ -71,7 +71,8 @@
 | 0.6.1 | 模型版本改下拉；`cut5`→`cut2`（#11）；音频后端 WASAPI/DirectSound 回退（#4/#8）；联接失败不再拖垮 App（#9） | **已发布**（npm latest，`a9bbc01` 已推送）；issue #2/#3/#4/#5/#6/#7/#9/#11 已回复，#9/#11 已关 |
 | 0.6.2 | ROCm 档改整句非流式（修 Chen Shaoju 的 `terminated`）+ 连接断开重试；macOS 平台代码并入但 `os` 仍只 win32 | **已发布**（npm latest，`ffeca3e` 已推送）；#228 已回复；市场同步 issue #662 |
 | 0.6.3 | ROCm 运行时缺 NLTK `cmudict`：启动前自动补 9.5 MB 语料并设 `NLTK_DATA`，构建脚本加校验 | **已发布**（npm latest，`449a472` 已推送）；#228 已回复；市场同步 issue #663 |
-| 0.6.4 | 自备运行时预检；`audioBackend` 归一化；开流后 120 ms `isStreamRunning` 探针，自动档识别「开流成功但没声音」退 DirectSound（#8） | **已发布**（npm latest，`3e318ad` 已推送）；#8 已回复；市场同步 issue #679 |
+| 0.6.4 | 自备运行时预检；`audioBackend` 归一化；开流后 120 ms `isStreamRunning` 探针，自动档识别「开流成功但没声音」退 DirectSound（#8） | **已发布但有静音回归**（探针写帧长度算错 → 全员静音），已被 0.6.5 取代 |
+| 0.6.5 | 修 0.6.4 静音回归：探针只写一帧（`oneFrameBytes()`，与播放路径同一套算法），探针写失败不再判后端死刑；`-I` → `-s` 修自备运行时 `import tools` | **已发布**（npm latest，`76dcbce` 已推送）；#8 已回复；市场讨论区已发回归通知；市场同步 issue #685 |
 | （未编号） | macOS：`platform.ts` + `afplay` 播放 + 平台解释器/PATH/进程组 + 非 Windows 短路与选项裁剪 | **本地已合入 main，未 push、未发布**；`os` 仍只有 `win32`，等 M3 实测 |
 
 ## 3. 关键假设与决策
@@ -127,6 +128,7 @@
 - **描述一致性**：`package.json` 描述、`README`、`config.ts` 文案都改成了「AMD 官方支持型号走 ROCm」，以后改实现要同步，别再出现 0.5.29 那种描述与实现不一致。
 - **v5turbo 的「电音」是模型固有**：0.5.x 实测输出端降噪无效，别再加降噪/后处理去「修」；能给的只有换 v2ProPlus（见 §4 的 `voiceModel` 计划）。
 - **未复现的风险**：MIOpen `FAST` 的加速倍率来自社区单机（换新句 9.18 s → 3.22 s），本机无法验证；TorchCodec 兜底、`HIP_VISIBLE_DEVICES` 选卡、探针缓存都只在单测层面验证过。
+- **0.6.4 的静音回归（0.6.5 已修）**：后端探针把两帧写给 audify（它只接受正好一帧），抛错被吞 → 两只后端都被判死 → 那版在 Windows 上全员静音。两条教训：① 帧长只能有一处算法（现在是 oneFrameBytes()，播放与探针共用）；② 探针自己失败不能当证据，没证据就放行、别判死刑。防线：scripts/check-audio-backend.mjs 已进 prepublishOnly，发布前必须真机过一遍（一帧能写、两帧必被拒）。
 
 ## 6. 上下文与约束
 
@@ -136,6 +138,7 @@
   ```powershell
   cd "D:\Users\HW W\Documents\pr-gpt-sovits\repo"
   pnpm typecheck; pnpm test; pnpm build; npm pack
+  npm run check:audio   # 音频后端真机自检：一帧能写、两帧必被拒（0.6.4 的静音回归就是漏了它）
 
   cd "D:\Users\HW W\Documents\pr-rvc\Cortina\state\cortico"
   node --import tsx scripts/extension-describe.ts "D:\Users\HW W\Documents\pr-gpt-sovits\repo"
@@ -153,7 +156,7 @@
 
 ## 7. 交接说明
 
-- **接手方先做**：跑 §6 的 `typecheck`/`test` 核对 150 例；`git log --oneline -8` 核对 §2 的提交；确认 `package.json` 版本是 `0.6.0`、本机安装是 `0.5.28`。
+- **接手方先做**：跑 §6 的 `typecheck`/`test` 核对 189 例，并跑 npm run check:audio；`git log --oneline -8` 核对 §2 的提交；确认 `package.json` 版本是 `0.6.5`、本机安装是 `0.6.0`。
 - **下一步**：按 §4 第 1 条找一台有 `uv` + Git Bash 的机器打 ROCm 包，再回填 catalog。
 - **可以直接发给下一个接手方的提示词**：
 

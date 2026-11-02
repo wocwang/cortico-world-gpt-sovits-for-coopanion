@@ -71,9 +71,10 @@
     "scripts":  {
                     "build":  "node scripts/build-webui.mjs",
                     "check:refs":  "node --import tsx scripts/check-live-refs.mjs",
+                    "check:audio":  "node scripts/check-audio-backend.mjs",
                     "test":  "vitest run",
                     "typecheck":  "tsc --noEmit",
-                    "prepublishOnly":  "npm run build \u0026\u0026 npm test \u0026\u0026 npm run typecheck"
+                    "prepublishOnly":  "npm run build \u0026\u0026 npm test \u0026\u0026 npm run typecheck \u0026\u0026 npm run check:audio"
                 },
     "devDependencies":  {
                             "@types/node":  "^22.10.0",
