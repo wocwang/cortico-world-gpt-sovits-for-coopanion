@@ -49,6 +49,14 @@ const READY_TIMEOUT_MS = 300_000;
 const POLL_MS = 500;
 const TAIL_LINES = 40;
 
+/**
+ * 子进程的解释器参数。
+ * 用 `-s` 而不是 `-I`：`-I`（隔离模式）会把脚本目录踢出 `sys.path`，还连带 `-E` 忽略 `PYTHONPATH`，
+ * 自备运行时（venv 的 python，没有 `._pth`）就 `import tools` 失败——上游 `api_v2.py` 在调整 `sys.path`
+ * 之前就 `from tools.portable_runtime import …`。`-s` 只关掉用户 site-packages，其余照常。
+ */
+export const PYTHON_ARGS = ['-s', '-X', 'utf8'] as const;
+
 export async function freePort(): Promise<number> {
   return new Promise((done, fail) => {
     const srv = createServer();
@@ -180,7 +188,7 @@ async function probeHipDevice(runtimeDir: string, gfx: AmdGfx, dataDir: string, 
   const out = await new Promise<string | null>((done) => {
     execFile(
       pythonInRuntime(runtimeDir),
-      ['-I', '-X', 'utf8', '-c', HIP_PROBE],
+      [...PYTHON_ARGS, '-c', HIP_PROBE],
       { cwd: runtimeDir, windowsHide: true, timeout: 20_000 },
       (err, stdout) => done(err ? null : stdout),
     );
@@ -294,7 +302,11 @@ export class SovitsServer {
     }
     const port = await freePort();
     const url = `http://127.0.0.1:${port}`;
-    const child = spawn(pythonInRuntime(spec.runtimeDir), ['-I', '-X', 'utf8', '-u', 'api_v2.py', '-a', '127.0.0.1', '-p', String(port), '-c', yaml], {
+    // 用 `-s` 而不是 `-I`：上游 api_v2.py 在调整 sys.path 之前就 `from tools.portable_runtime import …`，
+    // 而 `-I`（隔离模式）既不把脚本目录放进 sys.path，又会连带 `-E` 忽略 PYTHONPATH——自备运行时
+    // （venv 的 python，没有 ._pth）就会 `ModuleNotFoundError: No module named 'tools'`。
+    // `-s` 只关掉用户 site-packages：脚本目录与 PYTHONPATH 都照常生效，隔离性基本不变。
+    const child = spawn(pythonInRuntime(spec.runtimeDir), [...PYTHON_ARGS, '-u', 'api_v2.py', '-a', '127.0.0.1', '-p', String(port), '-c', yaml], {
       cwd: spec.runtimeDir,
       windowsHide: true,
       // macOS：放进独立进程组，停服务时按组收（api_v2 自己也会起子进程）。

@@ -2,7 +2,9 @@
 
 ## 未发布
 
-- **自备运行时不再要求改 `api_v2.py`**：子进程环境带上 `PYTHONPATH=<运行时目录>`。上游 `api_v2.py` 在设置
+- **自备运行时不再要求改 `api_v2.py`**：解释器参数从 `-I` 改成 `-s`（`-I` 会把脚本目录踢出 `sys.path`，
+  还连带 `-E` 忽略 `PYTHONPATH`，自备运行时的 venv python 因此 `import tools` 失败），同时给子进程带上
+  `PYTHONPATH=<运行时目录>`。上游 `api_v2.py` 在设置
   `sys.path` 之前就 `from tools.portable_runtime import …`，而 `-I` 不把脚本目录放进 `sys.path`，
   macOS 实测会 `ModuleNotFoundError: No module named 'tools'`。
 - **缺权重时点名缺哪个文件**：启动失败原因里附上 `pretrained_models` 下缺失的文件，并提示 CPU 档需要

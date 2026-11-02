@@ -51,9 +51,26 @@
 - [x] 顺带收口：`gpu.ts` 非 Windows 直接短路（不 spawn `powershell`/`nvidia-smi`）；`assertRocmPaths` 跳过读注册表；
       `tierOptions` 只给「自动 / CPU」、`audioBackendOptions` 只给「自动」；面板新增 `tierMac` 说明。
 - [x] 说明写清：自备运行时约 7 GB、`afplay` 只整段播（首字延迟＝合成时间）、无设备选择（音量仍走 `afplay -v`）。
-- [ ] **M3 真机实测**（#10 作者 ink1453）：本机只有 Windows，afplay 分支、venv 的 `-I` 隔离、进程组收尾都没跑过真机。
-      实测时 `os` 还没有 `darwin`，需要手工放目录或用 `pnpm add <tgz> --force`；步骤见 README「macOS（自备运行时）」。
-- [ ] 实测通过后再放开市场：`package.json` 的 `os` 加 `darwin`，发 0.6.2，并在 #10 回帖说明。
+- [x] **M3 真机实测**（#10 作者 ink1453，2026-11-02）：五项全过——启用/面板、自备运行时起服务、试听出声、
+      排队不打断（口径作废）、闲置停服后自动拉起；`core.log` 无 warn。实测暴露两个问题，都已修：
+      ① CPU 档恒用 V2 Pro Plus（说明书写错了，已改 README，并加「缺权重点名」提示）；
+      ② `-I` 与上游 `api_v2.py` 的 `from tools.portable_runtime import …` 冲突——`-I` 会踢掉脚本目录、
+      还连带 `-E` 忽略 `PYTHONPATH`，改用 `-s`（`PYTHON_ARGS`）后自备运行时的 venv 能直接 `import tools`。
+- [ ] **等 ink 复验 `-s` 这一条**：测试包 `0.6.5-mac.2`（dist-tag `mac-test`）。他说「通过就放 darwin」，
+      并已选「路子 1」：我们并 `os: darwin` 发 0.6.5 → 市场同步 → 关 PR #10（历史保留他的署名）。
+      正式版还没发，`latest` 仍是 0.6.4。
+
+## P1.6 — 待主人拍板 / 已调研待做（2026-11-02 记）
+
+- [ ] **#6 长句电流声**：ink 的证据指向「分段 / 分块拼接的接缝」而非模型——上游 `streaming_mode=3` 自己注释就是
+      「更快但质量更低」，且 v5turbo 走的是旧的 SOLA 拼接路径（新写的 v5 窗口流式在我们钉的 commit 上没有调用点）。
+      计划：本机（RTX 5070 Ti + 已装 cuda 运行时）做四组 A/B——{mode 3, cut2}=现状 / {mode 0, cut2} /
+      {mode 0, cut0} / {mode 2, cut2}，指标用 4–12 kHz 能量占比与接缝样点差分；出数据再决定是否做
+      「GPU 档长句整句合成」或把流式模式做成设置项。**CPU 档不能自动切整句**（117 字 CPU 合成约 40 s）。
+- [ ] **#7 9880 流式接口**：先做便宜的一半——响应头加 `x-sovits-first-chunk-ms` 与 `x-sovits-estimated-ms`；
+      真流式端点（chunked PCM）单独一轮，约束：RVC 变声没法流式、队列并发语义要定、客户端要适配。
+- [ ] **正式版要不要现在带 `darwin`**：ink 的 macOS 验收基本通过，只差 `-s` 修复的复验；也可以先发 0.6.5（Windows）
+      再等 macOS 单独一版。
 
 ## P2 — 冻结项 / 已知但先不动
 

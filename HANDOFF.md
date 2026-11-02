@@ -102,10 +102,15 @@
 - [x] **模型版本与档位解耦（#228 @niaolong233）**：已随 0.6.0 实现——新增配置 `voiceModel`（`auto` / `v5turbo` / `v2ProPlus`），
       显卡与 ROCm 档可选 V2 Pro Plus（自备 `06` 头权重不再被挡），CPU 档一律 V2 Pro Plus；换版本时重启一次推理服务。
 - [ ] 可选：`sovits_speak` 的 describe 声明与默认配置下的 description 对齐（`check:extension` 的 warning）。
-- [ ] **macOS 真机实测**（#10 @ink1453 或主人协调的 M3）：本机没有 Mac，`afplay` 分支、venv 的 `-I` 隔离模式、
-      `detached` + 进程组收尾**都没有跑过真机**，只有参数化单测。实测时 `os` 里没有 `darwin`，
-      要手工放目录或 `pnpm add <tgz> --force`（README「macOS（自备运行时）」有步骤）。
-- [ ] 实测通过后：`package.json` 的 `os` 加 `darwin`、发 0.6.2、在 #10 回帖（**未获主人同意不 push、不 publish**）。
+- [x] **macOS 真机实测**（2026-11-02，#10 @ink1453 在 Apple M3 / macOS 27.2 上跑的）：五项全过——启用与面板、
+      自备运行时起服务、试听出声、排队不打断（口径作废）、闲置停服后自动拉起，`core.log` 无 warn。
+      实测暴露两点，均已修：① CPU 档恒用 V2 Pro Plus（说明书写错，已改 README 并加「缺权重点名」提示）；
+      ② `-I` 隔离模式与上游 `api_v2.py` 的 `from tools.portable_runtime import …` 冲突（`-I` 踢掉脚本目录、
+      还连带 `-E` 忽略 `PYTHONPATH`）→ 改用 `-s`（`PYTHON_ARGS`）。
+- [ ] **等 ink 复验 `-s`**：测试包 `0.6.5-mac.2`（dist-tag `mac-test`）；他说通过就放 `darwin`。他已选「路子 1」：
+      我们并 `os: darwin` 发 0.6.5 → 市场同步 → 关 PR #10（历史保留署名）。正式版还没发，`latest` 仍是 0.6.4。
+- [ ] **待主人拍板**（TODO P1.6）：#6 长句电流声的 A/B 实验（本机可做：RTX 5070 Ti + 已装 cuda 运行时）；
+      #7 的 9880 流式接口（先做响应头，再考虑 chunked PCM）；正式版要不要现在带 `darwin`。
 - [ ] 冻结项：云端 TTS（主人保留意见）、QQ `qq_audio`、仓库清理、显卡档 4.14 GB 真机下载。
 
 ## 5. 已知问题 / 风险

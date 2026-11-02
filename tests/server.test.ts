@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cachedHipIndex, infererYaml, runtimeEnv, startFailureHint } from '../src/server.ts';
+import { cachedHipIndex, infererYaml, PYTHON_ARGS, runtimeEnv, startFailureHint } from '../src/server.ts';
 
 describe('api_v2 配置', () => {
   it('ROCm 档和显卡档一样写 cuda + fp16', () => {
@@ -43,6 +43,14 @@ describe('ROCm 子进程环境', () => {
     expect(runtimeEnv('cuda', { miopenDir, deviceIndex: null, nltkDir })).toEqual({ NLTK_DATA: nltkDir });
     expect(runtimeEnv('cpu', { miopenDir, deviceIndex: null, nltkDir })).toEqual({ NLTK_DATA: nltkDir });
     expect(runtimeEnv('rocm', { miopenDir, deviceIndex: 1, nltkDir }).NLTK_DATA).toBe(nltkDir);
+  });
+});
+
+describe('解释器参数', () => {
+  it('用 -s 而不是 -I：隔离模式会掐掉脚本目录和 PYTHONPATH，自备运行时就 import 不到 tools', () => {
+    expect(PYTHON_ARGS).toContain('-s');
+    expect(PYTHON_ARGS).not.toContain('-I');
+    expect(PYTHON_ARGS).toContain('-X');
   });
 });
 
