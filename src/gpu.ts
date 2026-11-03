@@ -36,17 +36,26 @@ export interface GpuInfo {
 }
 
 /**
- * 官方 Windows 支持矩阵里的卡。顺序敏感：XT 型号必须先于同系列的普通型号，
- * 否则 `RX 9070 XT` 会被 `RX 9070` 先匹配掉。
+ * 官方 Windows 支持矩阵里的卡。顺序敏感：带后缀的型号必须先于同系列的普通型号，
+ * 否则 `RX 9070 XT` 会被 `RX 9070` 吃掉、`RX 7900 XT` 会被 `RX 7900 XTX` 的前缀吃掉。
+ * 只列四套内核覆盖的架构（gfx1100 / gfx1101 / gfx1200 / gfx1201）；同架构的型号共用一套内核，
+ * 板卡厂（盈通、蓝宝石、撼讯……）的名字差异不影响识别——WMI 报的是芯片名，不是板卡系列名。
  */
 const AMD_CARDS: ReadonlyArray<{ re: RegExp; name: string; gfx: AmdGfx }> = [
   { re: /rx\s*9070\s*xt/, name: 'Radeon RX 9070 XT', gfx: 'gfx1201' },
+  { re: /rx\s*9070\s*gre/, name: 'Radeon RX 9070 GRE', gfx: 'gfx1201' },
   { re: /rx\s*9070/, name: 'Radeon RX 9070', gfx: 'gfx1201' },
   { re: /(?:radeon\s*)?ai\s*pro\s*r9700/, name: 'Radeon AI PRO R9700', gfx: 'gfx1201' },
   { re: /rx\s*9060\s*xt/, name: 'Radeon RX 9060 XT', gfx: 'gfx1200' },
   { re: /rx\s*7900\s*xtx/, name: 'Radeon RX 7900 XTX', gfx: 'gfx1100' },
+  { re: /rx\s*7900\s*xt/, name: 'Radeon RX 7900 XT', gfx: 'gfx1100' },
+  { re: /rx\s*7900\s*gre/, name: 'Radeon RX 7900 GRE', gfx: 'gfx1100' },
   { re: /pro\s*w7900/, name: 'Radeon PRO W7900', gfx: 'gfx1100' },
-  { re: /rx\s*7700(?!\s*xt)/, name: 'Radeon RX 7700', gfx: 'gfx1101' },
+  { re: /pro\s*w7800/, name: 'Radeon PRO W7800', gfx: 'gfx1100' },
+  { re: /rx\s*7800\s*xt/, name: 'Radeon RX 7800 XT', gfx: 'gfx1101' },
+  { re: /rx\s*7700\s*xt/, name: 'Radeon RX 7700 XT', gfx: 'gfx1101' },
+  { re: /pro\s*w7700/, name: 'Radeon PRO W7700', gfx: 'gfx1101' },
+  { re: /rx\s*7700/, name: 'Radeon RX 7700', gfx: 'gfx1101' },
 ];
 
 /** 从显卡名与驱动版本里挑出官方支持的那张；两个数组一一对应，缺驱动时传 null。 */
@@ -56,11 +65,13 @@ export function amdProbeFrom(names: readonly string[], drivers: readonly (string
     const name = raw.trim();
     if (!/amd|radeon/i.test(name)) continue;
     const driver = drivers[i] ?? null;
-    const lower = name.toLowerCase();
+    // 部分 OEM / 板卡固件的 WMI 名带「(TM)」或多余空格（如「Radeon (TM) RX 7900 XTX」），匹配前归一化；
+    // 面板上仍显示系统里的原名。
+    const lower = name.replace(/\(tm\)/gi, '').replace(/\s+/g, ' ').toLowerCase();
     for (const card of AMD_CARDS) {
       if (card.re.test(lower)) return { kind: 'supported', gpu: { name: card.name, gfx: card.gfx }, driver };
     }
-    fallback ??= { name, driver, integrated: AMD_IGPU.test(name) };
+    fallback ??= { name, driver, integrated: AMD_IGPU.test(lower) };
   }
   return fallback ? { kind: 'unsupported', ...fallback } : { kind: 'none' };
 }

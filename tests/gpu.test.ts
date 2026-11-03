@@ -14,14 +14,36 @@ describe('AMD 显卡识别', () => {
     expect(supported('AMD Radeon RX 7700')).toMatchObject({ kind: 'supported', gpu: { gfx: 'gfx1101' } });
   });
 
-  it('XT 型号优先于同系列，不被普通型号吃掉', () => {
-    expect(supported('AMD Radeon RX 9070 XT')).toMatchObject({ gpu: { name: 'Radeon RX 9070 XT' } });
+  it('官方矩阵内、四套内核已覆盖的同架构型号都在名单（#12 触发的补全）', () => {
+    expect(supported('AMD Radeon RX 7900 XT')).toMatchObject({ kind: 'supported', gpu: { name: 'Radeon RX 7900 XT', gfx: 'gfx1100' } });
+    expect(supported('AMD Radeon RX 7900 GRE')).toMatchObject({ kind: 'supported', gpu: { gfx: 'gfx1100' } });
+    expect(supported('AMD Radeon PRO W7800')).toMatchObject({ kind: 'supported', gpu: { gfx: 'gfx1100' } });
+    expect(supported('AMD Radeon RX 7800 XT')).toMatchObject({ kind: 'supported', gpu: { gfx: 'gfx1101' } });
+    expect(supported('AMD Radeon RX 7700 XT')).toMatchObject({ kind: 'supported', gpu: { name: 'Radeon RX 7700 XT', gfx: 'gfx1101' } });
+    expect(supported('AMD Radeon PRO W7700')).toMatchObject({ kind: 'supported', gpu: { gfx: 'gfx1101' } });
+    expect(supported('AMD Radeon RX 9070 GRE')).toMatchObject({ kind: 'supported', gpu: { name: 'Radeon RX 9070 GRE', gfx: 'gfx1201' } });
+  });
+
+  it('带后缀的型号先于同系列普通型号：XTX / XT / GRE / XT 各归各的名字', () => {
+    expect(supported('AMD Radeon RX 7900 XTX')).toMatchObject({ gpu: { name: 'Radeon RX 7900 XTX' } });
+    expect(supported('AMD Radeon RX 7900 XT')).toMatchObject({ gpu: { name: 'Radeon RX 7900 XT' } });
+    expect(supported('AMD Radeon RX 7700 XT')).toMatchObject({ gpu: { name: 'Radeon RX 7700 XT' } });
+    expect(supported('AMD Radeon RX 7700')).toMatchObject({ gpu: { name: 'Radeon RX 7700' } });
+    expect(supported('AMD Radeon RX 9070 GRE')).toMatchObject({ gpu: { name: 'Radeon RX 9070 GRE' } });
     expect(supported('AMD Radeon RX 9070')).toMatchObject({ gpu: { name: 'Radeon RX 9070' } });
   });
 
-  it('列表外的 A 卡（含 RX 6000 与 7700 XT）判为不支持', () => {
+  it('WMI 名字里的 (TM) 与多余空格不影响识别，面板仍显示原名', () => {
+    expect(supported('AMD Radeon (TM) RX 7900 XTX')).toMatchObject({ kind: 'supported', gpu: { name: 'Radeon RX 7900 XTX' } });
+    expect(supported('AMD   Radeon    RX   9060   XT')).toMatchObject({ kind: 'supported', gpu: { gfx: 'gfx1200' } });
+    const other = supported('AMD Radeon (TM) RX 6600');
+    expect(other).toMatchObject({ kind: 'unsupported', name: 'AMD Radeon (TM) RX 6600' });
+  });
+
+  it('列表外的 A 卡（RX 6000 / 7000 低位 / 7600 系）判为不支持', () => {
     expect(supported('AMD Radeon RX 6800 XT')).toMatchObject({ kind: 'unsupported', name: 'AMD Radeon RX 6800 XT' });
-    expect(supported('AMD Radeon RX 7700 XT')).toMatchObject({ kind: 'unsupported' });
+    expect(supported('AMD Radeon RX 7600 XT')).toMatchObject({ kind: 'unsupported' });
+    expect(supported('AMD Radeon RX 6600')).toMatchObject({ kind: 'unsupported' });
     expect(supported('AMD Radeon(TM) Graphics')).toMatchObject({ kind: 'unsupported' });
   });
 
