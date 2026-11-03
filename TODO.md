@@ -1,7 +1,7 @@
 # TODO — 更好的GPTSovits 语音（Coopanion 插件）
 
-> 最后更新：2026-11-02 21:15（Asia/Shanghai）
-> 工作区版本：**0.6.4（已发布 npm latest，已推送）**，macOS 代码已并入但 `os` 仍只有 `win32`；本机 `data\extensions` 装的是 **0.6.0**（未升级）
+> 最后更新：2026-11-03 09:05（Asia/Shanghai）
+> 工作区版本：**0.6.6（已发布 npm latest，已推送，含 macOS）**；本机 `data\extensions` 装的是 **0.6.0**（未升级）
 > 详细交接见 [HANDOFF.md](HANDOFF.md)；ROCm 代验清单见 [docs/rocm-acceptance.md](docs/rocm-acceptance.md)。
 
 ## P0 — 0.6.0 / 0.6.1 发布（已完成，待真机代验）
@@ -47,7 +47,7 @@
       一键写入 QQ 配置会改 QQ 插件配置（认证风险已知）。
 - [ ] 可选：把「逐项复制」按钮作为「不想让插件写配置」的替代交互加回来（0.5.29 的那两个提交还在历史里）。
 
-## P1.5 — macOS（代码已合入，等 M3 实测）
+## P1.5 — macOS（0.6.6 已正式发布）
 
 - [x] 按 #10 的路线实现（2026-11-02）：`src/platform.ts` 收口解释器/tar/PATH/发布判定/播放差异（全部带 `platform` 参数，
       darwin 分支在 Windows 上也能跑单测）；`player.ts` 走 `afplay`（攒 PCM → 临时 WAV → 排队播，`cut()` 停播+清队列）；
@@ -61,25 +61,23 @@
       ① CPU 档恒用 V2 Pro Plus（说明书写错了，已改 README，并加「缺权重点名」提示）；
       ② `-I` 与上游 `api_v2.py` 的 `from tools.portable_runtime import …` 冲突——`-I` 会踢掉脚本目录、
       还连带 `-E` 忽略 `PYTHONPATH`，改用 `-s`（`PYTHON_ARGS`）后自备运行时的 venv 能直接 `import tools`。
-- [ ] **等 ink 复验 `-s` 这一条**：测试包 `0.6.5-mac.2`（dist-tag `mac-test`）。他说「通过就放 darwin」，
-      并已选「路子 1」：我们并 `os: darwin` 发 **0.6.6**（0.6.5 已被紧急修复占用）→ 市场同步 → 关 PR #10（历史保留他的署名）。
-      `latest` 现在是 0.6.5（Windows 紧急修复）。
+- [x] **0.6.6 已发布**（2026-11-03）：`os` 加 `darwin`，macOS 正式可用；`0.6.5-mac.2` 上 ink 复验通过
+      （`api_v2.py` 保持上游原样、服务 11 s 就绪）；PR #10 已评论并关闭（署名保留）；市场同步 issue #691。
+- [ ] **等 ink 装正式版后回最后一次结果**：他说过「装正式版后再回一次结果」，通过就关 #5。
 
 ## P1.6 — 待主人拍板 / 已调研待做（2026-11-02 记）
 
-- [ ] **#6 长句电流声**：ink 的证据指向「分段 / 分块拼接的接缝」而非模型——上游 `streaming_mode=3` 自己注释就是
-      「更快但质量更低」，且 v5turbo 走的是旧的 SOLA 拼接路径（新写的 v5 窗口流式在我们钉的 commit 上没有调用点）。
-      计划：本机（RTX 5070 Ti + 已装 cuda 运行时）做四组 A/B——{mode 3, cut2}=现状 / {mode 0, cut2} /
-      {mode 0, cut0} / {mode 2, cut2}，指标用 4–12 kHz 能量占比与接缝样点差分；出数据再决定是否做
-      「GPU 档长句整句合成」或把流式模式做成设置项。**CPU 档不能自动切整句**（117 字 CPU 合成约 40 s）。
+- [x] **#6 长句电流声：已按「口径差异、非缺陷」收尾**（2026-11-03）。ink 用同一份 `scripts/analyze-noise.py`
+      重算他那批样本：长句 1.73–1.81 %、短句 2.56–2.59 %、spikes 全 0，与我们这边同量级；之前 5–9 % 是
+      另一套指标（20 ms 帧高频能量 p95 的相对差）。数据记在 docs/noise-ab.md。**不改默认流式/切句参数**；
+      若他主观仍有电流声，另开一条按原始 WAV 查播放链。
 - [x] **#6 的本地 A/B 已做完**（2026-11-02，11 组：v5turbo/cuda 9 组 + v2ProPlus/cpu 2 组）：**本机复现不出电流声**
       （高频占比 1.1–1.8 %、咔哒尖峰全 0，各组合差异 <0.3 个百分点），所以「分段/流式接缝」假设在本机不成立，
       **暂不改默认参数**。附带发现：CPU 档流式比非流式慢约 35 %（37.6 s vs 27.7 s / 20 s 音频）。
       方法与数据见 docs/noise-ab.md，分析脚本 scripts/analyze-noise.py 已入库；下一步请 ink 用同一脚本重算他那份样本。
-- [ ] **#7 9880 流式接口**：先做便宜的一半——响应头加 `x-sovits-first-chunk-ms` 与 `x-sovits-estimated-ms`；
-      真流式端点（chunked PCM）单独一轮，约束：RVC 变声没法流式、队列并发语义要定、客户端要适配。
-- [ ] **正式版要不要现在带 `darwin`**：ink 的 macOS 验收基本通过，只差 `-s` 修复的复验。0.6.5 已被紧急修复占用，
-      macOS 正式版顺延 0.6.6；他复验通过就发。
+- [x] **#7 响应头已随 0.6.6 发布**：`x-sovits-first-chunk-ms` / `x-sovits-synthesis-ms` / `x-sovits-duration-ms`；
+      对方确认「不急需 chunked PCM」，真流式端点单开一轮再做（约束：RVC 要整段、队列并发语义、客户端适配）。
+- [x] **正式版已带 `darwin`**：0.6.6 发布，市场同步 #691。
 
 ## P2 — 冻结项 / 已知但先不动
 

@@ -73,6 +73,7 @@
 | 0.6.3 | ROCm 运行时缺 NLTK `cmudict`：启动前自动补 9.5 MB 语料并设 `NLTK_DATA`，构建脚本加校验 | **已发布**（npm latest，`449a472` 已推送）；#228 已回复；市场同步 issue #663 |
 | 0.6.4 | 自备运行时预检；`audioBackend` 归一化；开流后 120 ms `isStreamRunning` 探针，自动档识别「开流成功但没声音」退 DirectSound（#8） | **已发布但有静音回归**（探针写帧长度算错 → 全员静音），已被 0.6.5 取代 |
 | 0.6.5 | 修 0.6.4 静音回归：探针只写一帧（`oneFrameBytes()`，与播放路径同一套算法），探针写失败不再判后端死刑；`-I` → `-s` 修自备运行时 `import tools` | **已发布**（npm latest，`76dcbce` 已推送）；#8 已回复；市场讨论区已发回归通知；市场同步 issue #685 |
+| 0.6.6 | macOS 正式放开（`os` 含 `darwin`）；9880 响应头带首块/合成/时长；简介改短突出 AMD；`analyze-noise.py` 支持流式 WAV | **已发布**（npm latest，`e3d3d94` 已推送）；#5 已请对方复验正式版；PR #10 已关闭；市场同步 issue #691 |
 | （未编号） | macOS：`platform.ts` + `afplay` 播放 + 平台解释器/PATH/进程组 + 非 Windows 短路与选项裁剪 | **本地已合入 main，未 push、未发布**；`os` 仍只有 `win32`，等 M3 实测 |
 
 ## 3. 关键假设与决策
