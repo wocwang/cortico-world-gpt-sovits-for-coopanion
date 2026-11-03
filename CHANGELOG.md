@@ -1,6 +1,6 @@
 # Changelog
 
-## 未发布
+## 0.6.7
 
 - **ROCm 档「中文里夹英文」整句失败**（市场评论区 @ANGOSUNG，0.6.3–0.6.6 均可复现）：0.6.3 的补齐把语料下到数据目录、
   再用 `NLTK_DATA` 指过去，但上游 `tools/portable_runtime.py` 在 `activate()` 里把 `NLTK_DATA` **硬赋值**成
