@@ -12,6 +12,8 @@
 - **市场简介改短，突出 AMD 支持**：一行说明「支持 AMD（ROCm，实验性）与 NVIDIA 显卡、没独显自动 CPU」，
   其余细节留给 README 与面板。
 - `scripts/analyze-noise.py` 支持流式 WAV（RIFF 长度是占位值也能读），并补了「裸 PCM 用 `--rate/--channels`」的说明（#6）。
+- 致谢：@ink1453 提交 macOS 平台层（PR #10）并在 Apple M3 上完成验收；@aiAsuka 的音频探针判据修掉了 0.6.4 的静音回归。
+  完整名单见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
 
 ## 0.6.5
 
@@ -104,6 +106,8 @@
 - ROCm 运行时包：3,140,067,689 B（两片 1,992,294,400 + 1,147,773,289），解压后 7,077 MiB，
   内含 `torch 2.14.0+rocm10.1.0`、`torchaudio 2.11.0.3`、`rocm-sdk 10.1.0` 与四套 gfx 内核。
   整包放魔搭，分片放 GitHub Release；没上传或字节对不上时「自动」档仍走 CPU 档，面板会写明原因。
+- 致谢：@ANGOSUNG 给出 ROCm 档的选卡 / MIOpen / 内核 / 长路径方案并在 RX 9070 上跑通；@niaolong233 提出模型版本解耦。
+  完整名单见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
 
 ## 0.5.28
 

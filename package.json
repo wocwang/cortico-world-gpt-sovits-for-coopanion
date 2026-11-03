@@ -5,7 +5,19 @@
   "description": "GPT-SoVITS 语音插件：支持 AMD 显卡（ROCm，实验性）和 NVIDIA 显卡，没有独显自动走 CPU；全程本机合成、不上传录音，一键装运行时与权重。",
   "author": "wocwang",
   "contributors": [
-    "Phantivia"
+    "Phantivia",
+    {
+      "name": "ink1453",
+      "url": "https://github.com/ink1453"
+    },
+    {
+      "name": "ANGOSUNG",
+      "url": "https://github.com/ANGOSUNG"
+    },
+    {
+      "name": "aiAsuka",
+      "url": "https://github.com/aiAsuka"
+    }
   ],
   "license": "MIT",
   "publishConfig": {
@@ -67,7 +79,8 @@
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "CHANGELOG.md",
-    "describe.json"
+    "describe.json",
+    "CONTRIBUTORS.md"
   ],
   "scripts": {
     "build": "node scripts/build-webui.mjs",

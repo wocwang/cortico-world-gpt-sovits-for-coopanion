@@ -369,6 +369,14 @@ worlds.qqbot.voice.tts       = true
 `torch.cat()` 并崩掉(`expected a non-empty list`)。扩展在送合成前先把这类符号去掉；
 万一还是失败，再去掉标点重试一次(已经出过声时不重试，免得多播半句)。
 
+### 致谢
+
+AMD 与 macOS 这两块不是我一个人做出来的，完整的名单与「每个人做了什么」见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
+
+- **@ink1453**：macOS 平台层（PR #10，`platform.ts` / `afplay` / 进程组）与 M3 真机验收，还找出了 `-I` 忽略 `PYTHONPATH` 的根因；
+- **@ANGOSUNG**：ROCm 档的选卡、MIOpen、内核与长路径方案，并在 RX 9070 上跑通；
+- **@aiAsuka**：音频后端探针的判据，0.6.5 的静音回归就是靠他的实测定位的。
+
 ### 开发
 
 ```bash
