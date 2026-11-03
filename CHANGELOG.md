@@ -2,6 +2,13 @@
 
 ## 未发布
 
+- **ROCm 档「中文里夹英文」整句失败**（市场评论区 @ANGOSUNG，0.6.3–0.6.6 均可复现）：0.6.3 的补齐把语料下到数据目录、
+  再用 `NLTK_DATA` 指过去，但上游 `tools/portable_runtime.py` 在 `activate()` 里把 `NLTK_DATA` **硬赋值**成
+  `<运行时>/runtime/nltk_data`（`RUNTIME_DIR = PROJECT_ROOT / "runtime"`），而 ROCm 运行包里没有这套语料，
+  于是补齐被完全抵消——中文里夹一个英文词就 `LookupError: averaged_perceptron_tagger_eng`，整句没有声音。
+  现在补齐后会把语料**复制进运行时那个目录**（已存在的文件不覆盖，运行包自带的优先），预检也从只看 `cmudict`
+  扩到 `cmudict` + `averaged_perceptron_tagger_eng` 两项。已装好的用户更新插件后自动生效，不用重下运行时；
+  重下运行时也不会再复发（每次启动都会重新检查并同步）。
 - **AMD 支持名单补全**（#12 来信触发核查）：官方 Windows 矩阵内、四套内核已覆盖的同架构型号全部进 ROCm 档——
   RX 7900 XT / 7900 GRE / PRO W7800（gfx1100）、RX 7800 XT / 7700 XT / PRO W7700（gfx1101）、RX 9070 GRE（gfx1201）。
   这些卡与已在名单的型号共用同一套内核，不用重下运行时。识别时忽略 WMI 名字里的 `(TM)` 与多余空格

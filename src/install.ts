@@ -6,7 +6,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, renameSync, rmSync, rmdirSync, statSync, statfsSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, renameSync, rmSync, rmdirSync, statSync, statfsSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -396,31 +396,80 @@ export class WeightsJob extends Job {
   }
 }
 
-/** 运行时里有没有 NLTK 的 cmudict——ROCm 包曾经把它漏掉，英文单词一进场就崩。 */
+/**
+ * g2p_en 处理英文单词时要的两份资源。ROCm 运行包曾经一份都没有（CPU 包有全套），
+ * 中文里夹一个英文词就整句失败。
+ */
+const NLTK_REQUIRED: ReadonlyArray<readonly [string, string]> = [
+  ['corpora', 'cmudict'],
+  ['taggers', 'averaged_perceptron_tagger_eng'],
+];
+
+/** 目录里缺哪些语料（返回 `kind/name` 列表，空表示齐了）。 */
+export function missingNltkResources(root: string): string[] {
+  return NLTK_REQUIRED.filter(([kind, name]) => !existsSync(join(root, kind, name))).map(([kind, name]) => `${kind}/${name}`);
+}
+
+/** 运行时自带语料且齐全——不满就当作「缺」，因为缺一份和缺全部对 g2p_en 是一样的。 */
 export function hasNltkData(runtimeDir: string): boolean {
-  return existsSync(join(runtimeDir, 'runtime', 'nltk_data', 'corpora', 'cmudict'));
+  return missingNltkResources(join(runtimeDir, 'runtime', 'nltk_data')).length === 0;
 }
 
 /**
- * 缺 NLTK 语料时下一份补齐包到 `dataDir/nltk_data`，返回该目录给 `NLTK_DATA` 用。
- * 只影响「台词里夹英文」的句子；下载失败只记日志、返回 null，不拦启动。
+ * 把语料复制进运行时目录，已存在的文件不覆盖（运行包自带的优先）。返回复制的文件数。
+ * 之所以要复制：上游 `tools/portable_runtime.py` 在 `activate()` 里把 `NLTK_DATA` **硬赋值**成
+ * `<运行时>/runtime/nltk_data`，插件通过环境变量指过去的目录会被覆盖——只补到数据目录等于没补
+ * （0.6.3–0.6.6 的 ROCm 档就是这样：补了、变量也设了，一句英文学名照样整句失败）。
+ */
+export function mirrorNltkData(from: string, to: string): number {
+  let copied = 0;
+  const walk = (src: string, dest: string): void => {
+    mkdirSync(dest, { recursive: true });
+    for (const entry of readdirSync(src, { withFileTypes: true })) {
+      const source = join(src, entry.name);
+      const target = join(dest, entry.name);
+      if (entry.isDirectory()) walk(source, target);
+      else if (entry.isFile() && !existsSync(target)) {
+        copyFileSync(source, target);
+        copied += 1;
+      }
+    }
+  };
+  walk(from, to);
+  return copied;
+}
+
+/**
+ * 缺 NLTK 语料时下一份补齐包到 `dataDir/nltk_data`，并**同步进运行时目录**
+ * （`<runtime>/runtime/nltk_data`，即运行时自己硬指的那个位置）。
+ * 只影响「台词里夹英文」的句子；任何一步失败只记日志，不拦启动。
  */
 export async function ensureNltkData(runtimeDir: string, dataDir: string, log: Logger): Promise<string | null> {
-  if (hasNltkData(runtimeDir)) return null;
+  const bundled = join(runtimeDir, 'runtime', 'nltk_data');
+  if (missingNltkResources(bundled).length === 0) return null;
+
   const dir = join(dataDir, 'nltk_data');
-  if (existsSync(join(dir, 'corpora', 'cmudict'))) return dir;
-  const zip = join(dataDir, NLTK_ASSET.path);
-  try {
-    mkdirSync(dataDir, { recursive: true });
-    await fetchVerified(NLTK_ASSET.sources, zip, NLTK_ASSET.bytes, NLTK_ASSET.sha256, () => {}, new AbortController().signal);
-    await extract(zip, dataDir);
-    rmSync(zip, { force: true });
-    if (!existsSync(join(dir, 'corpora', 'cmudict'))) throw new Error('补齐包里没有 cmudict');
-    log.info('已补齐 NLTK 语料（cmudict）', { dir });
-    return dir;
-  } catch (err) {
-    rmSync(zip, { force: true });
-    log.warn('NLTK 语料没下成，含英文的台词可能合成失败', { err: String(err) });
-    return null;
+  if (missingNltkResources(dir).length > 0) {
+    const zip = join(dataDir, NLTK_ASSET.path);
+    try {
+      mkdirSync(dataDir, { recursive: true });
+      await fetchVerified(NLTK_ASSET.sources, zip, NLTK_ASSET.bytes, NLTK_ASSET.sha256, () => {}, new AbortController().signal);
+      await extract(zip, dataDir);
+      rmSync(zip, { force: true });
+      if (missingNltkResources(dir).length > 0) throw new Error('补齐包里语料不全');
+      log.info('已补齐 NLTK 语料（cmudict / averaged_perceptron_tagger_eng）', { dir });
+    } catch (err) {
+      rmSync(zip, { force: true });
+      log.warn('NLTK 语料没下成，含英文的台词可能合成失败', { err: String(err) });
+      return null;
+    }
   }
+
+  try {
+    const copied = mirrorNltkData(dir, bundled);
+    log.info('已把 NLTK 语料同步进运行时（运行时会把 NLTK_DATA 指回这里）', { into: bundled, files: copied });
+  } catch (err) {
+    log.warn('NLTK 语料没能同步进运行时目录，含英文的台词可能仍会失败', { err: String(err) });
+  }
+  return dir;
 }
