@@ -15,7 +15,6 @@
 import argparse
 import json
 import os
-import wave
 
 import numpy as np
 
@@ -23,16 +22,36 @@ FRAME_MS = 20
 
 
 def load(path: str, rate: int | None, channels: int | None):
-    """读 WAV（自动取参数）或裸 PCM（用 --rate/--channels）。"""
+    """读 WAV 或裸 PCM（裸 PCM 要用 --rate/--channels）。
+
+    WAV 手动解析 RIFF，不用 wave 模块：api_v2 流式返回的 WAV 里 data 长度是占位值
+    （0x24 / 0xFFFFFFFF），wave 会把它当成 0 帧，读出来是空的（#6 反馈）。
+    """
     if path.lower().endswith(".wav"):
-        with wave.open(path, "rb") as w:
-            frames = w.readframes(w.getnframes())
-            rate = w.getframerate() if rate is None else rate
-            channels = w.getnchannels() if channels is None else channels
-            width = w.getsampwidth()
-        if width != 2:
-            raise SystemExit(f"只支持 16 位 WAV（现在是 {width * 8} 位）")
-        data = np.frombuffer(frames, dtype=np.int16).astype(np.float32)
+        buf = open(path, "rb").read()
+        if buf[:4] != b"RIFF" or buf[8:12] != b"WAVE":
+            raise SystemExit(f"{path} 不是 WAV")
+        at = 12
+        wav_rate = wav_channels = wav_bits = None
+        data = None
+        while at + 8 <= len(buf):
+            cid = buf[at:at + 4]
+            size = int.from_bytes(buf[at + 4:at + 8], "little")
+            if cid == b"fmt ":
+                wav_channels = int.from_bytes(buf[at + 10:at + 12], "little")
+                wav_rate = int.from_bytes(buf[at + 12:at + 16], "little")
+                wav_bits = int.from_bytes(buf[at + 22:at + 24], "little")
+            elif cid == b"data":
+                # 流式 WAV 的长度是占位值，直接读到文件尾
+                data = np.frombuffer(buf[at + 8:], dtype=np.int16).astype(np.float32)
+                break
+            at += 8 + size + (size & 1)
+        if data is None or wav_rate is None:
+            raise SystemExit(f"{path} 里找不到 fmt/data 块")
+        if wav_bits != 16:
+            raise SystemExit(f"只支持 16 位 WAV（现在是 {wav_bits} 位）")
+        rate = wav_rate if rate is None else rate
+        channels = wav_channels if channels is None else channels
     else:
         if not rate:
             raise SystemExit("裸 PCM 要用 --rate 指定采样率")

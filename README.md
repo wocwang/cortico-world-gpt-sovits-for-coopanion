@@ -2,7 +2,7 @@
 
 `@wocwang/cortico-world-gpt-sovits-for-coopanion`
 
-给 Coopanion 桌宠配上真实的 GPT-SoVITS 语音：桌宠每次说话，插件就在**你自己的电脑上**把这句话合成出来、从声卡播出。全程本机运行，不上传任何录音。NVIDIA 显卡走 V5 turbo；**AMD 显卡已支持（实验性功能，欢迎反馈）**——官方名单内的型号自动走 ROCm 档（同为 V5 turbo），名单外会提示「当前显卡不在支持名单内」，没有独立显卡或 Intel 显卡走 CPU 档（v2ProPlus，慢一些但能用）。
+给 Coopanion 桌宠配上真实的 GPT-SoVITS 语音：桌宠每次说话，插件就在**你自己的电脑上**把这句话合成出来、从声卡播出。全程本机运行，不上传任何录音。**AMD 与 NVIDIA 显卡都能用**——NVIDIA 走 V5 turbo；AMD 名单内的型号自动走 ROCm 档（**实验性功能，欢迎反馈**），名单外会提示「当前显卡不在支持名单内」，没有独显或 Intel 显卡走 CPU 档（v2ProPlus，慢一些但能用）。
 
 ## 和另外两个声音插件一起用
 
@@ -139,7 +139,9 @@ runtime/bin/python3 -m pip install -r requirements.txt
 - 训练面板按「自备目录不支持训练」处理；要训模型请在 Windows 那边或另开一份上游仓库。
 - 上游 `api_v2.py` 在设置 `sys.path` 之前就 `from tools.portable_runtime import …`，0.6.5 起插件给子进程设了 `PYTHONPATH=<运行时目录>`，不必再改运行时的 `api_v2.py`；更早的版本会报 `No module named 'tools'`。
 
-> 市场里本插件目前仍标为 Windows（`os` 只有 `win32`），等 Apple 芯片真机实测通过后再放开。现在要试，把仓库目录直接放进 `data/extensions/node_modules/@wocwang/cortico-world-gpt-sovits-for-coopanion`（或用 `pnpm add <tgz> --force` 绕过平台检查），重启 Coopanion。
+> macOS 从 **0.6.6** 起正式放开（`os` 含 `darwin`，市场在 Mac 上也会展示）。装法同 Windows，但**没有一键运行时**：
+> 必须先自备一份 GPT-SoVITS（见上）并在面板里填「自备运行时目录」。已在 Apple M3 上实测：服务就绪约 11 s、
+> 试听出声、闲置停服后自动拉起，`api_v2.py` 保持上游原样即可。
 
 ---
 

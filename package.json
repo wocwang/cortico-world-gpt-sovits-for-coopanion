@@ -1,87 +1,88 @@
 {
-    "name":  "@wocwang/cortico-world-gpt-sovits-for-coopanion",
-    "version":  "0.6.5",
-    "type":  "module",
-    "description":  "Cortico World for Coopanion: speaks the pet\u0027s lines aloud with GPT-SoVITS (V5 on NVIDIA GPUs, V5 on supported AMD GPUs through ROCm — experimental, feedback welcome — and a CPU tier otherwise), installing a portable runtime and weights in one click",
-    "author":  "wocwang",
-    "contributors":  [
-                         "Phantivia"
-                     ],
-    "license":  "MIT",
-    "publishConfig":  {
-                          "access":  "public"
-                      },
-    "repository":  {
-                       "type":  "git",
-                       "url":  "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion.git"
-                   },
-    "homepage":  "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion#readme",
-    "bugs":  {
-                 "url":  "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion/issues"
-             },
-    "keywords":  [
-                     "cortico-world",
-                     "cortico",
-                     "coopanion",
-                     "tts",
-                     "gpt-sovits"
-                 ],
-    "os":  [
-               "win32"
-           ],
-    "engines":  {
-                    "node":  "\u003e=22"
-                },
-    "packageManager":  "pnpm@11.5.0",
-    "main":  "./src/index.ts",
-    "cortico":  {
-                    "kind":  "world",
-                    "api":  6,
-                    "displayName":  "更好的GPTSovits 语音—大肥鱼来咯",
-                    "locales":  {
-                                    "zh":  {
-                                               "displayName":  "更好的GPTSovits 语音—大肥鱼来咯",
-                                               "description":  "支持星落落语音包！欢迎来尝试！给桌宠配上真实的 GPT-SoVITS 语音：全程在本机合成、从声卡出声，不上传任何录音，一键装好运行时与模型。和 RVC 变声、DiffSinger 唱歌是同一套本机声音链路，三个插件可以配合使用：说话走本插件、唱歌走 DiffSinger、音色交给 RVC。内置「大肥鱼_星落落版本」参考音色（官方底模零样本）与日中英三种参考；支持自定义音色（参考音频+台本+可选自备权重）。自带闲置停服（省显存）、按需加载（最多省约 810 MB 显存）、语音落盘与保留期。还能把声音交给 QQ 插件：新版 cortico-world-qq-final 直接取本机语音接口，老版 cortico-world-qq 走句柄，QQ 语音就是桌宠的声音。新版 QQ 插件（0.6.29 起）已移除语音判定模型，不需要任何密钥，是否发语音由主模型自己决定。AMD 显卡支持已上线（实验性功能，欢迎反馈）：官方名单内（RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700，需 Windows 11、Adrenalin 26.2.2 以上并开启长路径）自动走 ROCm 推理档；名单外的 A 卡会提示「当前显卡不在支持名单内」，没有独立显卡或 Intel 显卡自动走 CPU 档。"
-                                           },
-                                    "en":  {
-                                               "displayName":  "Better GPTSovits Voice — Fatfish",
-                                               "description":  "Supports the Xll voice pack! Come and try it! Gives the desktop pet a real GPT-SoVITS voice: synthesized on your own machine, nothing uploaded, one-click runtime and weights. It is one link of the same local voice chain as RVC (timbre) and DiffSinger singing, and the three plugins can run together: speech here, singing in DiffSinger, timbre in RVC. Ships the \"Fatfish Xll\" reference voice (zero-shot base model) plus Chinese/English/Japanese references, and supports custom voices (reference audio + transcript + optional own weights). Includes stop-when-idle, on-demand model loading (up to ~810 MB VRAM saved), speech files with a retention window, and a local voice API so QQ plugins (cortico-world-qq-final / cortico-world-qq) can send voice in the pet\u0027s own voice. Newer QQ plugins (0.6.29+) need no key at all: the main model decides when to speak. AMD GPUs are supported now (experimental — feedback welcome): cards on the official list (RX 9070 / 9070 XT / 9060 XT / AI PRO R9700 / 7900 XTX / PRO W7900 / RX 7700, with Windows 11, Adrenalin 26.2.2 or newer and long paths enabled) use the ROCm inference tier automatically; other AMD cards show 'not on the supported list', and machines without a discrete GPU (or with Intel graphics) use the CPU tier."
-                                           }
-                                },
-                    "tags":  [
-                                 "voice",
-                                 "local",
-                                 "experimental"
-                             ],
-                    "webUiClient":  "dist/webui.js",
-                    "webUiStyle":  "dist/webui.css",
-                    "describe":  "describe.json"
-                },
-    "files":  [
-                  "src",
-                  "dist",
-                  "assets",
-                  "vendor",
-                  "README.md",
-                  "LICENSE",
-                  "THIRD_PARTY_NOTICES.md",
-                  "CHANGELOG.md",
-                  "describe.json"
-              ],
-    "scripts":  {
-                    "build":  "node scripts/build-webui.mjs",
-                    "check:refs":  "node --import tsx scripts/check-live-refs.mjs",
-                    "check:audio":  "node scripts/check-audio-backend.mjs",
-                    "test":  "vitest run",
-                    "typecheck":  "tsc --noEmit",
-                    "prepublishOnly":  "npm run build \u0026\u0026 npm test \u0026\u0026 npm run typecheck \u0026\u0026 npm run check:audio"
-                },
-    "devDependencies":  {
-                            "@types/node":  "^22.10.0",
-                            "cortico":  "^0.2.3",
-                            "esbuild":  "^0.28.2",
-                            "tsx":  "^4.19.2",
-                            "typescript":  "^5.7.2",
-                            "vitest":  "^2.1.8"
-                        }
+  "name": "@wocwang/cortico-world-gpt-sovits-for-coopanion",
+  "version": "0.6.6",
+  "type": "module",
+  "description": "GPT-SoVITS 语音插件：支持 AMD 显卡（ROCm，实验性）和 NVIDIA 显卡，没有独显自动走 CPU；全程本机合成、不上传录音，一键装运行时与权重。",
+  "author": "wocwang",
+  "contributors": [
+    "Phantivia"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion.git"
+  },
+  "homepage": "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion#readme",
+  "bugs": {
+    "url": "https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion/issues"
+  },
+  "keywords": [
+    "cortico-world",
+    "cortico",
+    "coopanion",
+    "tts",
+    "gpt-sovits"
+  ],
+  "os": [
+    "win32",
+    "darwin"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.5.0",
+  "main": "./src/index.ts",
+  "cortico": {
+    "kind": "world",
+    "api": 6,
+    "displayName": "更好的GPTSovits 语音—大肥鱼来咯",
+    "locales": {
+      "zh": {
+        "displayName": "更好的GPTSovits 语音—大肥鱼来咯",
+        "description": "支持 AMD 显卡（ROCm，实验性）和 NVIDIA 显卡，没有独显自动走 CPU。全程本机合成、不上传录音，一键装好运行时与模型；内置大肥鱼 / 星落落音色，支持自备权重与自定义音色，也能把声音交给 QQ 插件。"
+      },
+      "en": {
+        "displayName": "Better GPTSovits Voice — Fatfish",
+        "description": "Works with AMD GPUs (ROCm, experimental) and NVIDIA GPUs, and falls back to CPU without a discrete GPU. Everything is synthesized locally, nothing is uploaded; runtime and models install in one click. Ships the Fatfish / Xll voices, supports your own weights and custom voices, and can hand the audio to QQ plugins."
+      }
+    },
+    "tags": [
+      "voice",
+      "local",
+      "experimental"
+    ],
+    "webUiClient": "dist/webui.js",
+    "webUiStyle": "dist/webui.css",
+    "describe": "describe.json"
+  },
+  "files": [
+    "src",
+    "dist",
+    "assets",
+    "vendor",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "CHANGELOG.md",
+    "describe.json"
+  ],
+  "scripts": {
+    "build": "node scripts/build-webui.mjs",
+    "check:refs": "node --import tsx scripts/check-live-refs.mjs",
+    "check:audio": "node scripts/check-audio-backend.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test && npm run typecheck && npm run check:audio"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "cortico": "^0.2.3",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
 }

@@ -1,10 +1,17 @@
 # Changelog
 
-## 未发布
+## 0.6.6
 
+- **macOS 正式可用**（#5）：`os` 加上 `darwin`，市场在 Mac 上也会展示。macOS 走「自备运行时目录」，
+  不下载内置运行时（内置包仍只有 win-x64），播放交给系统 `afplay`（整句播放、无设备选择、音量走 `afplay -v`）。
+  已在 Apple M3 上实测：自备运行时起服务约 11 s、试听出声、闲置停服后自动拉起、`api_v2.py` 保持上游原样即可
+  （解释器参数用 `-s` 而不是 `-I`，否则 `-E` 会忽略 `PYTHONPATH`，`import tools` 失败）。
 - **本地语音接口回传计时**（#7）：9880 的响应头多了 `x-sovits-first-chunk-ms`（首块就绪耗时）、
   `x-sovits-synthesis-ms`（整句合成耗时）、`x-sovits-duration-ms`（这段音频的实际时长），
   对方插件可以据此按真实时长撑气泡、按真实延迟安排开播。
+- **市场简介改短，突出 AMD 支持**：一行说明「支持 AMD（ROCm，实验性）与 NVIDIA 显卡、没独显自动 CPU」，
+  其余细节留给 README 与面板。
+- `scripts/analyze-noise.py` 支持流式 WAV（RIFF 长度是占位值也能读），并补了「裸 PCM 用 `--rate/--channels`」的说明（#6）。
 
 ## 0.6.5
 
