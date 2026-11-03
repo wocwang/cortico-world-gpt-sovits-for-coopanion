@@ -1,7 +1,7 @@
 # TODO — 更好的GPTSovits 语音（Coopanion 插件）
 
 > 最后更新：2026-11-03 09:05（Asia/Shanghai）
-> 工作区版本：**0.6.6（已发布 npm latest，已推送，含 macOS）**；本机 `data\extensions` 装的是 **0.6.0**（未升级）
+> 工作区版本：**0.6.7（已发布 npm latest，已推送）**；本机 `data\extensions` 装的是 **0.6.6**
 > 详细交接见 [HANDOFF.md](HANDOFF.md)；ROCm 代验清单见 [docs/rocm-acceptance.md](docs/rocm-acceptance.md)。
 
 ## P0 — 0.6.0 / 0.6.1 发布（已完成，待真机代验）
@@ -61,6 +61,9 @@
       ① CPU 档恒用 V2 Pro Plus（说明书写错了，已改 README，并加「缺权重点名」提示）；
       ② `-I` 与上游 `api_v2.py` 的 `from tools.portable_runtime import …` 冲突——`-I` 会踢掉脚本目录、
       还连带 `-E` 忽略 `PYTHONPATH`，改用 `-s`（`PYTHON_ARGS`）后自备运行时的 venv 能直接 `import tools`。
+- [x] **0.6.7 已发布**（2026-11-04）：① ROCm NLTK 语料同步进运行时（市场评论区 @ANGOSUNG 报告；上游
+      `tools/portable_runtime.py` 把 `NLTK_DATA` 硬赋值到 `<运行时>/runtime/nltk_data`，只补数据目录无效）；
+      ② AMD 名单补全 7 个同架构型号 + `(TM)`/空格归一化（#12 触发核查）。197 例全过；市场同步 issue #709。
 - [x] **0.6.6 已发布**（2026-11-03）：`os` 加 `darwin`，macOS 正式可用；`0.6.5-mac.2` 上 ink 复验通过
       （`api_v2.py` 保持上游原样、服务 11 s 就绪）；PR #10 已评论并关闭（署名保留）；市场同步 issue #691。
 - [ ] **等 ink 装正式版后回最后一次结果**：他说过「装正式版后再回一次结果」，通过就关 #5。
