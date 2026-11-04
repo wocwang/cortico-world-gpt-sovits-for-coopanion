@@ -284,6 +284,14 @@ describe('qqbotWords', () => {
     expect(qqbotWords('zh', true)).not.toContain('qq_draft');
   });
 
+  it('地址格式写清楚：c2c/OpenID 归 qqbot，纯数字归 qq_send（两个插件混用会发不出去）', () => {
+    expect(qqbotWords('zh', true)).toContain('c2c:');
+    expect(qqbotWords('zh', true)).toContain('qq_send');
+    expect(channelWords('zh', true)).toContain('纯数字');
+    expect(channelWords('en', true)).toContain('c2c:');
+    expect(qqbotWords('en', true)).toContain('c2c:');
+  });
+
   it('两份提示词模板都留了占位符', () => {
     const zh = readFileSync(new URL('../src/ENV_PROMPT.md', import.meta.url), 'utf8');
     const en = readFileSync(new URL('../src/ENV_PROMPT.en.md', import.meta.url), 'utf8');
