@@ -1,7 +1,7 @@
 # TODO — 更好的GPTSovits 语音（Coopanion 插件）
 
 > 最后更新：2026-11-03 09:05（Asia/Shanghai）
-> 工作区版本：**0.6.7（已发布 npm latest，已推送）**；本机 `data\extensions` 装的是 **0.6.6**
+> 工作区版本：**0.6.8（已发布 npm latest，已推送）**；本机 `data\extensions` 装的是 **0.6.8**
 > 详细交接见 [HANDOFF.md](HANDOFF.md)；ROCm 代验清单见 [docs/rocm-acceptance.md](docs/rocm-acceptance.md)。
 
 ## P0 — 0.6.0 / 0.6.1 发布（已完成，待真机代验）
@@ -61,6 +61,11 @@
       ① CPU 档恒用 V2 Pro Plus（说明书写错了，已改 README，并加「缺权重点名」提示）；
       ② `-I` 与上游 `api_v2.py` 的 `from tools.portable_runtime import …` 冲突——`-I` 会踢掉脚本目录、
       还连带 `-E` 忽略 `PYTHONPATH`，改用 `-s`（`PYTHON_ARGS`）后自备运行时的 venv 能直接 `import tools`。
+- [x] **0.6.8 已发布**（2026-11-04）：QQ Bot（qqbot）「文字+语音条」：新增 `qqbotVoice` 开关，提示词规定
+      `sovits_speak(silent: true)` → `[blob …]` → `qqbot_send_message.voice`；旧插件（qq-final / NapCat）
+      继续走 9880 的 `qq_send voice=true`；两个开关可同开、按回复工具名分规则。补了两个坑：9880 对 qqbot 无效
+      （它只认句柄/公网 URL）、`c2c:<OpenID>` 不能喂给只收纯数字的 `qq_send`。联动页改成五张 `ui.foldSheet`
+      折叠卡（带摘要，旧宿主回退普通卡）。206 例全过；市场同步 #715；讨论 #228 已发说明。
 - [x] **0.6.7 已发布**（2026-11-04）：① ROCm NLTK 语料同步进运行时（市场评论区 @ANGOSUNG 报告；上游
       `tools/portable_runtime.py` 把 `NLTK_DATA` 硬赋值到 `<运行时>/runtime/nltk_data`，只补数据目录无效）；
       ② AMD 名单补全 7 个同架构型号 + `(TM)`/空格归一化（#12 触发核查）。197 例全过；市场同步 issue #709。
