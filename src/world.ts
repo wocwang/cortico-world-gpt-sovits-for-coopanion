@@ -18,10 +18,10 @@ import type { Language } from 'cortico/core/language.ts';
 import type { Logger, ToolDef, ToolOutcome, World, WorldHost, WorldLamp, WorldWebUiDecl } from 'cortico/core/types.ts';
 import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
-import { officialVoice, OUTPUT_GAIN, resolveModelVersion, RUNTIME_ASSETS, RUNTIME_EXTRACT_BYTES, RUNTIME_VERSION, weightPaths, type ModelVersion } from './catalog.ts';
+import { normalizeVoiceModel, officialVoice, OUTPUT_GAIN, resolveModelVersion, RUNTIME_ASSETS, RUNTIME_EXTRACT_BYTES, RUNTIME_VERSION, voiceModelNeedsNormalizing, weightPaths, type ModelVersion } from './catalog.ts';
 import { dirBytes, topLevelBytes } from './disk.ts';
 import { detectGpus, fallbackToCpu, pickTier, type AmdProbe, type GpuVendor } from './gpu.ts';
-import { configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, RVC_INDEX_MAX, RVC_INDEX_MIN, RVC_PROTECT_MAX, RVC_PROTECT_MIN, RVC_TIMEOUT_MAX, RVC_TIMEOUT_MIN, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
+import { AUDIO_BACKEND_OPTIONS, configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, MODEL_VERSION_OPTIONS, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, RVC_INDEX_MAX, RVC_INDEX_MIN, RVC_PROTECT_MAX, RVC_PROTECT_MIN, RVC_TIMEOUT_MAX, RVC_TIMEOUT_MIN, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, audioBackendOptions, modelVersionOptions, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
 import { startHttpTts, SING_MARK, type HttpTtsHandle, type SynthResult, type TtsJob } from './http-tts.ts';
 import { channelWords, languageWords, panelText, qqbotWords, shareWords, stateWords } from './i18n.ts';
@@ -145,6 +145,38 @@ type Backend =
   | { kind: 'remote'; url: string }
   | { kind: 'own'; dir: string }
   | { kind: 'managed'; dir: string };
+
+/**
+ * 配置字段的 `x-options` 解析。definition.ts 的 `configOptions` 与自定义配置页共用这一份，
+ * 少一个 case 就会退化成手填输入框（模型版本与音频后端就踩过这个坑）。
+ */
+export function panelOptionsFor(kind: unknown, language: Language): Array<{ value: string; label: string }> | undefined {
+  switch (kind) {
+    case VOICE_OPTIONS:
+      return [
+        ...VOICE_PRESETS.map((id) => ({ value: id, label: `${presetLabel(id, language)} · ${presetFileLabel(id)}` })),
+        ...customVoiceOptions(),
+      ];
+    case TEXT_LANGUAGE_OPTIONS:
+      return textLanguageOptions(language);
+    case PROMPT_LANGUAGE_OPTIONS:
+      return promptLanguageOptions();
+    case TIER_OPTIONS:
+      return tierOptions(language);
+    case MODEL_VERSION_OPTIONS:
+      return modelVersionOptions(language);
+    case AUDIO_BACKEND_OPTIONS:
+      return audioBackendOptions(language);
+    case DEVICE_OPTIONS:
+      try {
+        return [{ value: '', label: systemDeviceLabel(language) }, ...listOutputDevices().map((d) => ({ value: d.name, label: d.name }))];
+      } catch {
+        return [{ value: '', label: systemDeviceLabel(language) }];
+      }
+    default:
+      return undefined;
+  }
+}
 
 export class GptSovitsWorld implements World {
   readonly id = GPT_SOVITS_ID;
@@ -835,7 +867,8 @@ export class GptSovitsWorld implements World {
     this.gpu = gpus.vendor;
     if (this.cfg.tier === 'cuda' && !gpus.nvidia) this.log.warn('配置的是显卡档，但没检测到 NVIDIA 显卡', { gpu: this.gpu });
     if (this.cfg.tier === 'rocm' && gpus.amd.kind !== 'supported') this.log.warn('配置的是 ROCm 档，但没检测到官方支持的 AMD 显卡', { gpu: this.gpu, amd: gpus.amd });
-    if (this.cfg.voiceModel === 'v5turbo' && this.tier() === 'cpu') this.log.warn('CPU 档跑不动 V5 turbo，已按 V2 Pro Plus 运行', { voiceModel: this.cfg.voiceModel });
+    if (voiceModelNeedsNormalizing(this.cfg.voiceModel)) this.log.warn('配置里的模型版本不是有效值，已按 auto 处理', { voiceModel: this.cfg.voiceModel });
+    if (normalizeVoiceModel(this.cfg.voiceModel) === 'v5turbo' && this.tier() === 'cpu') this.log.warn('CPU 档跑不动 V5 turbo，已按 V2 Pro Plus 运行', { voiceModel: this.cfg.voiceModel });
     // 旧 QQ 插件（qq-final / NapCat）是来拉 9880 的：接口没开就发不出语音，启动时说一声。
     if (this.cfg.channelVoice && !this.cfg.httpApi) this.log.warn('「其他渠道的语音交给对方插件」开着，但「开放本地语音接口」没开，旧 QQ 插件取不到音频', { httpPort: this.cfg.httpPort });
     // 启动即把当前音色的音频/台本镜像进配置字段：配置页一打开就能看到实际用的文件。
@@ -1251,29 +1284,7 @@ export class GptSovitsWorld implements World {
     if (!group?.schema) return { error: `unknown group ${groupId}` };
     const props = (group.schema as { properties?: Record<string, any> }).properties ?? {};
     const valuePrefix = `worlds.${GPT_SOVITS_ID}.`;
-    const optionsFor = (kind: unknown): Array<{ value: string; label: string }> | undefined => {
-      switch (kind) {
-        case VOICE_OPTIONS:
-          return [
-            ...VOICE_PRESETS.map((id) => ({ value: id, label: `${presetLabel(id, language)} · ${presetFileLabel(id)}` })),
-            ...customVoiceOptions(),
-          ];
-        case TEXT_LANGUAGE_OPTIONS:
-          return textLanguageOptions(language);
-        case PROMPT_LANGUAGE_OPTIONS:
-          return promptLanguageOptions();
-        case TIER_OPTIONS:
-          return tierOptions(language);
-        case DEVICE_OPTIONS:
-          try {
-            return [{ value: '', label: systemDeviceLabel(language) }, ...listOutputDevices().map((d) => ({ value: d.name, label: d.name }))];
-          } catch {
-            return [{ value: '', label: systemDeviceLabel(language) }];
-          }
-        default:
-          return undefined;
-      }
-    };
+    const optionsFor = (kind: unknown): Array<{ value: string; label: string }> | undefined => panelOptionsFor(kind, language);
     const resolve = (key: string): unknown => {
       if (!key.startsWith(valuePrefix)) return undefined;
       let cur: any = this.cfg;
@@ -1300,7 +1311,9 @@ export class GptSovitsWorld implements World {
         multipleOf: def.multipleOf,
         xHot: def['x-hot'] === true,
       });
-      values[key] = resolve(key);
+      // 手填时代存过 `V2 Pro Plus` 这类显示名：面板按归一后的 key 显示，下拉才能选中。
+      const current = resolve(key);
+      values[key] = key.endsWith('.voiceModel') ? normalizeVoiceModel(current) : current;
     }
     return { groupId, title: (group.schema as any).title, description: (group.schema as any).description, properties: out, values };
   }

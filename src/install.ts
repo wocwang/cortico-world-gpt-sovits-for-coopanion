@@ -354,9 +354,14 @@ export class WeightsJob extends Job {
     return join(this.root(), 'gpt-sovits', 'pretrained_models');
   }
 
+  /** 这一版要的文件；版本 key 意外不认时退回空表，别让 `.every`/展开抛异常把 World 拖死。 */
+  private files(): readonly PinnedFile[] {
+    return MODEL_FILES[this.version()] ?? [];
+  }
+
   /** 还缺的文件。 */
   missing(): PinnedFile[] {
-    return [...MODEL_FILES[this.version()], ...this.official()].filter((f) => !this.has(f));
+    return [...this.files(), ...this.official()].filter((f) => !this.has(f));
   }
 
   /** 还要下载的字节数。 */
@@ -364,9 +369,10 @@ export class WeightsJob extends Job {
     return this.missing().reduce((n, f) => n + f.bytes, 0);
   }
 
-  /** 底模齐了就能起服务；官模权重没下完时先用底模，不影响出声。 */
+  /** 底模齐了就能起服务；官模权重没下完时先用底模，不影响出声。空表（版本 key 不认）不算就绪。 */
   baseReady(): boolean {
-    return MODEL_FILES[this.version()].every((f) => this.has(f));
+    const files = this.files();
+    return files.length > 0 && files.every((f) => this.has(f));
   }
 
   private has(f: PinnedFile): boolean {

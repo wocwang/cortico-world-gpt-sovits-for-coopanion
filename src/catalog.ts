@@ -96,13 +96,42 @@ export type ModelVersion = 'v5turbo' | 'v2ProPlus';
 /** 配置里的模型版本：`auto` 跟档位走；也可以显式选一套底座。 */
 export type VoiceModelSetting = 'auto' | ModelVersion;
 
+/** 旧的自由输入框时代留下的写法（显示名、大小写、空格/连字符变体）。 */
+const VOICE_MODEL_ALIASES: Readonly<Record<string, VoiceModelSetting>> = {
+  auto: 'auto',
+  v5turbo: 'v5turbo',
+  'v5 turbo': 'v5turbo',
+  v5: 'v5turbo',
+  v2proplus: 'v2ProPlus',
+  'v2 pro plus': 'v2ProPlus',
+  'v2 pro': 'v2ProPlus',
+  v2: 'v2ProPlus',
+};
+
+/**
+ * 把配置里的模型版本归一成 `auto` / `v5turbo` / `v2ProPlus`。
+ * 0.6.8 之前面板是手填框，用户存过 `V2 Pro Plus` 这类显示名；不归一的话
+ * `MODEL_FILES['V2 Pro Plus']` 是 undefined，启动时 `baseReady()` 直接抛。
+ * 认不出的值按 `auto` 处理，不让老配置把整个 World 卡死。
+ */
+export function normalizeVoiceModel(value: unknown): VoiceModelSetting {
+  const raw = String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+  return VOICE_MODEL_ALIASES[raw] ?? VOICE_MODEL_ALIASES[raw.replace(/ /g, '')] ?? 'auto';
+}
+
+/** 配置里写的值不是规范 key（需要提示一次，并在面板上按归一后的值显示）。 */
+export function voiceModelNeedsNormalizing(value: unknown): boolean {
+  return String(value ?? '') !== normalizeVoiceModel(value);
+}
+
 /**
  * 选定的模型版本。`auto` 按档位；CPU 档上 v5turbo 跑不动（社区实测 >300 s 无输出），
  * 配置里写了 v5turbo 也退回 v2ProPlus——不然用户以为换了版本，实际只是永远不出声。
  */
-export function resolveModelVersion(setting: VoiceModelSetting, tier: Tier): ModelVersion {
+export function resolveModelVersion(setting: VoiceModelSetting | string, tier: Tier): ModelVersion {
   if (tier === 'cpu') return 'v2ProPlus';
-  return setting === 'auto' ? TIER_MODEL[tier] : setting;
+  const normalized = normalizeVoiceModel(setting);
+  return normalized === 'auto' ? TIER_MODEL[tier] : normalized;
 }
 
 /**

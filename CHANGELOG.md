@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.9
+
+- **「模型版本」「音频后端」在配置页恢复成下拉**（市场讨论区 @Sillyhou 报告）：自定义配置页的 `x-options` 解析
+  （`world.ts` 的 `optionsFor()`）只登记了音色 / 文本语言 / 提示词语言 / 推理档 / 输出设备五种，`modelVersionOptions()`
+  与 `audioBackendOptions()` 落到 `default: undefined`，前端只在 `options.length` 非空时画 `select`，于是退化成手填框。
+  现在两条都接上，并把这套解析抽成导出的 `panelOptionsFor()`，配置页与 `definition.ts` 共用一份，少一个 case 就会被测试抓到。
+- **旧的手填值不再把 World 拖死**：0.6.8 之前在输入框里存过 `V2 Pro Plus` 这类显示名，升级后 `resolveModelVersion()`
+  原样返回，`MODEL_FILES['V2 Pro Plus']` 是 undefined，`baseReady()` 的 `.every` 直接抛
+  `Cannot read properties of undefined`。现在 `normalizeVoiceModel()` 把显示名 / 大小写 / 空格连字符变体归一成
+  `auto` / `v5turbo` / `v2ProPlus`，认不出的值按 `auto` 处理并在启动日志提示一次；面板也按归一后的值显示，
+  下拉能直接选中。`WeightsJob` 另加了「版本 key 不认时按空表处理」的兜底，`baseReady()` 不再抛。
+- 测试：新增 `tests/config-options.test.ts`（四个 `x-options` 源的断言）与三条归一化用例；**19 文件 212 例全过**。
+
 ## 0.6.8
 
 - **QQ Bot（`cortico-world-qqbot`）的「文字 + 语音条」**：新增开关「QQ 机器人语音条」（`qqbotVoice`，默认关）。
