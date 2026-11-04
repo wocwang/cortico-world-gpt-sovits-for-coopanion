@@ -32,7 +32,7 @@
 
 ## P1 — 收尾
 
-- [x] **模型版本与推理档解耦（#228 新反馈，@niaolong233）**（0.6.0 已实现）：有人用 v5turbo 训出来的模型「太电」，觉得 v2ProPlus 更自然，
+- [x] **模型版本与推理档解耦（#228 新反馈，@niaolong233）**（0.6.0 已实现）：有人在显卡档想用自己训的 v2ProPlus 模型，
       但显卡档只认 v5turbo，自备的 v2ProPlus 权重被 `resolveTrained()` 以「当前推理档用的是 v5turbo」拒掉，放不进去。
       做法：新增配置 `voiceModel: 'auto' | 'v5turbo' | 'v2ProPlus'`（默认 auto = 现在的行为），
       `version()` 改为读它；CPU 档选 v5turbo 仍然忽略（社区反馈慢到出不来；我们未在 CPU 上实测过 v5turbo）；

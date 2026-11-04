@@ -57,7 +57,7 @@
 - **进阶**：用 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 自己训练，把训出的两个文件填进「自备 GPT 权重 / 自备 SoVITS 权重」两个框，服务在跑也会就地换上、不用重启。详见下方「自备训练权重」。
 
 **需要什么硬件？**
-有 NVIDIA 显卡自动走显卡档（V5 turbo，又快又好）。**有用户反馈 V5 turbo 的音色偏「电」**（主观听感，我们没做客观测量），想要更自然时在「模型版本」里改成 V2 Pro Plus 即可（首次切换可能多下约 300 MB 权重，服务会重启一次）；自己训的 V2 Pro Plus LoRA 也只在选了这个版本时才能加载。
+有 NVIDIA 显卡自动走显卡档（V5 turbo，又快又好）。想换另一套底模、或要加载自己训的 V2 Pro Plus LoRA 时，在「模型版本」里选 V2 Pro Plus 即可（首次切换可能多下约 300 MB 权重，服务会重启一次）；自己训的 V2 Pro Plus LoRA 只在选了这个版本时才能加载。
 
 本机实测（RTX 5070 Ti Laptop 12 GB、同一句 30 字、`dfy` 音色、不开 RVC、暖机后中位数）：
 
