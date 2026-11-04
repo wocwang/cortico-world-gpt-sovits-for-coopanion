@@ -35,7 +35,7 @@
 - [x] **模型版本与推理档解耦（#228 新反馈，@niaolong233）**（0.6.0 已实现）：有人用 v5turbo 训出来的模型「太电」，觉得 v2ProPlus 更自然，
       但显卡档只认 v5turbo，自备的 v2ProPlus 权重被 `resolveTrained()` 以「当前推理档用的是 v5turbo」拒掉，放不进去。
       做法：新增配置 `voiceModel: 'auto' | 'v5turbo' | 'v2ProPlus'`（默认 auto = 现在的行为），
-      `version()` 改为读它；CPU 档选 v5turbo 仍然忽略（上游实测 >300 s 无输出）；
+      `version()` 改为读它；CPU 档选 v5turbo 仍然忽略（社区反馈慢到出不来；我们未在 CPU 上实测过 v5turbo）；
       权重按钮按所选版本下载（切到 v2ProPlus 多下约 307 MB：s2Gv2ProPlus + eres2netv2）；
       训练面板的默认版本（`COOPANION_TRAINER_VERSION`）跟着这个配置走；`OUTPUT_GAIN` 已按版本区分，不用改。
       验收：显卡档 + 自备 `06` 权重能加载出声；切回 auto 恢复 v5turbo；面板文案中英同步；补 `world`/`weights` 单测。

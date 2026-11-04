@@ -125,7 +125,7 @@ export function voiceModelNeedsNormalizing(value: unknown): boolean {
 }
 
 /**
- * 选定的模型版本。`auto` 按档位；CPU 档上 v5turbo 跑不动（社区实测 >300 s 无输出），
+ * 选定的模型版本。`auto` 按档位；CPU 档上 v5turbo 不可用（社区反馈慢到出不来，我们没有在 CPU 上实测过 v5turbo），
  * 配置里写了 v5turbo 也退回 v2ProPlus——不然用户以为换了版本，实际只是永远不出声。
  */
 export function resolveModelVersion(setting: VoiceModelSetting | string, tier: Tier): ModelVersion {

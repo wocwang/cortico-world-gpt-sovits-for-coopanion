@@ -57,7 +57,17 @@
 - **进阶**：用 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 自己训练，把训出的两个文件填进「自备 GPT 权重 / 自备 SoVITS 权重」两个框，服务在跑也会就地换上、不用重启。详见下方「自备训练权重」。
 
 **需要什么硬件？**
-有 NVIDIA 显卡自动走显卡档（V5 turbo，又快又好）。嫌 V5 turbo 音色偏「电」时，在「模型版本」里改成 V2 Pro Plus 即可（更自然、慢一些，首次切换多下约 300 MB 权重，服务会重启一次）；自己训的 V2 Pro Plus LoRA 也只在选了这个版本时才能加载。没有 NVIDIA 但有官方支持的 AMD 显卡时走 ROCm 档（同样是 V5 turbo）：RX 9070 XT / 9070 GRE / 9070、AI PRO R9700、RX 9060 XT、RX 7900 XTX / 7900 XT / 7900 GRE、PRO W7900 / W7800、RX 7800 XT / 7700 XT / 7700、PRO W7700（四套架构：gfx1201 / gfx1200 / gfx1100 / gfx1101；板卡厂系列名如「大地之神」不影响识别，按芯片名匹配），要求 Windows 11、Adrenalin 26.2.2 或更新。ROCm 的内核库文件名会超过 Windows 260 字符的路径上限，所以这一档要先自己开启长路径（系统设置里改注册表 `LongPathsEnabled=1`，插件不会替你改），或者把 Coopanion 装在很短的路径下。其余显卡（含 RX 6000 系列、RX 7600 系、Intel）自动走 CPU 档（v2ProPlus），能出声但慢一些。
+有 NVIDIA 显卡自动走显卡档（V5 turbo，又快又好）。**有用户反馈 V5 turbo 的音色偏「电」**（主观听感，我们没做客观测量），想要更自然时在「模型版本」里改成 V2 Pro Plus 即可（首次切换可能多下约 300 MB 权重，服务会重启一次）；自己训的 V2 Pro Plus LoRA 也只在选了这个版本时才能加载。
+
+本机实测（RTX 5070 Ti Laptop 12 GB、同一句 30 字、`dfy` 音色、不开 RVC、暖机后中位数）：
+
+| 推理档 | 模型 | 合成耗时 | 音频时长 | RTF |
+|---|---|---|---|---|
+| 显卡（CUDA） | V5 turbo | 1.72 s | 6.07 s | 0.28 |
+| 显卡（CUDA） | V2 Pro Plus | 1.90 s | 6.19 s | 0.31 |
+| CPU | V2 Pro Plus | 7.74 s | 6.34 s | 1.22 |
+
+**显卡上两套底模速度只差约一成**，V2 Pro Plus 并没有慢多少；CPU 档比显卡慢 4–5 倍。CPU 档选不了 V5 turbo：我们没在 CPU 上实测过它，社区反馈是慢到出不来，代码里直接挡掉。没有 NVIDIA 但有官方支持的 AMD 显卡时走 ROCm 档（同样是 V5 turbo）：RX 9070 XT / 9070 GRE / 9070、AI PRO R9700、RX 9060 XT、RX 7900 XTX / 7900 XT / 7900 GRE、PRO W7900 / W7800、RX 7800 XT / 7700 XT / 7700、PRO W7700（四套架构：gfx1201 / gfx1200 / gfx1100 / gfx1101；板卡厂系列名如「大地之神」不影响识别，按芯片名匹配），要求 Windows 11、Adrenalin 26.2.2 或更新。ROCm 的内核库文件名会超过 Windows 260 字符的路径上限，所以这一档要先自己开启长路径（系统设置里改注册表 `LongPathsEnabled=1`，插件不会替你改），或者把 Coopanion 装在很短的路径下。其余显卡（含 RX 6000 系列、RX 7600 系、Intel）自动走 CPU 档（v2ProPlus），能出声但慢一些。
 
 **会联网吗？会泄露隐私吗？**
 联网只发生在**下载**运行时与模型的时候；之后所有语音合成都在你电脑上完成，**不上传任何录音与文本**。
