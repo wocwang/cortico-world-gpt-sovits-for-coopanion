@@ -24,7 +24,7 @@ import { detectGpus, fallbackToCpu, pickTier, type AmdProbe, type GpuVendor } fr
 import { configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, RVC_INDEX_MAX, RVC_INDEX_MIN, RVC_PROTECT_MAX, RVC_PROTECT_MIN, RVC_TIMEOUT_MAX, RVC_TIMEOUT_MIN, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
 import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, selectedCustomVoice, UNNAMED_VOICE, validateCustomVoice, type CustomVoice } from './custom-voice.ts';
 import { startHttpTts, SING_MARK, type HttpTtsHandle, type SynthResult, type TtsJob } from './http-tts.ts';
-import { channelWords, languageWords, panelText, shareWords, stateWords } from './i18n.ts';
+import { channelWords, languageWords, panelText, qqbotWords, shareWords, stateWords } from './i18n.ts';
 import { isLinkEntry, isRuntimeDir, removeTreeSafely, RuntimeJob, WeightsJob, type JobState } from './install.ts';
 import { Player, applyGain, listOutputDevices } from './player.ts';
 import { RvcLink, type RvcProbe } from './rvc-link.ts';
@@ -480,6 +480,7 @@ export class GptSovitsWorld implements World {
       'sovits.language': `${lang.name}——${lang.rule}`,
       'sovits.share': shareWords(this.cfg.promptLanguage, this.cfg.shareAudio),
       'sovits.channel': channelWords(this.cfg.promptLanguage, this.cfg.channelVoice),
+      'sovits.qqbot': qqbotWords(this.cfg.promptLanguage, this.cfg.qqbotVoice),
     };
   }
 
@@ -500,13 +501,13 @@ export class GptSovitsWorld implements World {
     // 补一句附件用法：模型才知道把回执里的 [blob …] 句柄填给别的发送工具。
     // 开了「交给其他插件」时整句都回附件；没开时 silent: true 也回，够旧 QQ 插件取语音条。
     const share = this.cfg.shareAudio
-      ? " The result also carries the whole line as an audio attachment: pass that [blob …] handle to another plugin's send tool (the QQ voice parameter, for example) to deliver the same audio. Pass silent: true for a line meant for such a channel, so it is not played on this computer."
+      ? " The result also carries the whole line as an audio attachment: pass that [blob …] handle to another plugin's send tool (the QQ Bot plugin's qqbot_send_message voice parameter, or the old plugin's qq_draft voice) to deliver the same audio. Pass silent: true for a line meant for such a channel, so it is not played on this computer."
       : this.cfg.channelVoice
         ? ''
-        : " A line spoken with silent: true also comes back as an audio attachment: hand its [blob …] handle to a plugin's voice parameter (the old QQ plugin's qq_draft, for example).";
-    // 开着「其他渠道的语音交给对方插件」时补一句渠道规则：QQ 这类渠道别用本工具，改在对方发送工具里开语音开关。
+        : " A line spoken with silent: true also comes back as an audio attachment: hand its [blob …] handle to a plugin's voice parameter (qqbot_send_message or qq_draft, for example).";
+    // 旧 QQ 插件（qq-final / NapCat）自己合成语音：走 qq_send 时别调本工具，改传 voice=true。
     const channel = this.cfg.channelVoice
-      ? " On a channel whose plugin synthesizes voice itself (QQ), do not call this tool: pass voice=true to that plugin\u0027s send tool (qq_send) instead, and it speaks with this same voice. That still holds when the person asks for voice or asks you to try again — do not skip it because you once said that channel was broken."
+      ? " When you reply through the old QQ plugin's qq_send, do not call this tool: pass voice=true in that same qq_send call instead, and it speaks with this same voice through the local voice API. This rule does not apply to qqbot_send_message — follow the QQ Bot instruction instead. That still holds when the person asks for voice or asks you to try again — do not skip it because you once said that channel was broken."
       : '';
     return [
       { ...speak!, description: `${speak!.description} Speech language: ${lang.name} — ${lang.rule}${share}${channel}`, handler: (args) => this.speak(String(args.text ?? ''), args.silent === true) },
@@ -835,6 +836,8 @@ export class GptSovitsWorld implements World {
     if (this.cfg.tier === 'cuda' && !gpus.nvidia) this.log.warn('配置的是显卡档，但没检测到 NVIDIA 显卡', { gpu: this.gpu });
     if (this.cfg.tier === 'rocm' && gpus.amd.kind !== 'supported') this.log.warn('配置的是 ROCm 档，但没检测到官方支持的 AMD 显卡', { gpu: this.gpu, amd: gpus.amd });
     if (this.cfg.voiceModel === 'v5turbo' && this.tier() === 'cpu') this.log.warn('CPU 档跑不动 V5 turbo，已按 V2 Pro Plus 运行', { voiceModel: this.cfg.voiceModel });
+    // 旧 QQ 插件（qq-final / NapCat）是来拉 9880 的：接口没开就发不出语音，启动时说一声。
+    if (this.cfg.channelVoice && !this.cfg.httpApi) this.log.warn('「其他渠道的语音交给对方插件」开着，但「开放本地语音接口」没开，旧 QQ 插件取不到音频', { httpPort: this.cfg.httpPort });
     // 启动即把当前音色的音频/台本镜像进配置字段：配置页一打开就能看到实际用的文件。
     this.settlePreset();
     this.appliedTextLang = null;

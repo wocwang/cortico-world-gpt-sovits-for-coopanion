@@ -67,16 +67,30 @@
 
 ### 和 QQ 一起用（把桌宠的声音发到 QQ）
 
-支持两类 QQ 插件，**二选一，别同时开**（都连 NapCat 会让同一条消息被处理两次）：
+三类 QQ 插件，按接入方式分两组：
 
-| QQ 插件 | 怎么把声音给它 | 说明 |
-|---|---|---|
-| **`cortico-world-qq-final`**（新，推荐） | 它自己合成语音，所以让它**来取**：打开本插件的「开放本地语音接口」，把它的「语音模型网址」指向本机 | 语音同样是星落落/当前音色的声音；本机不会重复播放 |
-| `cortico-world-qq`（老） | 让 bot 用 `sovits_speak(silent: true)` 念一句，回执会带回 `[blob …]` 句柄，填进 `qq_draft` 的 voice 即可；也可继续用「把整句语音交给其他插件」 | 现在不依赖开关也能发语音条；本机外放与 QQ 语音不会重复 |
+| QQ 插件 | 接入方式 | 怎么把声音给它 | 本插件要开什么 |
+|---|---|---|---|
+| **`cortico-world-qq-final`**（NapCat，推荐） | NapCat / OneBot | 它自己合成语音：把它的「语音模型网址」指向本机 | 「开放本地语音接口」+「其他渠道的语音交给对方插件」 |
+| **`cortico-world-qqbot`**（官方 QQ Bot） | QQ 官方 Bot API | 它只接收音频句柄：bot 先静音合成，再把 `[blob …]` 填进 `qqbot_send_message` 的 `voice` | 「QQ 机器人语音条」 |
+| `cortico-world-qq`（老） | NapCat / OneBot | 让 bot 用 `sovits_speak(silent: true)` 念一句，回执带回 `[blob …]` 句柄，填进 `qq_draft` 的 voice | 「把整句语音交给其他插件」（不开时 `silent: true` 也回句柄） |
+
+- `qq-final` 与 `qq` **都连 NapCat**：这两个二选一（同一条消息会被处理两次）。
+- `qqbot` 走官方 Bot API，是另一个账号体系，**可以和 NapCat 那条同时开**；本插件里两个开关也互不冲突——提示词按回复工具分开（`qq_send` 走 `voice=true`，`qqbot_send_message` 走句柄）。
+- 三条路都支持「文字 + 语音条」在同一条消息里发出，发往 QQ 的那句不在本机外放。
+
+**接 QQ Bot（`cortico-world-qqbot`）的完整步骤：**
+
+1. **装 FFmpeg**：QQ Bot 插件用它把 WAV 转成 SILK。`ffmpeg` 在 PATH 里就行；不在 PATH 就在 QQ Bot 配置的 `worlds.qq-official.ffmpegPath` 里填绝对路径。
+2. 本插件控制台 →「与其他插件联动」→ 打开**「QQ 机器人语音条」**。**不用**开「开放本地语音接口」——qqbot 只接受宿主句柄或公网 URL，`127.0.0.1:9880` 它取不到。
+3. 重启 Coopanion（改的是环境提示词，重启后新对话生效）。
+4. 在 QQ 里让它用语音回一句：它先 `sovits_speak(silent: true)` 静音合成，再把回执里的 `[blob …]` 填进 `qqbot_send_message` 的 `voice`，文字与语音条在同一条消息里到达，本机不出声。
+
+QQ Bot 这条的限制：语音条只在**私聊与群**可用，频道/频道私信只收图片；单条语音上限 **20 MiB**（常见台词 1–3 MB，不会撞）；整句 **45 秒**没合成完时回执不带附件，只会发文字。
 
 **版本要求**：qq-final **0.6.29 起**已删除语音语义判定模型，**不需要任何密钥**——是否发语音由主模型在调 `qq_send` 时自己带 `voice=true` 决定。0.6.24 及更早的版本仍要自己配判定密钥（本插件不再代填）。
 
-**接新插件（qq-final）的完整步骤：**
+**接 qq-final 的完整步骤：**
 
 1. 本插件控制台 →「与其他插件联动」：打开**「开放本地语音接口」**（端口默认 9880，可改），再打开**「其他渠道的语音交给对方插件」**（这样 QQ 的回复不会又在本机念一遍；本机对话页照常出声）。
 2. 同一页往下有**「QQ 语音对接」**：会按当前端口和音色生成要填的值，可直接点**「一键写入 QQ 配置」**（先备份 `config.json`，然后写进 QQ 插件；重启 Coopanion 生效）；也可以点「复制全部」照着填到 qq-final 的「QQ · 语音收发」：
@@ -176,11 +190,12 @@ runtime/bin/python3 -m pip install -r requirements.txt
 
 | 配置 | 默认 | 说明 |
 |---|---|---|
-| `httpApi` | false | 开放本地语音接口（只监听 127.0.0.1）：新 QQ 插件把「语音模型网址」指过来就能用这个声音合成并发到 QQ |
+| `httpApi` | false | 开放本地语音接口（只监听 127.0.0.1）：qq-final / NapCat 把「语音模型网址」指过来就能用这个声音合成并发到 QQ。**qqbot 不吃这个地址** |
 | `httpPort` | 9880 | 语音接口端口；与别的程序冲突时换一个 |
 | `httpToken` | 空 | 语音接口令牌。留空不校验；填了以后对方要带 `Authorization: Bearer` 或 `?token=` |
-| `channelVoice` | false | 由对方插件自己合成语音的渠道（如 QQ）：开启后提示词让 bot 不为这些回复调用 `sovits_speak`，本机对话页照常出声 |
-| `shareAudio` | false | 老 QQ 插件那条路：把整句语音作为 `sovits_speak` 回执的附件交出去，模型把 `[blob …]` 句柄填给 `qq_draft`。开启后这句要等整句合成完才回执，气泡会晚一点出现；只给 QQ 发语音条时不用开，`silent: true` 也会回句柄 |
+| `channelVoice` | false | 旧 QQ 插件（qq-final / NapCat）那条路：开启后提示词让 bot 走 `qq_send` 时不要调 `sovits_speak`，改传 `voice=true`，由对方来取 9880 |
+| `qqbotVoice` | false | QQ Bot 插件（qqbot）那条路：开启后提示词让 bot 先 `sovits_speak(silent: true)`，再把 `[blob …]` 填进 `qqbot_send_message` 的 `voice`。与 `channelVoice` 可同时开 |
+| `shareAudio` | false | 把整句语音作为 `sovits_speak` 回执的附件交出去（qqbot / `qq_draft` 都吃这个句柄）。开启后这句要等整句合成完才回执，气泡会晚一点出现；只发 QQ 语音条时不用开，`silent: true` 也会回句柄 |
 
 **④ 推理服务**
 

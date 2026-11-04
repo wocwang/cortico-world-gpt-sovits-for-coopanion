@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.8
+
+- **QQ Bot（`cortico-world-qqbot`）的「文字 + 语音条」**：新增开关「QQ 机器人语音条」（`qqbotVoice`，默认关）。
+  打开后提示词规定：在 QQ 里发语音时先 `sovits_speak` 带 `silent: true` 静音合成，再把回执里的 `[blob …]`
+  填进 `qqbot_send_message` 的 `voice`，文字与语音条同一条消息发出，本机不出声。qqbot 只接受宿主句柄或
+  公网 URL，**本机 9880 它取不到**，所以这条路只走附件句柄；需要 FFmpeg（qqbot 侧把 WAV 转 SILK），
+  语音仅在私聊与群可用，单条上限 20 MiB。
+- **NapCat 那条路保持不变、文案收紧**：`channelVoice` 只对旧 QQ 插件（`cortico-world-qq-final` /
+  NapCat）的 `qq_send` 生效；它和 `qqbotVoice` **可以同时开**，两条规则按回复工具名分开，不再互相覆盖。
+  `channelVoice` 开着但「开放本地语音接口」没开时，启动日志会提示一次。
+- **「与其他插件联动」页改成可折叠卡片**：每个插件一张卡（新版 QQ、QQ Bot、旧版 QQ、DiffSinger、RVC），
+  折叠时右侧一行摘要（`接口 已开启 · 端口 9880 · 令牌 未设置`、`语音条 已开启`、`已开启 · http://127.0.0.1:9881`），
+  展开后是该插件的选项与对接说明。折叠状态交给宿主的 `foldSheet`（存面板 memo，与听搭子设置页同一套原语），
+  摘要随保存即时刷新；旧宿主没有这个原语时自动退回普通卡。
+- README 增加两条通道的步骤、对比表与限制（FFmpeg、20 MiB、频道只收图片）。
+
 ## 0.6.7
 
 - **ROCm 档「中文里夹英文」整句失败**（市场评论区 @ANGOSUNG，0.6.3–0.6.6 均可复现）：0.6.3 的补齐把语料下到数据目录、

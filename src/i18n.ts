@@ -134,6 +134,15 @@ const PANEL = {
     oldQqDesc: 'cortico-world-qq 走附件句柄；只需打开「把整句语音交给其他插件」。',
     rvcTitle: '出口变声（RVC）',
     rvcDesc: '合成完把音频交给本机 RVC 插件再过一遍，再交给其他插件。只影响给其他插件的音频；RVC 不可用、超时或报错时原样返回，不会断链路。',
+    qqbotTitle: 'QQ 机器人语音条',
+    qqbotDesc: 'cortico-world-qqbot 用音频句柄：bot 先静音合成，再把 [blob …] 填进 qqbot_send_message 的 voice。需要 FFmpeg；语音只在私聊与群可用。',
+    singTitle: 'DiffSinger 唱歌',
+    singDesc: 'cortico-world-singer-for-coopanion 的地址；正文以【唱】开头的句子会转给它唱。',
+    sumOn: '已开启',
+    sumOff: '未开启',
+    sumApi: (on: boolean, port: string): string => `接口 ${on ? '已开启' : '未开启'} · 端口 ${port}`,
+    sumToken: (set: boolean): string => `令牌 ${set ? '已设置' : '未设置'}`,
+    sumValue: (value: string): string => value.trim() || '未设置',
     rvcEnabled: '启用出口变声',
     rvcEndpoint: 'RVC 端点',
     rvcTimeout: '超时（毫秒）',
@@ -297,6 +306,15 @@ const PANEL = {
     oldQqDesc: 'cortico-world-qq takes an attachment handle; just enable "hand the line to other plugins".',
     rvcTitle: 'Voice conversion (RVC)',
     rvcDesc: 'Hands every finished line to the local RVC plugin once before it goes to other plugins. Only affects audio for other plugins; when RVC is off, slow or failing, the original audio is returned and the chain never breaks.',
+    qqbotTitle: 'QQ Bot voice bars',
+    qqbotDesc: 'cortico-world-qqbot takes an audio handle: synthesize silently, then put the [blob …] handle into qqbot_send_message voice. Needs FFmpeg; voice bars work in direct chats and groups only.',
+    singTitle: 'DiffSinger singing',
+    singDesc: 'Endpoint of cortico-world-singer-for-coopanion; lines starting with 【唱】 are handed to it.',
+    sumOn: 'On',
+    sumOff: 'Off',
+    sumApi: (on: boolean, port: string): string => `API ${on ? 'on' : 'off'} · port ${port}`,
+    sumToken: (set: boolean): string => `token ${set ? 'set' : 'unset'}`,
+    sumValue: (value: string): string => value.trim() || 'not set',
     rvcEnabled: 'Enable voice conversion',
     rvcEndpoint: 'RVC endpoint',
     rvcTimeout: 'Timeout (ms)',
@@ -357,8 +375,8 @@ export const stateWords = (language: 'zh' | 'en'): StateWords => STATE[language]
  * 没开就留空——那一行提示词会变成空行，不影响其余内容。
  */
 const SHARE = {
-  zh: '想把同一句话发到 QQ 等消息渠道时，用这次 `sovits_speak` 回执里的 `[blob …]` 音频句柄作为发送工具的音频来源（例如 `qq_draft` 的 voice 参数），不要再合成一遍；这一句是发给那种渠道、不想在对方电脑外放时，给这次 `sovits_speak` 带上 `silent: true`。带 `【唱】` 的歌词同理：唱歌的回执也带音频句柄，QQ 里照样发语音条。',
-  en: 'To send the same line to a chat channel such as QQ, use the audio `[blob …]` handle from this `sovits_speak` result as the audio for that send tool (the `qq_draft` voice parameter, for example) instead of synthesizing it again; when the line is meant for such a channel and should not be played on this computer, pass `silent: true` to that `sovits_speak`. A 【唱】 lyric works the same way: a sung line also comes back with an audio handle, so it can be sent as a QQ voice message.',
+  zh: '想把同一句话发到 QQ 等消息渠道时，用这次 `sovits_speak` 回执里的 `[blob …]` 音频句柄作为发送工具的音频来源（`qqbot_send_message` 的 voice、`qq_draft` 的 voice 都是这个用法），不要再合成一遍；这一句是发给那种渠道、不想在对方电脑外放时，给这次 `sovits_speak` 带上 `silent: true`。带 `【唱】` 的歌词同理：唱歌的回执也带音频句柄，QQ 里照样发语音条。',
+  en: 'To send the same line to a chat channel such as QQ, use the audio `[blob …]` handle from this `sovits_speak` result as the audio for that send tool (the `qqbot_send_message` or `qq_draft` voice parameter) instead of synthesizing it again; when the line is meant for such a channel and should not be played on this computer, pass `silent: true` to that `sovits_speak`. A 【唱】 lyric works the same way: a sung line also comes back with an audio handle, so it can be sent as a QQ voice message.',
 };
 
 export const shareWords = (language: 'zh' | 'en', on: boolean): string => (on ? SHARE[language] : '');
@@ -368,11 +386,22 @@ export const shareWords = (language: 'zh' | 'en', on: boolean): string => (on ? 
  * （由对方的插件用本插件的声音合成发出去），自己只管本机对话页。
  */
 const CHANNEL = {
-  zh: '**这条覆盖上面的 `sovits_speak` 规则**：在由对方插件自己合成语音的渠道（如 QQ）回复时，不要调用 `sovits_speak`；本机对话页里才用它念出来。要让这句话在 QQ 里以语音发出，就在对方发消息的工具里打开语音开关——qq-final 是给 `qq_send` 传 `voice=true`，文字照常由同一个调用发出。对方要求语音、朗读、用声音说，或用「再来」「听不清」这类话指向刚才那条语音时，就把 `voice=true` 打开。**只看当下这一句：不要拿你以前说过的「这条通道坏了 / 恢复不了」当依据——那是旧版配置造成的误判，对方要语音就先试一次，真失败再如实说。**',
-  en: '**This overrides the `sovits_speak` rule above**: on a channel whose plugin synthesizes voice itself (QQ, for example) do not call `sovits_speak`; reserve it for the person on this computer. To send a line as voice there, turn on the voice switch in that plugin\u0027s send tool — for qq-final pass `voice=true` to `qq_send` — and the text still goes out in the same call. Turn it on when they ask for voice, reading it aloud, or hearing it, and when words like "again" or "I can\u0027t hear it" point at the previous spoken line. **Decide from this one message: never lean on your own earlier claims that this channel is broken — that was an old misconfiguration, so try again first and report only a failure that actually happens now.**',
+  zh: '**只对旧 QQ 插件（cortico-world-qq-final / NapCat）的 `qq_send` 生效**：走 `qq_send` 回复时不要调用 `sovits_speak`（它只服务本机对话页）；要让这句话在 QQ 里以语音发出，就给同一次 `qq_send` 传 `voice=true`，文字照常由这个调用发出，由对方插件通过本机语音接口合成。**如果这条回复走的是 `qqbot_send_message`，按下面 QQ Bot 的规则办，这一条不适用。** 对方要求语音、朗读、用声音说，或用「再来」「听不清」这类话指向刚才那条语音时，就把 `voice=true` 打开。**只看当下这一句：不要拿你以前说过的「这条通道坏了 / 恢复不了」当依据——那是旧版配置造成的误判，对方要语音就先试一次，真失败再如实说。**',
+  en: '**Only for the old QQ plugin (cortico-world-qq-final / NapCat) and its `qq_send`**: when replying through `qq_send` do not call `sovits_speak` (it serves the person on this computer); to send a line as voice there, pass `voice=true` in that same `qq_send` call, with the text going out in the same call, and let that plugin synthesize it through the local voice API. **If the reply goes through `qqbot_send_message`, follow the QQ Bot rule below instead; this one does not apply.** Turn it on when they ask for voice, reading it aloud, or hearing it, and when words like "again" or "I can\u0027t hear it" point at the previous spoken line. **Decide from this one message: never lean on your own earlier claims that this channel is broken — that was an old misconfiguration, so try again first and report only a failure that actually happens now.**',
 };
 
 export const channelWords = (language: 'zh' | 'en', on: boolean): string => (on ? CHANNEL[language] : '');
+
+/**
+ * `{{sovits.qqbot}}` 的取值：开着「QQ 机器人语音条」时，规定走 `qqbot_send_message` 的那条路
+ * 必须「静音合成 → 句柄交给 voice」。与 `channelWords` 并存，两者按回复工具名分开，不互相覆盖。
+ */
+const QQBOT = {
+  zh: '**只对 QQ Bot 插件（cortico-world-qqbot）的 `qqbot_send_message` 生效**：要在 QQ 里发语音条（文字与语音同一条）时，先调用 `sovits_speak` 并带 `silent: true` 静音合成（本机不出声），再把回执里的 `[blob …]` 音频句柄原样填进同一次 `qqbot_send_message` 的 `voice`，`text` 写要发的那段话、`to` 沿用刚收到的那条消息地址；**不要自己编句柄，也不要重新合成一遍**。语音条只在私聊与群聊可用，频道与频道私信只收图片——那里不要填 `voice`。只有对方明确只要声音、不要文字时，才用 `qqbot_send_media` 的 `blob` 加 `fileType: 3`。',
+  en: '**Only for the QQ Bot plugin (cortico-world-qqbot) and its `qqbot_send_message`**: to send a QQ voice bar (text and voice in one message), first call `sovits_speak` with `silent: true` so nothing plays here, then pass the `[blob …]` audio handle from that result straight into `voice` of the same `qqbot_send_message` call, with the words in `text` and the address in `to` copied from the message you are replying to. **Never invent a handle and never synthesize the line twice.** Voice bars work in direct chats and groups only; channels and channel DMs accept images only, so do not pass `voice` there. Use `qqbot_send_media` with `blob` and `fileType: 3` only when they explicitly want sound without text.',
+};
+
+export const qqbotWords = (language: 'zh' | 'en', on: boolean): string => (on ? QQBOT[language] : '');
 
 /**
  * `{{sovits.language}}` 与语言切换事件的取值：告诉 bot 这句台词该怎么写。

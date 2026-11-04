@@ -10,6 +10,8 @@
 
 {{sovits.share}}
 
+{{sovits.qqbot}}
+
 {{sovits.channel}}
 
 对方让你安静，或者你要长时间专心做事时，调用 `sovits_hush` 停下声音;气泡不受影响。

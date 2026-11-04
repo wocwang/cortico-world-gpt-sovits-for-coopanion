@@ -10,6 +10,8 @@ With the speech language on auto or Chinese, the `sovits_speak` text is a verbat
 
 {{sovits.share}}
 
+{{sovits.qqbot}}
+
 {{sovits.channel}}
 
 When the person asks for quiet, or before a long stretch of focused work, call `sovits_hush` to stop the voice; bubbles are not affected.

@@ -23,7 +23,7 @@ describe('切句方法', () => {
 });
 import { applyGain, upmix } from '../src/player.ts';
 import { wavBytes } from '../src/wav.ts';
-import { languageWords, shareWords } from '../src/i18n.ts';
+import { channelWords, languageWords, qqbotWords, shareWords } from '../src/i18n.ts';
 import { SOVITS_TOOL_DECLS } from '../src/tools.ts';
 import { presetRefId } from '../src/voices.ts';
 
@@ -256,8 +256,44 @@ describe('shareWords', () => {
   it('开着时给出句柄与 silent 的用法，关着时留空', () => {
     expect(shareWords('zh', true)).toContain('silent: true');
     expect(shareWords('zh', true)).toContain('[blob');
+    expect(shareWords('zh', true)).toContain('qqbot_send_message');
     expect(shareWords('en', true)).toContain('silent: true');
+    expect(shareWords('en', true)).toContain('qqbot_send_message');
     expect(shareWords('zh', false)).toBe('');
     expect(shareWords('en', false)).toBe('');
+  });
+});
+
+describe('qqbotWords', () => {
+  it('开着时点名 qqbot_send_message 的 voice，并要求先静音合成', () => {
+    expect(qqbotWords('zh', true)).toContain('qqbot_send_message');
+    expect(qqbotWords('zh', true)).toContain('silent: true');
+    expect(qqbotWords('zh', true)).toContain('voice');
+    expect(qqbotWords('en', true)).toContain('qqbot_send_message');
+    expect(qqbotWords('en', true)).toContain('silent: true');
+  });
+
+  it('关着时留空，不往提示词里塞无关规则', () => {
+    expect(qqbotWords('zh', false)).toBe('');
+    expect(qqbotWords('en', false)).toBe('');
+  });
+
+  it('与 channelWords 各说各的工具，不互相覆盖', () => {
+    expect(channelWords('zh', true)).toContain('qq_send');
+    expect(channelWords('zh', true)).not.toContain('覆盖');
+    expect(qqbotWords('zh', true)).not.toContain('qq_draft');
+  });
+
+  it('两份提示词模板都留了占位符', () => {
+    const zh = readFileSync(new URL('../src/ENV_PROMPT.md', import.meta.url), 'utf8');
+    const en = readFileSync(new URL('../src/ENV_PROMPT.en.md', import.meta.url), 'utf8');
+    expect(zh).toContain('{{sovits.qqbot}}');
+    expect(en).toContain('{{sovits.qqbot}}');
+  });
+
+  it('工具描述提到两条 QQ 通道', () => {
+    const speak = SOVITS_TOOL_DECLS.find((t) => t.name === 'sovits_speak')!;
+    expect(speak.description).toContain('qqbot_send_message');
+    expect(speak.description).toContain('qq_send');
   });
 });

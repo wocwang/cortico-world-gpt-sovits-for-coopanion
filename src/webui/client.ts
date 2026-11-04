@@ -488,7 +488,7 @@ type QqGuide = {
 };
 
 /** 「与其他插件联动」页底部的 QQ 对接说明：展示要填的值 + 一键写入。 */
-async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<void> {
+async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement, onChanged?: () => void): Promise<void> {
   const { ui } = ctx;
   const t = panelText(ctx.language);
   const sec = ui.section(t.qqTitle, t.qqHint);
@@ -518,6 +518,7 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
           ui.toast(t.qqWriteOk);
           msg.textContent = `${t.qqWriteOk}（${res.path}）`;
           await load();
+          onChanged?.();
         } catch (err) {
           msg.textContent = errText(err);
           msg.classList.add('bad');
@@ -552,7 +553,7 @@ async function mountQqGuide(ctx: WebUiPanelContext, host: HTMLElement): Promise<
  * 检测只读对方 `/health`；一键写入把卡片上的值一次写进 `worlds.gpt-sovits.rvc`；
  * 试听走 `rvcTest`：整条「合成 → RVC → WAV」都真跑，但只在浏览器里播放。
  */
-async function mountRvcCard(ctx: WebUiPanelContext, host: HTMLElement, values: Record<string, unknown>): Promise<void> {
+async function mountRvcCard(ctx: WebUiPanelContext, host: HTMLElement, values: Record<string, unknown>, onWrite?: (next: { enabled: boolean; endpoint: string }) => void): Promise<void> {
   const { ui } = ctx;
   const t = panelText(ctx.language);
   const msg = ui.msgline();
@@ -626,6 +627,7 @@ async function mountRvcCard(ctx: WebUiPanelContext, host: HTMLElement, values: R
         indexRate: Number(indexRate.value),
       }]);
       ui.toast(t.rvcWriteOk);
+      onWrite?.({ enabled: enabled.checked, endpoint: endpoint.value.trim() });
       await probe();
     } catch (err) {
       msg.textContent = errText(err);
@@ -660,13 +662,13 @@ async function mountRvcCard(ctx: WebUiPanelContext, host: HTMLElement, values: R
 /**
  * 渲染一个配置字段；保存走面板的 `setConfigValue`，和原配置页是同一份值。
  */
-function mountConfigField(ctx: WebUiPanelContext, host: HTMLElement, f: ConfigField, value: unknown): void {
+function mountConfigField(ctx: WebUiPanelContext, host: HTMLElement, f: ConfigField, value: unknown, afterSave?: (next: unknown) => void): void {
   const { ui } = ctx;
   const t = panelText(ctx.language);
   let pending: { dispose(): void } | null = null;
   const save = (next: unknown) => {
     void ctx.invoke('setConfigValue', [f.key, next]).then(
-      () => ui.toast(t.saved),
+      () => { ui.toast(t.saved); afterSave?.(next); },
       (err: unknown) => ui.toast(`${t.saveFailed}: ${errText(err)}`, 'bad'),
     );
   };
@@ -752,7 +754,13 @@ function configPanel(group: string): WebUiPanel {
   };
 }
 
-/** 「与其他插件联动」：按插件拆成子卡片（中文大标题 + 英文小标题），各自只放相关选项。 */
+type LinkCard = { el: HTMLElement; body: HTMLElement; note: HTMLElement };
+
+/**
+ * 「与其他插件联动」：按插件拆成可折叠卡片（中文大标题 + 英文小标题），折叠时右侧一行摘要。
+ * 折叠状态与展开/收起交给宿主的 `ui.foldSheet`（存面板 memo，与听搭子设置页同一套原语）；
+ * 老宿主没有这个原语时退回普通卡，不白屏。摘要在每次保存成功后重算，不整页重绘。
+ */
 function linkPanel(): WebUiPanel {
   return {
     async mount(ctx: WebUiPanelContext) {
@@ -769,21 +777,90 @@ function linkPanel(): WebUiPanel {
         ctx.root.append(ui.msgline(errText((resp as unknown as { error?: string })?.error ?? 'config unavailable'), true));
         return;
       }
-      const fields = new Map(resp.properties.map((f) => [f.key, f]));
-      const mount = (host: HTMLElement, suffix: string): void => {
-        const f = [...fields.entries()].find(([key]) => key.endsWith(suffix))?.[1];
-        if (f) mountConfigField(ctx, host, f, resp.values[f.key]);
+
+      const values: Record<string, unknown> = { ...resp.values };
+      const value = (suffix: string): unknown => {
+        const key = resp.properties.find((f) => f.key.endsWith(suffix))?.key;
+        return key === undefined ? undefined : values[key];
       };
-      const fresh = ui.sheet({ title: t.newQqTitle, en: 'cortico-world-qq-final', desc: t.newQqDesc });
+      const text = (suffix: string, fallback = ''): string => {
+        const v = value(suffix);
+        return v == null || v === '' ? fallback : String(v);
+      };
+
+      const foldSheet = (ui as unknown as {
+        foldSheet?: (id: string, opts: { title: string; en?: string; desc?: string; defaultOpen?: boolean }) => LinkCard;
+      }).foldSheet;
+      const card = (id: string, title: string, en: string, desc: string): LinkCard => {
+        if (typeof foldSheet === 'function') {
+          const s = foldSheet.call(ui, id, { title, en, desc, defaultOpen: false });
+          return { el: s.el, body: s.body, note: s.note };
+        }
+        const s = ui.sheet({ title, en, desc });
+        return { el: s.el, body: s.body, note: s.note };
+      };
+
+      const notes: Array<() => void> = [];
+      const refresh = (): void => { for (const draw of notes) draw(); };
+      const mount = (host: HTMLElement, suffix: string): void => {
+        const f = resp.properties.find((item) => item.key.endsWith(suffix));
+        if (!f) return;
+        mountConfigField(ctx, host, f, values[f.key], (next) => {
+          values[f.key] = next;
+          refresh();
+        });
+      };
+      // 一键写入会绕过上面的逐字段保存：重新拉一次配置再刷新摘要。
+      const reload = async (): Promise<void> => {
+        try {
+          const next = await ctx.invoke<ConfigResp>('config', ['world:gpt-sovits:link', '', false]);
+          if (next && Array.isArray(next.properties)) for (const [k, v] of Object.entries(next.values)) values[k] = v;
+        } catch {
+          // 拉不到就保留旧值，摘要不闪。
+        }
+        refresh();
+      };
+
+      // 新版 QQ 插件（cortico-world-qq-final / NapCat）：本机语音接口 + 渠道语音 + 对接指南。
+      const fresh = card('link-qq-final', t.newQqTitle, 'cortico-world-qq-final', t.newQqDesc);
+      notes.push(() => {
+        fresh.note.textContent = `${t.sumApi(value('.httpApi') === true, text('.httpPort', '9880'))} · ${t.sumToken(text('.httpToken') !== '')}`;
+      });
       ctx.root.append(fresh.el);
       for (const suffix of ['.httpApi', '.httpPort', '.httpToken', '.channelVoice']) mount(fresh.body, suffix);
-      await mountQqGuide(ctx, fresh.body);
-      const legacy = ui.sheet({ title: t.oldQqTitle, en: 'cortico-world-qq', desc: t.oldQqDesc });
+      await mountQqGuide(ctx, fresh.body, () => void reload());
+
+      // QQ Bot 插件（cortico-world-qqbot）：音频句柄 + FFmpeg。
+      const bot = card('link-qqbot', t.qqbotTitle, 'cortico-world-qqbot', t.qqbotDesc);
+      notes.push(() => { bot.note.textContent = value('.qqbotVoice') === true ? t.sumOn : t.sumOff; });
+      ctx.root.append(bot.el);
+      mount(bot.body, '.qqbotVoice');
+
+      // 旧版 QQ 插件（cortico-world-qq）：附件句柄。
+      const legacy = card('link-old-qq', t.oldQqTitle, 'cortico-world-qq', t.oldQqDesc);
+      notes.push(() => { legacy.note.textContent = value('.shareAudio') === true ? t.sumOn : t.sumOff; });
       ctx.root.append(legacy.el);
       mount(legacy.body, '.shareAudio');
-      const rvc = ui.sheet({ title: t.rvcTitle, en: 'cortico-world-rvc-for-coopanion', desc: t.rvcDesc });
+
+      // DiffSinger 唱歌：地址。
+      const sing = card('link-sing', t.singTitle, 'cortico-world-singer-for-coopanion', t.singDesc);
+      notes.push(() => { sing.note.textContent = t.sumValue(text('.singUrl')); });
+      ctx.root.append(sing.el);
+      mount(sing.body, '.singUrl');
+
+      // RVC 出口变声：卡内自己写配置，写入成功后按它回传的值刷新摘要。
+      const rvcState = { enabled: value('.rvc.enabled') === true, endpoint: text('.rvc.endpoint') };
+      const rvc = card('link-rvc', t.rvcTitle, 'cortico-world-rvc-for-coopanion', t.rvcDesc);
+      notes.push(() => {
+        rvc.note.textContent = rvcState.enabled ? `${t.sumOn} · ${rvcState.endpoint}` : t.sumOff;
+      });
       ctx.root.append(rvc.el);
-      await mountRvcCard(ctx, rvc.body, resp.values);
+      await mountRvcCard(ctx, rvc.body, values, (next) => {
+        Object.assign(rvcState, next);
+        refresh();
+      });
+
+      refresh();
     },
   };
 }
