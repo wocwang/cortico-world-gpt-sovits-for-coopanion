@@ -76,6 +76,7 @@
 | 0.6.6 | macOS 正式放开（`os` 含 `darwin`）；9880 响应头带首块/合成/时长；简介改短突出 AMD；`analyze-noise.py` 支持流式 WAV | **已发布**（npm latest，`e3d3d94` 已推送）；#5 已请对方复验正式版；PR #10 已关闭；市场同步 issue #691 |
 | 0.6.7 | ROCm NLTK 语料同步进运行时（上游硬赋值 `NLTK_DATA`，只补数据目录无效）；AMD 名单补全 7900 XT/GRE、W7800、7800 XT、7700 XT、W7700、9070 GRE + `(TM)`/空格归一化 | **已发布**（npm latest，`485ab43` 已推送）；市场讨论 #228 已回 @ANGOSUNG；市场同步 issue #709 |
 | 0.6.8 | QQ Bot（qqbot）「文字+语音条」：`qqbotVoice` 开关，`sovits_speak(silent)` → `[blob …]` → `qqbot_send_message.voice`；旧插件走 9880 不变；两个开关不再互斥，按回复工具名分规则；补「c2c OpenID 不能喂给 qq_send」地址规则；联动页改五张 `ui.foldSheet` 折叠卡 | **已发布**（npm latest，`ed2d3b9` 已推送）；本机 0.6.8 验证通过（qqbot 语音条实测收到）；市场同步 issue #715；讨论 #228 已发说明 |
+| 0.6.9 | 配置页「模型版本」「音频后端」恢复下拉（`panelOptionsFor` 补两个 case 并抽成导出函数）；`normalizeVoiceModel` 把旧手填显示名归一回 key，未知回 auto + 启动 warn；`WeightsJob` 空表兜底；文案删掉底模音色主观描述，README 补实测速度表（GPU 1.72/1.90 s，CPU 7.74 s） | **已发布**（npm latest，`f73fb07` 已推送）；本机已装正式包并重启；市场同步 issue #719；讨论 #228 已回 @Sillyhou |
 | （未编号） | macOS：`platform.ts` + `afplay` 播放 + 平台解释器/PATH/进程组 + 非 Windows 短路与选项裁剪 | **本地已合入 main，未 push、未发布**；`os` 仍只有 `win32`，等 M3 实测 |
 
 ## 3. 关键假设与决策

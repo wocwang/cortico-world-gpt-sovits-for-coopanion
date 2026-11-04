@@ -1,7 +1,7 @@
 # TODO — 更好的GPTSovits 语音（Coopanion 插件）
 
 > 最后更新：2026-11-03 09:05（Asia/Shanghai）
-> 工作区版本：**0.6.8（已发布 npm latest，已推送）**；本机 `data\extensions` 装的是 **0.6.8**
+> 工作区版本：**0.6.9（已发布 npm latest，已推送）**；本机 `data\extensions` 装的是 **0.6.9**
 > 详细交接见 [HANDOFF.md](HANDOFF.md)；ROCm 代验清单见 [docs/rocm-acceptance.md](docs/rocm-acceptance.md)。
 
 ## P0 — 0.6.0 / 0.6.1 发布（已完成，待真机代验）
@@ -61,6 +61,10 @@
       ① CPU 档恒用 V2 Pro Plus（说明书写错了，已改 README，并加「缺权重点名」提示）；
       ② `-I` 与上游 `api_v2.py` 的 `from tools.portable_runtime import …` 冲突——`-I` 会踢掉脚本目录、
       还连带 `-E` 忽略 `PYTHONPATH`，改用 `-s`（`PYTHON_ARGS`）后自备运行时的 venv 能直接 `import tools`。
+- [x] **0.6.9 已发布**（2026-11-04）：① 配置页「模型版本」「音频后端」恢复下拉（`panelOptionsFor` 补 case 并抽出导出，
+      `tests/config-options.test.ts` 盯着四个选项源）；② `normalizeVoiceModel()` 把旧手填显示名归一成 key（未知回 auto +
+      启动 warn），`WeightsJob` 空表兜底，修掉 `baseReady()` 抛 `Cannot read properties of undefined`；③ 文案删掉底模音色
+      主观描述，README 补实测速度表（显卡 1.72/1.90 s、CPU 7.74 s）。212 例全过；市场同步 #719。
 - [x] **0.6.8 已发布**（2026-11-04）：QQ Bot（qqbot）「文字+语音条」：新增 `qqbotVoice` 开关，提示词规定
       `sovits_speak(silent: true)` → `[blob …]` → `qqbot_send_message.voice`；旧插件（qq-final / NapCat）
       继续走 9880 的 `qq_send voice=true`；两个开关可同开、按回复工具名分规则。补了两个坑：9880 对 qqbot 无效
