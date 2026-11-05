@@ -272,10 +272,12 @@ export class GptSovitsWorld implements World {
   }
 
   /** 配置里的自备权重，校验过版本与文件；用不上时 `problem` 里是原因。
-   *  选中音色自带权重时用音色的，否则用全局配置；都没填时，选中官模音色就用随包官模权重。 */
+   *  选中音色自带权重时用音色的；官方音色不吃全局权重（用自己的官模 LoRA 或底模）；
+   *  其余音色没有自带权重时才回落到全局配置。 */
   private trained(): TrainedResult {
     const custom = selectedCustomVoice(this.cfg.voices ?? [], this.cfg.voice.preset);
-    const own = resolveTrained(effectiveWeights(custom, this.cfg.weights), this.version());
+    const officialPreset = !custom && isPreset(this.cfg.voice.preset);
+    const own = resolveTrained(effectiveWeights(custom, this.cfg.weights, officialPreset), this.version());
     if (own.weights || own.problem) return own;
     const off = this.official();
     return off ? { weights: off, problem: null, official: true } : own;
@@ -288,10 +290,10 @@ export class GptSovitsWorld implements World {
     return officialWeights(this.weights.dir(), this.cfg.voice.preset);
   }
 
-  /** 权重签名：变了说明配置里换了模型。 */
+  /** 权重签名：变了说明配置里换了模型。底模也进签名，切换「自备 ↔ 底模」才不会被当成没变。 */
   private weightsSignature(): string {
     const t = this.trained().weights;
-    return t ? `${t.gpt}|${t.sovits}` : '';
+    return `${this.version()}|${t ? `${t.gpt}|${t.sovits}` : 'base'}`;
   }
 
   /** 内置底模的绝对路径；连已有服务时无从得知它在哪，返回 null。 */
@@ -337,6 +339,17 @@ export class GptSovitsWorld implements World {
         }
       }
     }
+  }
+
+  /**
+   * 换音色后立刻把权重切过去，不等下一句：服务在跑就直接走 `/set_*_weights`，
+   * 上一次失败也清掉（换过音色就该重试，不能因为一次失败一直沿用旧权重）。
+   */
+  private syncWeightsAfterVoiceChange(): void {
+    this.weightsFailed = '';
+    const url = this.url();
+    if (!url || this.server.state().phase !== 'ready') return;
+    void this.applyWeights(url);
   }
 
   private backend(): Backend {
@@ -1468,9 +1481,9 @@ export class GptSovitsWorld implements World {
     if (panel === 'voices') {
       switch (method) {
         case 'state': return this.panelState();
-        case 'add': return this.addCustomVoice(args);
-        case 'update': return this.updateCustomVoice(args);
-        case 'remove': this.removeCustomVoice(String(args[0] ?? '')); return this.panelState();
+        case 'add': { const s = this.addCustomVoice(args); this.syncWeightsAfterVoiceChange(); return s; }
+        case 'update': { const s = this.updateCustomVoice(args); this.syncWeightsAfterVoiceChange(); return s; }
+        case 'remove': this.removeCustomVoice(String(args[0] ?? '')); this.syncWeightsAfterVoiceChange(); return this.panelState();
         case 'rename': {
           const [id, name] = [String(args[0] ?? ''), String(args[1] ?? '')];
           if (!name.trim()) throw new Error('音色名称不能为空。');
@@ -1484,6 +1497,7 @@ export class GptSovitsWorld implements World {
           const cv = selectedCustomVoice(this.cfg.voices ?? [], id);
           if (id && !cv) throw new Error('找不到这个自定义音色。');
           this.opts.persist({ voice: { preset: id || DEFAULT_PRESET, name: cv?.name ?? '', audio: cv?.audio ?? '', text: cv?.text ?? '' } });
+          this.syncWeightsAfterVoiceChange();
           return this.panelState();
         }
         default: throw new Error(`未知方法 ${method}`);
@@ -1500,10 +1514,10 @@ export class GptSovitsWorld implements World {
       case 'test': return this.speak(String(args[0] ?? ''));
       case 'hush': this.hush(); return this.panelState();
       case 'usage': return this.usage(args[0] === 'refresh');
-      case 'setVoice': this.saveVoice(String(args[0] ?? ''), String(args[1] ?? ''), String(args[2] ?? '')); return this.panelState();
-      case 'resetVoice': this.opts.persist({ voice: { preset: DEFAULT_PRESET, audio: '', text: '' } }); return this.panelState();
-      case 'addVoice': return this.addCustomVoice(args);
-      case 'updateVoice': return this.updateCustomVoice(args);
+      case 'setVoice': this.saveVoice(String(args[0] ?? ''), String(args[1] ?? ''), String(args[2] ?? '')); this.syncWeightsAfterVoiceChange(); return this.panelState();
+      case 'resetVoice': this.opts.persist({ voice: { preset: DEFAULT_PRESET, audio: '', text: '' } }); this.syncWeightsAfterVoiceChange(); return this.panelState();
+      case 'addVoice': { const s = this.addCustomVoice(args); this.syncWeightsAfterVoiceChange(); return s; }
+      case 'updateVoice': { const s = this.updateCustomVoice(args); this.syncWeightsAfterVoiceChange(); return s; }
       case 'renameVoice': {
         const [id, name] = [String(args[0] ?? ''), String(args[1] ?? '')];
         if (!name.trim()) throw new Error('音色名称不能为空。');
@@ -1513,13 +1527,14 @@ export class GptSovitsWorld implements World {
         this.opts.persist({ voices: voices.map((v) => (v.id === id ? { ...v, name: name.trim() } : v)) });
         return this.panelState();
       }
-      case 'removeVoice': this.removeCustomVoice(String(args[0] ?? '')); return this.panelState();
+      case 'removeVoice': this.removeCustomVoice(String(args[0] ?? '')); this.syncWeightsAfterVoiceChange(); return this.panelState();
       case 'uninstall': return this.uninstall(String(args[0] ?? ''));
       case 'useVoice': {
         const id = String(args[0] ?? '');
         if (id && !selectedCustomVoice(this.cfg.voices ?? [], id)) throw new Error('找不到这个自定义音色。');
         const cv = id ? selectedCustomVoice(this.cfg.voices ?? [], id) : null;
         this.opts.persist({ voice: { preset: id || DEFAULT_PRESET, audio: cv?.audio ?? '', text: cv?.text ?? '' } });
+        this.syncWeightsAfterVoiceChange();
         return this.panelState();
       }
       default: throw new Error(`未知方法 ${method}`);

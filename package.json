@@ -1,6 +1,6 @@
 {
   "name": "@wocwang/cortico-world-gpt-sovits-for-coopanion",
-  "version": "0.6.9",
+  "version": "0.6.10",
   "type": "module",
   "description": "GPT-SoVITS 语音插件：支持 AMD 显卡（ROCm，实验性）和 NVIDIA 显卡，没有独显自动走 CPU；全程本机合成、不上传录音，一键装运行时与权重。",
   "author": "wocwang",

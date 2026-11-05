@@ -45,11 +45,16 @@ export function selectedCustomVoice(voices: CustomVoice[], preset: string): Cust
 
 /**
  * 此刻应生效的自备权重：选中音色配了（成对的）权重就用它的，否则用全局配置。
- * 音色不带权重时全局配置仍然生效——「音色管音色，权重是底座」。
+ * 「音色管音色，权重是底座」——但官方音色（dfy / xll / female / male）例外：
+ * 它们要么有自己的官模 LoRA，要么就该落在当前版本的底模上，不能继续吃上一个自备音色的全局权重，
+ * 否则切回官方音色时听起来还是上一个音色（0.6.10 之前就是这样）。
  */
 export function effectiveWeights(
-  custom: CustomVoice | null, global: { gpt: string; sovits: string },
+  custom: CustomVoice | null,
+  global: { gpt: string; sovits: string },
+  officialPreset = false,
 ): { gpt: string; sovits: string } {
   if (custom && custom.weights.gpt && custom.weights.sovits) return custom.weights;
+  if (officialPreset) return { gpt: '', sovits: '' };
   return global;
 }

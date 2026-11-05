@@ -51,6 +51,14 @@ describe('自定义音色', () => {
     expect(effectiveWeights(null, global)).toEqual(global);
   });
 
+  it('官方音色不继承全局自备权重：切回 dfy/xll 时落回它自己的官模或底模', () => {
+    const global = { gpt: 'g.ckpt', sovits: 's.pth' };
+    expect(effectiveWeights(null, global, true)).toEqual({ gpt: '', sovits: '' });
+    // 自定义音色自己的权重仍然优先
+    const weighted = voice({ id: 'cv-2', weights: { gpt: 'a.ckpt', sovits: 'b.pth' } });
+    expect(effectiveWeights(weighted, global, true)).toEqual(weighted.weights);
+  });
+
   it('id 唯一且带 cv- 前缀', () => {
     const a = newCustomVoiceId(), b = newCustomVoiceId();
     expect(a).toMatch(/^cv-/);
