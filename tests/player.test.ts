@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backendCandidates, normalizeAudioBackend, oneFrameBytes, pickDefaultDevice, probeVerdict } from '../src/player.ts';
+import { backendCandidates, listOutputDevices, normalizeAudioBackend, oneFrameBytes, pickDefaultDevice, probeVerdict } from '../src/player.ts';
 
 describe('音频后端回退', () => {
   it('自动档先 WASAPI，再 DirectSound', () => {
@@ -22,6 +22,14 @@ describe('音频后端回退', () => {
     expect(normalizeAudioBackend('Direct Sound 声卡')).toBe('auto');
     expect(normalizeAudioBackend(undefined)).toBe('auto');
     expect(backendCandidates('nonsense').map((candidate) => candidate.label)).toEqual(['WASAPI', 'DirectSound']);
+  });
+
+  it('系统播放器（安全模式）不吃 audify：各种写法都归一到 system，且不枚举设备', () => {
+    expect(normalizeAudioBackend('system')).toBe('system');
+    expect(normalizeAudioBackend('External')).toBe('system');
+    expect(normalizeAudioBackend('soundplayer')).toBe('system');
+    // 这条路径不加载 vendor/audify 的原生模块，所以任何平台都能跑、也不会触发 issue #13 的崩溃。
+    expect(listOutputDevices('system')).toEqual([]);
   });
 
   it('RtAudio 报 0（没有默认设备）时从枚举结果里挑第一个', () => {

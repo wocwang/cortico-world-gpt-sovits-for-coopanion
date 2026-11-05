@@ -182,7 +182,7 @@ export const MODEL_VERSION_VALUES = ['auto', 'v5turbo', 'v2ProPlus'] as const;
 export const DEVICE_OPTIONS = `${GPT_SOVITS_ID}:output-device`;
 export const AUDIO_BACKEND_OPTIONS = `${GPT_SOVITS_ID}:audio-backend`;
 /** 音频后端的可选值；schema 的 enum 与下拉共用。 */
-export const AUDIO_BACKEND_VALUES = ['auto', 'wasapi', 'directsound'] as const;
+export const AUDIO_BACKEND_VALUES = ['auto', 'wasapi', 'directsound', 'system'] as const;
 export const PROMPT_LANGUAGE_OPTIONS = `${GPT_SOVITS_ID}:prompt-language`;
 export const TEXT_LANGUAGE_OPTIONS = `${GPT_SOVITS_ID}:text-language`;
 export const VOICE_OPTIONS = `${GPT_SOVITS_ID}:voice`;
@@ -231,7 +231,7 @@ const TEXT = {
     seed: { title: '采样种子', description: '-1 每次重新采样（同一句每次听起来都不同）；填 0 或正整数可固定，同一句每次逐字节一致。' },
     volume: { title: '音量' },
     outputDevice: { title: '输出设备', description: '留空使用系统默认设备。', system: '系统默认' },
-    audioBackend: { title: '音频后端', auto: '自动（WASAPI 优先）', wasapi: 'WASAPI', directsound: 'DirectSound', description: '本机播放用哪套 Windows 音频接口。自动先用 WASAPI，枚举不到设备或开流后没在跑时自动退 DirectSound；有的机器 WASAPI 能开流却没声音，这时手动填 `directsound`（小写）。改完下一句生效。' },
+    audioBackend: { title: '音频后端', auto: '自动（WASAPI 优先）', wasapi: 'WASAPI', directsound: 'DirectSound', system: '系统播放器（安全模式）', description: '本机播放用哪套音频接口。自动先用 WASAPI，枚举不到设备或开流后没在跑时自动退 DirectSound；有的机器 WASAPI 能开流却没声音，就手动选 DirectSound。**声卡驱动会让整个程序闪退时（RtAudio 原生崩溃），选「系统播放器」**：它完全不加载 audify，把整句写成 WAV 交给系统播放（Windows 用 SoundPlayer、macOS 用 afplay），代价是每句多几十毫秒启动、切句靠终止进程。改完下一句生效。' },
     autoStart: { title: '随 Cortico 启动推理服务' },
     idle: { title: '闲置停服', description: '多久不说话就停掉本机推理服务，把显存和内存让出来；下一句会自动重新加载（显卡档通常十几秒）。0 为不停。只对本机服务生效。' },
     serverUrl: { title: '已有的 GPT-SoVITS 地址', description: '填写后连接这个 api_v2 服务，不在本机启动，也不下载运行时。' },
@@ -281,7 +281,7 @@ const TEXT = {
     seed: { title: 'Sampling seed', description: '-1 resamples every time (the same line sounds different each run); 0 or a positive integer fixes it, making the same line byte-identical.' },
     volume: { title: 'Volume' },
     outputDevice: { title: 'Output device', description: 'Empty for the system default.', system: 'System default' },
-    audioBackend: { title: 'Audio backend', auto: 'Auto (WASAPI first)', wasapi: 'WASAPI', directsound: 'DirectSound', description: 'Which Windows audio interface plays the voice here. Auto tries WASAPI first and falls back to DirectSound when it finds no device, cannot open one, or the stream stops right after opening; on some machines WASAPI opens a stream but stays silent, so put `directsound` (lowercase) in by hand. Takes effect on the next line.' },
+    audioBackend: { title: 'Audio backend', auto: 'Auto (WASAPI first)', wasapi: 'WASAPI', directsound: 'DirectSound', system: 'System player (safe mode)', description: 'Which audio interface plays the voice here. Auto tries WASAPI first and falls back to DirectSound when it finds no device, cannot open one, or the stream stops right after opening; on some machines WASAPI opens a stream but stays silent, so pick DirectSound by hand. **When the sound driver crashes the whole app (a native fault inside RtAudio), pick "System player"**: it never loads audify and writes each line to a WAV for the system to play (SoundPlayer on Windows, afplay on macOS). The cost is a few dozen milliseconds per line and cutting by terminating the player process. Takes effect on the next line.' },
     autoStart: { title: 'Start the inference server with Cortico' },
     idle: { title: 'Stop when idle', description: 'Stops the local inference server after this many minutes without speech, freeing VRAM and RAM; the next line reloads it (usually ten-odd seconds on GPU). 0 keeps it running. Local server only.' },
     serverUrl: { title: 'Existing GPT-SoVITS address', description: 'Connects to this api_v2 server instead of starting one here; nothing is downloaded.' },
@@ -308,7 +308,8 @@ export function audioBackendOptions(language: Language, platform: Platform = pro
   const t = pick(language, TEXT).audioBackend;
   const auto = { value: 'auto', label: t.auto };
   if (platform !== 'win32') return [auto];
-  return [auto, { value: 'wasapi', label: t.wasapi }, { value: 'directsound', label: t.directsound }];
+  // 「系统播放器」在 Windows 上也有意义：声卡驱动让 audify 原生崩溃时用它绕开（issue #13）。
+  return [auto, { value: 'wasapi', label: t.wasapi }, { value: 'directsound', label: t.directsound }, { value: 'system', label: t.system }];
 }
 
 export const promptLanguageOptions = (): Array<{ value: string; label: string }> =>

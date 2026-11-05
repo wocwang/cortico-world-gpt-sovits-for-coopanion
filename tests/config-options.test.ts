@@ -9,10 +9,10 @@ describe('配置页的 x-options（下拉选项）', () => {
     expect(options?.every((option) => option.label.length > 0)).toBe(true);
   });
 
-  it('音频后端在 Windows 给三项、其他平台只给自动', () => {
+  it('音频后端在 Windows 给四项（含系统播放器）、其他平台只给自动', () => {
     const options = panelOptionsFor(AUDIO_BACKEND_OPTIONS, 'zh');
     expect(options?.map((option) => option.value)).toEqual(
-      process.platform === 'win32' ? ['auto', 'wasapi', 'directsound'] : ['auto'],
+      process.platform === 'win32' ? ['auto', 'wasapi', 'directsound', 'system'] : ['auto'],
     );
   });
 

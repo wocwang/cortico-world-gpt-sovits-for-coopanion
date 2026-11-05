@@ -44,10 +44,14 @@ interface AudifyModule {
   RtAudioApi: { WINDOWS_WASAPI: number; WINDOWS_DS: number };
 }
 
-/** 音频后端：`auto` 先 WASAPI、枚举不到或打不开再退 DirectSound（issue #4 的机器上 WASAPI 返回空表）。 */
-export type AudioBackend = 'auto' | 'wasapi' | 'directsound';
+/**
+ * 音频后端：`auto` 先 WASAPI、枚举不到或打不开再退 DirectSound（issue #4 的机器上 WASAPI 返回空表）；
+ * `system` 完全不加载 audify，把整句落成 WAV 交给系统播放器（Windows 用 SoundPlayer、macOS 用 afplay），
+ * 用来绕开声卡驱动里的原生崩溃（issue #13：RtAudio openStream 访问违例，JS 层接不住）。
+ */
+export type AudioBackend = 'auto' | 'wasapi' | 'directsound' | 'system';
 
-const BACKEND_LABEL: Record<Exclude<AudioBackend, 'auto'>, string> = { wasapi: 'WASAPI', directsound: 'DirectSound' };
+const BACKEND_LABEL: Record<Exclude<AudioBackend, 'auto'>, string> = { wasapi: 'WASAPI', directsound: 'DirectSound', system: '系统播放器' };
 
 /**
  * 每次写入的帧长:40 ms。原来是 20 ms，合成稍慢或网络抖一下就会出现「写不进去 → 空一段 → 再续上」的断续，
@@ -110,6 +114,7 @@ export function normalizeAudioBackend(setting: unknown): AudioBackend {
   const value = typeof setting === 'string' ? setting.trim().toLowerCase() : '';
   if (value === 'wasapi') return 'wasapi';
   if (value === 'directsound' || value === 'direct sound' || value === 'ds') return 'directsound';
+  if (value === 'system' || value === 'external' || value === 'soundplayer') return 'system';
   return 'auto';
 }
 
@@ -146,8 +151,8 @@ function loadAudify(): AudifyModule {
 export interface OutputDevice { id: number; name: string; isDefault: boolean }
 
 export function listOutputDevices(backend: AudioBackend = 'auto'): OutputDevice[] {
-  // macOS 用 afplay 出声，没有可枚举的设备：面板只留「系统默认」。
-  if (useSystemPlayer()) return [];
+  // 系统播放器不经过 RtAudio，没有可枚举的设备：面板只留「系统默认」。
+  if (useSystemPlayer() || normalizeAudioBackend(backend) === 'system') return [];
   const audify = loadAudify();
   for (const candidate of backendCandidates(backend)) {
     try {
@@ -187,29 +192,34 @@ export class Player {
   private carry = Buffer.alloc(0);
   /** 写进去的音频预计播完的墙钟时刻。 */
   private endsAt = 0;
-  /** macOS：临时 WAV 的目录（用到时才建）。 */
-  private afplayDir: string | null = null;
-  /** macOS：正在播的那一条 afplay。 */
-  private afplayChild: ChildProcess | null = null;
+  /** 系统播放器：临时 WAV 的目录（用到时才建）。 */
+  private sysDir: string | null = null;
+  /** 系统播放器：正在播的那一条（afplay / PowerShell SoundPlayer）。 */
+  private sysChild: ChildProcess | null = null;
   /** 只提醒一次「后端配置认不出」，别每帧刷日志。 */
   private warnedBackend = false;
-  /** macOS：排着的临时 WAV 与它的时长。 */
-  private afplayQueue: Array<{ file: string; ms: number }> = [];
-  private afplaySeq = 0;
+  /** 系统播放器：排着的临时 WAV 与它的时长。 */
+  private sysQueue: Array<{ file: string; ms: number }> = [];
+  private sysSeq = 0;
 
   constructor(private readonly opts: PlayerOptions) {}
 
+  /** 系统播放器：macOS 一直用；Windows 选了「系统播放器」后端时用（绕开 RtAudio 原生崩溃）。 */
+  private systemMode(): boolean {
+    return useSystemPlayer() || normalizeAudioBackend(this.opts.backend()) === 'system';
+  }
+
   /** 正在出声(按写入量估算)。 */
   get playing(): boolean {
-    if (useSystemPlayer()) return this.afplayChild !== null || this.afplayQueue.length > 0;
+    if (this.systemMode()) return this.sysChild !== null || this.sysQueue.length > 0;
     return this.rt !== null && Date.now() < this.endsAt;
   }
 
   /** 排在已写入的音频后面播放。采样率或设备变了时等前面播完再重开流。 */
   async write(sampleRate: number, raw: Buffer, gain = 1): Promise<void> {
     const pcm = applyGain(raw, gain);
-    // macOS：先攒着，`flush()` 时整段落盘给 afplay，避免几十毫秒一个进程。
-    if (useSystemPlayer()) {
+    // 系统播放器：先攒着，`flush()` 时整段落盘交出去，避免几十毫秒一个进程。
+    if (this.systemMode()) {
       this.rate = sampleRate;
       this.carry = Buffer.from(this.carry.length ? Buffer.concat([this.carry, pcm]) : pcm);
       return;
@@ -232,10 +242,10 @@ export class Player {
 
   /** 一句写完：把不足一帧的尾巴补静音写出去。 */
   flush(): void {
-    if (useSystemPlayer()) {
+    if (this.systemMode()) {
       const pcm = this.carry;
       this.carry = Buffer.alloc(0);
-      if (pcm.length) this.enqueueAfplay(pcm, this.rate);
+      if (pcm.length) this.enqueueSystem(pcm, this.rate);
       return;
     }
     if (!this.rt || !this.carry.length) return;
@@ -248,8 +258,8 @@ export class Player {
 
   /** 立刻停下，丢掉没播的部分。 */
   cut(): void {
-    if (useSystemPlayer()) {
-      this.stopAfplay();
+    if (this.systemMode()) {
+      this.stopSystem();
       this.carry = Buffer.alloc(0);
       return;
     }
@@ -258,10 +268,10 @@ export class Player {
   }
 
   close(): void {
-    if (useSystemPlayer()) {
-      this.stopAfplay();
+    if (this.systemMode()) {
+      this.stopSystem();
       this.carry = Buffer.alloc(0);
-      this.removeAfplayDir();
+      this.removeSystemDir();
       return;
     }
     this.carry = Buffer.alloc(0);
@@ -270,55 +280,77 @@ export class Player {
     this.rt = null;
   }
 
-  /** macOS：把一段 PCM 落成临时 WAV 排进播放队列。 */
-  private enqueueAfplay(pcm: Buffer, sampleRate: number): void {
+  /** 系统播放器：把一段 PCM 落成临时 WAV 排进播放队列。音量在这里预乘（SoundPlayer 没有音量参数）。 */
+  private enqueueSystem(pcm: Buffer, sampleRate: number): void {
     try {
-      this.afplayDir ??= mkdtempSync(join(tmpdir(), 'cortico-gpt-sovits-'));
-      const file = join(this.afplayDir, `line-${Date.now()}-${this.afplaySeq++}.wav`);
-      writeFileSync(file, wavBytes(pcm, sampleRate));
-      this.afplayQueue.push({ file, ms: (pcm.length / 2 / sampleRate) * 1000 });
-      this.pumpAfplay();
+      const volume = Math.max(0, Math.min(1, this.opts.volume()));
+      const scaled = volume === 1 ? pcm : applyGain(pcm, volume);
+      this.sysDir ??= mkdtempSync(join(tmpdir(), 'cortico-gpt-sovits-'));
+      const file = join(this.sysDir, `line-${Date.now()}-${this.sysSeq++}.wav`);
+      writeFileSync(file, wavBytes(scaled, sampleRate));
+      this.sysQueue.push({ file, ms: (pcm.length / 2 / sampleRate) * 1000 });
+      this.pumpSystem();
     } catch (err) {
-      this.opts.log.warn('macOS 播放：临时 WAV 写不出来', { err: String(err) });
+      this.opts.log.warn('系统播放器：临时 WAV 写不出来', { err: String(err) });
     }
   }
 
-  /** macOS：当前没在播就取队列里的下一条，用系统 `afplay` 播。 */
-  private pumpAfplay(): void {
-    if (this.afplayChild || !this.afplayQueue.length) return;
-    const item = this.afplayQueue.shift()!;
-    const volume = Math.max(0, Math.min(1, this.opts.volume()));
-    const child = spawn('/usr/bin/afplay', ['-v', volume.toFixed(2), item.file], { stdio: 'ignore' });
-    this.afplayChild = child;
+  /** 系统播放器命令：macOS 用 afplay（自带音量），Windows 用 PowerShell 的 SoundPlayer 阻塞播放。 */
+  private systemCommand(file: string): { cmd: string; args: string[] } {
+    if (process.platform === 'darwin') {
+      const volume = Math.max(0, Math.min(1, this.opts.volume()));
+      return { cmd: '/usr/bin/afplay', args: ['-v', volume.toFixed(2), file] };
+    }
+    const ps = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const escaped = file.replace(/'/g, "''");
+    return {
+      cmd: ps,
+      args: ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `(New-Object Media.SoundPlayer '${escaped}').PlaySync()`],
+    };
+  }
+
+  /** 系统播放器：当前没在播就取队列里的下一条。 */
+  private pumpSystem(): void {
+    if (this.sysChild || !this.sysQueue.length) return;
+    const item = this.sysQueue.shift()!;
+    const { cmd, args } = this.systemCommand(item.file);
+    const child = spawn(cmd, args, { stdio: 'ignore', windowsHide: true });
+    this.sysChild = child;
     this.endsAt = Date.now() + item.ms;
     const finish = (): void => {
       rmSync(item.file, { force: true });
-      if (this.afplayChild !== child) return;
-      this.afplayChild = null;
-      this.pumpAfplay();
+      if (this.sysChild !== child) return;
+      this.sysChild = null;
+      this.pumpSystem();
     };
     child.once('exit', finish);
     child.once('error', (err) => {
-      this.opts.log.warn('macOS 播放：afplay 起不来', { err: String(err) });
+      this.opts.log.warn('系统播放器起不来', { err: String(err), cmd });
       finish();
     });
   }
 
-  /** macOS：停掉正在播的一条，清空队列与没写出的缓冲。 */
-  private stopAfplay(): void {
-    const child = this.afplayChild;
-    this.afplayChild = null;
+  /** 系统播放器：停掉正在播的一条（Windows 连子进程树一起杀），清空队列与缓冲。 */
+  private stopSystem(): void {
+    const child = this.sysChild;
+    this.sysChild = null;
     if (child && child.exitCode === null) {
-      try { child.kill('SIGTERM'); } catch { /* 已经退出 */ }
+      try {
+        if (process.platform === 'win32' && child.pid) {
+          spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        } else {
+          child.kill('SIGTERM');
+        }
+      } catch { /* 已经退出 */ }
     }
-    for (const item of this.afplayQueue) rmSync(item.file, { force: true });
-    this.afplayQueue = [];
+    for (const item of this.sysQueue) rmSync(item.file, { force: true });
+    this.sysQueue = [];
     this.endsAt = 0;
   }
 
-  private removeAfplayDir(): void {
-    const dir = this.afplayDir;
-    this.afplayDir = null;
+  private removeSystemDir(): void {
+    const dir = this.sysDir;
+    this.sysDir = null;
     if (dir) rmSync(dir, { recursive: true, force: true });
   }
 
@@ -353,6 +385,8 @@ export class Player {
    * 所以不能只写一个后端，还要在开流后验一下它是不是真的在跑。
    */
   private async open(sampleRate: number, device: string): Promise<void> {
+    // 系统播放器不碰 RtAudio；write() 已经分流，这里只是防御。
+    if (this.systemMode()) return;
     this.audify ??= loadAudify();
     const audify = this.audify;
     const frameSize = Math.round(sampleRate * FRAME_MS / 1000);
