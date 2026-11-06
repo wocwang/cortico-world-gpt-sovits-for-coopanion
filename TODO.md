@@ -1,7 +1,7 @@
 # TODO — 更好的GPTSovits 语音（Coopanion 插件）
 
 > 最后更新：2026-11-03 09:05（Asia/Shanghai）
-> 工作区版本：**0.6.9（已发布 npm latest，已推送）**；本机 `data\extensions` 装的是 **0.6.9**
+> 工作区版本：**0.6.10（已发布 npm latest，已推送）**；本机 `data\extensions` 装的是 **0.6.10**
 > 详细交接见 [HANDOFF.md](HANDOFF.md)；ROCm 代验清单见 [docs/rocm-acceptance.md](docs/rocm-acceptance.md)。
 
 ## P0 — 0.6.0 / 0.6.1 发布（已完成，待真机代验）
@@ -61,6 +61,10 @@
       ① CPU 档恒用 V2 Pro Plus（说明书写错了，已改 README，并加「缺权重点名」提示）；
       ② `-I` 与上游 `api_v2.py` 的 `from tools.portable_runtime import …` 冲突——`-I` 会踢掉脚本目录、
       还连带 `-E` 忽略 `PYTHONPATH`，改用 `-s`（`PYTHON_ARGS`）后自备运行时的 venv 能直接 `import tools`。
+- [x] **0.6.10 已发布**（2026-11-06）：① 切换音色立刻换权重（选中/增删改后直接调 `/set_*_weights` 并清失败标记；
+      官方音色不再继承全局自备权重；权重签名带版本与底模，修掉「切回 dfy 还是祀的声音」）；② 新增「系统播放器
+      （安全模式）」音频后端，不加载 audify、WAV 交系统播放，绕开 #13 的 RtAudio 原生崩溃（本机 4.2 s 音频
+      5.6 s 播完）；③ 修正官模 LoRA 的过时说法。214 例全过；#13 已回；市场同步 #775。
 - [x] **0.6.9 已发布**（2026-11-04）：① 配置页「模型版本」「音频后端」恢复下拉（`panelOptionsFor` 补 case 并抽出导出，
       `tests/config-options.test.ts` 盯着四个选项源）；② `normalizeVoiceModel()` 把旧手填显示名归一成 key（未知回 auto +
       启动 warn），`WeightsJob` 空表兜底，修掉 `baseReady()` 抛 `Cannot read properties of undefined`；③ 文案删掉底模音色
