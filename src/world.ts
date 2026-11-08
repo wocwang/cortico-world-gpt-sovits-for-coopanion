@@ -19,6 +19,8 @@ import type { Logger, ToolDef, ToolOutcome, World, WorldHost, WorldLamp, WorldWe
 import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
 import { normalizeVoiceModel, officialVoice, OUTPUT_GAIN, resolveModelVersion, RUNTIME_ASSETS, RUNTIME_EXTRACT_BYTES, RUNTIME_VERSION, voiceModelNeedsNormalizing, weightPaths, type ModelVersion } from './catalog.ts';
+import { synthCloud } from './cloud.ts';
+import { CloudKeyStore } from './secret-store.ts';
 import { dirBytes, topLevelBytes } from './disk.ts';
 import { detectGpus, fallbackToCpu, pickTier, type AmdProbe, type GpuVendor } from './gpu.ts';
 import { AUDIO_BACKEND_OPTIONS, configGroups, DEVICE_OPTIONS, GPT_SOVITS_ID, MODEL_VERSION_OPTIONS, PROMPT_LANGUAGE_OPTIONS, REF_MAX_SECONDS, REF_MIN_SECONDS, RVC_INDEX_MAX, RVC_INDEX_MIN, RVC_PROTECT_MAX, RVC_PROTECT_MIN, RVC_TIMEOUT_MAX, RVC_TIMEOUT_MIN, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS, audioBackendOptions, modelVersionOptions, promptLanguageOptions, systemDeviceLabel, textLanguageOptions, tierOptions, type GptSovitsConfigSection, type Tier } from './config.ts';
@@ -232,6 +234,8 @@ export class GptSovitsWorld implements World {
   private trainerManager: TrainerManager | null = null;
   /** 出口变声：交给其他插件的音频再过一遍本机 RVC。 */
   private readonly rvc: RvcLink;
+  /** 云端密钥（AES-GCM 密文 + `.env` 主密钥）。 */
+  private readonly cloudKeys: CloudKeyStore;
 
   constructor(private readonly opts: GptSovitsWorldOptions) {
     this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
@@ -244,6 +248,12 @@ export class GptSovitsWorld implements World {
       log: { warn: (msg, meta) => this.log.warn(msg, meta), info: (msg, meta) => this.log.info(msg, meta) } as Logger,
     });
     this.rvc = new RvcLink(() => opts.cfg.rvc, () => this.log);
+    this.cloudKeys = new CloudKeyStore({
+      dataDir: opts.dataDir,
+      envFiles: [join(opts.dataDir, '..', '..', '.env'), join(opts.dataDir, '..', '.env'), join(opts.dataDir, '.env')],
+      secret: (name) => opts.secret?.(name) ?? '',
+      log: (msg, meta) => this.log.info(msg, meta),
+    });
     registerCustomVoiceOptions(() => (this.cfg.voices ?? []).map((v) => {
       // 选项名自带状态、音频文件名与台本片段：下拉每次点开都重新拉取，不看下面字段也能确认配了什么。
       const missing = [!v.audio ? '缺音频' : '', !v.text ? '缺台本' : ''].filter(Boolean);
@@ -269,6 +279,49 @@ export class GptSovitsWorld implements World {
   /** 生效的底模版本：配置显式选了就照它，`auto` 跟档位；CPU 档一律 v2ProPlus。 */
   version(): ModelVersion {
     return resolveModelVersion(this.cfg.voiceModel ?? 'auto', this.tier());
+  }
+
+  /** 当前合成引擎：手动切换，默认本地。 */
+  private engine(): 'local' | 'cloud' {
+    return this.cfg.ttsEngine === 'cloud' ? 'cloud' : 'local';
+  }
+
+  /** 云端能不能接活：填了地址、选了音色、密钥可解密。 */
+  private cloudReady(): boolean {
+    if (this.engine() !== 'cloud') return false;
+    if (!this.cfg.cloudBaseUrl.trim() || !this.cfg.cloudVoiceId.trim()) return false;
+    try {
+      return !!this.cloudKeys.read();
+    } catch {
+      return false;
+    }
+  }
+
+  /** 云端为什么没就绪（只用于回执，不抛错）。 */
+  private cloudIssue(): string {
+    if (!this.cfg.cloudBaseUrl.trim()) return 'the cloud base URL is empty';
+    if (!this.cfg.cloudVoiceId.trim()) return 'no cloud voice is selected';
+    try {
+      this.cloudKeys.read();
+      return 'the cloud key is missing';
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  /** 云端合成一句；密钥只在这次调用里解密，失败消息已脱敏。 */
+  private async synthCloudLine(text: string, signal?: AbortSignal): Promise<{ sampleRate: number; pcm: Buffer; wav: Buffer }> {
+    const key = this.cloudKeys.read();
+    if (!key) throw new Error('云端密钥还没设置：到「音色」页的云端分组里填一次');
+    const audio = await synthCloud(text, {
+      baseUrl: this.cfg.cloudBaseUrl,
+      model: this.cfg.cloudModel,
+      voice: this.cfg.cloudVoiceId,
+      speed: this.cfg.speed,
+      timeoutMs: this.cfg.cloudTimeoutMs || 60_000,
+      key,
+    }, signal);
+    return { sampleRate: audio.sampleRate, pcm: audio.pcm, wav: audio.wav };
   }
 
   /** 配置里的自备权重，校验过版本与文件；用不上时 `problem` 里是原因。
@@ -603,8 +656,15 @@ export class GptSovitsWorld implements World {
     }
     const text = ttsSafe(speechText(script));
     if (!text) return { text: 'Nothing to say: the text has only markup.' };
-    if (!this.voice()) return { text: `Voice unavailable: ${this.voiceIssue ?? 'no reference audio is set'}.`, failed: true };
-    const ready = this.url();
+    const cloud = this.engine() === 'cloud';
+    if (cloud) {
+      if (!this.cloudReady()) {
+        return { text: `Voice unavailable: cloud mode is on but ${this.cloudIssue()}.`, failed: true };
+      }
+    } else if (!this.voice()) {
+      return { text: `Voice unavailable: ${this.voiceIssue ?? 'no reference audio is set'}.`, failed: true };
+    }
+    const ready = cloud || !!this.url();
     if (!ready) {
       if (!this.sleeping || !this.canStart()) return { text: `Voice unavailable: ${this.stateFor(stateWords('en'))}.`, failed: true };
       // 闲置停服后第一句：先叫醒服务，这一句排在队列里等它加载完。
@@ -681,6 +741,24 @@ export class GptSovitsWorld implements World {
     return { first, wav: deliver ? wavBytes(bytes, archive.rate) : null };
   }
 
+  /**
+   * 云端的一句：整段 WAV 一次回来，没有首块流式。写进播放器、落盘、交付附件都与本地同语义。
+   * 音量由云端请求里的 `speed` 之外不再二次调节（交付的 WAV 保持厂商原样）。
+   */
+  private async playCloudLine(
+    spoken: string, signal: AbortSignal, onFirst: () => void, silent: boolean, deliver: boolean,
+  ): Promise<{ first: number; wav: Buffer | null }> {
+    const audio = await this.synthCloudLine(spoken, signal);
+    if (!silent) {
+      await this.player.write(audio.sampleRate, audio.pcm, 1);
+      this.player.flush();
+    }
+    const first = Date.now();
+    onFirst();
+    if (this.cfg.saveAudio) this.saveLine(audio.pcm, audio.sampleRate);
+    return { first, wav: deliver ? audio.wav : null };
+  }
+
   /** 把这一句的 PCM 另存为 WAV；保存失败只记日志，不影响播放。 */
   private saveLine(pcm: Buffer, sampleRate: number): void {
     try {
@@ -729,8 +807,9 @@ export class GptSovitsWorld implements World {
         const { spoken, at, started } = item;
         // 本机不外放开关关着时整句静音；句子级 silent 参数也一样。
         const silent = item.silent || !this.cfg.playLocally;
-        // 换底模版本只能重启：api_v2 的 `version` 只在启动时读 yaml，热换权重换不了底座。
-        if (this.backend().kind !== 'remote' && this.appliedVersion !== null && this.appliedVersion !== this.version()) {
+        const cloud = this.engine() === 'cloud';
+        // 换底模版本只能重启：api_v2 的 `version` 只在启动时读 yaml，热换权重换不了底座。云端不碰这些。
+        if (!cloud && this.backend().kind !== 'remote' && this.appliedVersion !== null && this.appliedVersion !== this.version()) {
           this.log.info('模型版本变了，重启推理服务', { from: this.appliedVersion, to: this.version() });
           await this.server.stop();
           this.appliedWeights = '';
@@ -738,8 +817,8 @@ export class GptSovitsWorld implements World {
           await this.startServer();
         }
         const url = this.url();
-        const voice = this.voice();
-        if (!url || !voice) {
+        const voice = cloud ? null : this.voice();
+        if (cloud ? !this.cloudReady() : (!url || !voice)) {
           started();
           settleLine(item, null);
           for (const rest of this.queue.splice(0)) { rest.started(); settleLine(rest, null); }
@@ -751,10 +830,11 @@ export class GptSovitsWorld implements World {
         let wav: Buffer | null = null;
         const onFirst = (): void => { heard = true; started(); };
         try {
-          await this.applyWeights(url);
-          const played = await this.playLine(url, voice, spoken, abort.signal, onFirst, silent, !!item.finish);
+          const played = cloud
+            ? await this.playCloudLine(spoken, abort.signal, onFirst, silent, !!item.finish)
+            : await (async () => { await this.applyWeights(url!); return this.playLine(url!, voice!, spoken, abort.signal, onFirst, silent, !!item.finish); })();
           wav = played.wav;
-          this.log.info('GPT-SoVITS 一句合成完', { chars: [...spoken].length, silent, waitMs: played.first - at, totalMs: Date.now() - at });
+          this.log.info(cloud ? '云端一句合成完' : 'GPT-SoVITS 一句合成完', { chars: [...spoken].length, silent, waitMs: played.first - at, totalMs: Date.now() - at });
           this.lastError = null;
         } catch (err) {
           if (abort.signal.aborted) {
@@ -765,9 +845,9 @@ export class GptSovitsWorld implements World {
             let recovered = '';
             // 连接被服务端断开（undici 的 `terminated` 之类）时重发一次通常就好，这不是文本问题，
             // 不该拿「去掉标点」去试（社区实测 0.6.1 在 ROCm 上就是这种错）。
-            if (!heard && isConnectionDrop(message)) {
+            if (!cloud && !heard && isConnectionDrop(message)) {
               try {
-                wav = (await this.playLine(url, voice, spoken, abort.signal, onFirst, silent, !!item.finish)).wav;
+                wav = (await this.playLine(url!, voice!, spoken, abort.signal, onFirst, silent, !!item.finish)).wav;
                 ok = true;
                 recovered = '连接断开后重试';
               } catch { ok = false; }
@@ -775,9 +855,9 @@ export class GptSovitsWorld implements World {
             // 服务端遇到「某一段只剩符号」的文本会在音素前端崩(空音素段 -> torch.cat 报错)。
             // 已经出过声就不再重试(会把半句重复播一次)，没出声时去掉标点再试一次。
             const plain = ttsPlain(spoken);
-            if (!ok && !heard && plain && plain !== spoken) {
+            if (!cloud && !ok && !heard && plain && plain !== spoken) {
               try {
-                wav = (await this.playLine(url, voice, plain, abort.signal, onFirst, silent, !!item.finish)).wav;
+                wav = (await this.playLine(url!, voice!, plain, abort.signal, onFirst, silent, !!item.finish)).wav;
                 ok = true;
                 recovered = '去掉标点后';
               } catch {
@@ -789,7 +869,8 @@ export class GptSovitsWorld implements World {
               this.log.info(`GPT-SoVITS ${recovered}合成成功`, { chars: [...spoken].length });
             } else if (!abort.signal.aborted) {
               this.lastError = message;
-              this.log.warn('GPT-SoVITS 合成失败', { err: this.lastError, tier: this.tier(), streaming: this.tier() === 'rocm' ? 0 : 3 });
+              if (cloud) this.log.warn('云端合成失败', { err: this.lastError, base: this.cfg.cloudBaseUrl, model: this.cfg.cloudModel });
+              else this.log.warn('GPT-SoVITS 合成失败', { err: this.lastError, tier: this.tier(), streaming: this.tier() === 'rocm' ? 0 : 3 });
             }
           }
         } finally {
@@ -873,7 +954,7 @@ export class GptSovitsWorld implements World {
     this.appliedVersion = null;
     this.appliedTarget = null;
     this.weightsFailed = '';
-    this.launching = this.cfg.autoStart && this.backend().kind !== 'remote';
+    this.launching = this.cfg.autoStart && this.backend().kind !== 'remote' && this.engine() === 'local';
     const gpus = await detectGpus();
     this.cuda = gpus.nvidia;
     this.amd = gpus.amd;
@@ -982,8 +1063,9 @@ export class GptSovitsWorld implements World {
     }
   }
 
-  /** 接口此刻能不能接活：服务已经起来，或者运行时就绪、能自己拉起来（含冷启动）。 */
+  /** 接口此刻能不能接活：云端看密钥/音色；本地看服务或冷启动能力。 */
   private apiReady(): boolean {
+    if (this.engine() === 'cloud') return this.cloudReady();
     return !!this.url() || this.canStart();
   }
 
@@ -992,6 +1074,14 @@ export class GptSovitsWorld implements World {
    * 服务没起（冷启动）或睡着了都先拉起来；失败抛错，由接口回 502。
    */
   private async synthesizeForApi(job: TtsJob, signal: AbortSignal): Promise<SynthResult> {
+    // 云端：音色由 cloudVoiceId 决定，调用方点名的本地音色/参考音频不参与。
+    if (this.engine() === 'cloud') {
+      if (!this.cloudReady()) throw new Error(`cloud not ready: ${this.cloudIssue()}`);
+      const t0 = Date.now();
+      const spoken = await this.prepareSpeechText(job.text, this.cfg.textLang);
+      const audio = await this.synthCloudLine(spoken, signal);
+      return { wav: audio.wav, firstMs: Date.now() - t0, totalMs: Date.now() - t0 };
+    }
     // `voice` 是调用方明确点名；`voice_desc`（VoxCPM 形状）只是描述，能对上已知音色才采用。
     const voice = this.voiceByName(job.voice)
       ?? (job.voiceHint ? this.voiceByName(job.voiceHint, false) : null)
@@ -1111,6 +1201,8 @@ export class GptSovitsWorld implements World {
   }
 
   private async warmUp(): Promise<void> {
+    // 云端没有本机服务要预热。
+    if (this.engine() === 'cloud') { this.warmed = true; return; }
     const st = this.server.state();
     const voice = this.voice();
     if (st.phase !== 'ready' || !st.url) return;
@@ -1514,6 +1606,45 @@ export class GptSovitsWorld implements World {
       case 'test': return this.speak(String(args[0] ?? ''));
       case 'hush': this.hush(); return this.panelState();
       case 'usage': return this.usage(args[0] === 'refresh');
+      case 'setEngine': {
+        const engine = args[0] === 'cloud' ? 'cloud' : 'local';
+        this.opts.persist({ ttsEngine: engine });
+        // 切回本地且服务没起时，按 autoStart 拉起（云端模式从不启动本机服务）。
+        if (engine === 'local' && this.cfg.autoStart && !this.url() && this.canStart() && !this.launching) {
+          void this.startServer().finally(() => { this.launching = false; });
+        }
+        return this.panelState();
+      }
+      case 'saveCloudKey': {
+        const mask = this.cloudKeys.save(String(args[0] ?? ''));
+        this.opts.persist({ cloudKeyMask: mask });
+        this.log.info('云端密钥已保存（加密存储，明文不回显）', { mask });
+        return this.panelState();
+      }
+      case 'clearCloudKey':
+        this.cloudKeys.clear();
+        this.opts.persist({ cloudKeyMask: '' });
+        return this.panelState();
+      case 'setCloudField': {
+        const key = String(args[0] ?? '');
+        const allowed = ['cloudBaseUrl', 'cloudModel', 'cloudVoiceId', 'cloudTimeoutMs'] as const;
+        if (!(allowed as readonly string[]).includes(key)) throw new Error(`不允许写这个字段：${key}`);
+        const value = key === 'cloudTimeoutMs'
+          ? Math.max(5000, Math.min(300000, Number(args[1]) || 60_000))
+          : String(args[1] ?? '').trim();
+        this.opts.persist({ [key]: value } as Partial<GptSovitsConfigSection>);
+        return this.panelState();
+      }
+      case 'setCloudVoices': {
+        const raw = Array.isArray(args[0]) ? args[0] as Array<Record<string, unknown>> : [];
+        const voices = raw
+          .map((v) => ({ id: String(v.id ?? '').trim(), name: String(v.name ?? '').trim() }))
+          .filter((v) => v.id)
+          .slice(0, 50);
+        const keep = voices.some((v) => v.id === this.cfg.cloudVoiceId);
+        this.opts.persist({ cloudVoices: voices, ...(keep ? {} : { cloudVoiceId: voices[0]?.id ?? '' }) });
+        return this.panelState();
+      }
       case 'setVoice': this.saveVoice(String(args[0] ?? ''), String(args[1] ?? ''), String(args[2] ?? '')); this.syncWeightsAfterVoiceChange(); return this.panelState();
       case 'resetVoice': this.opts.persist({ voice: { preset: DEFAULT_PRESET, audio: '', text: '' } }); this.syncWeightsAfterVoiceChange(); return this.panelState();
       case 'addVoice': { const s = this.addCustomVoice(args); this.syncWeightsAfterVoiceChange(); return s; }
@@ -1548,6 +1679,17 @@ export class GptSovitsWorld implements World {
     const voice = this.voice();
     return {
       backend: b.kind,
+      engine: this.engine(),
+      cloud: {
+        baseUrl: this.cfg.cloudBaseUrl,
+        model: this.cfg.cloudModel,
+        voiceId: this.cfg.cloudVoiceId,
+        voices: this.cfg.cloudVoices ?? [],
+        keyMask: this.cfg.cloudKeyMask || '',
+        keySet: this.cloudKeys.has(),
+        timeoutMs: this.cfg.cloudTimeoutMs,
+        ready: this.cloudReady(),
+      },
       platform: process.platform,
       tierSetting: this.cfg.tier,
       tier: this.tier(),
@@ -1646,6 +1788,19 @@ export interface UsageState {
 
 export interface PanelState {
   backend: Backend['kind'];
+  /** 当前合成引擎：本地 / 云端（手动切换）。 */
+  engine: 'local' | 'cloud';
+  /** 云端配置与状态；密钥只给掩码，明文永远不出现在这里。 */
+  cloud: {
+    baseUrl: string;
+    model: string;
+    voiceId: string;
+    voices: Array<{ id: string; name: string }>;
+    keyMask: string;
+    keySet: boolean;
+    timeoutMs: number;
+    ready: boolean;
+  };
   /** 面板在哪个平台上；macOS 的档位说明与 Windows 不同（没有可下载的运行时包）。 */
   platform: NodeJS.Platform;
   tierSetting: GptSovitsConfigSection['tier'];

@@ -119,6 +119,23 @@ export interface GptSovitsConfigSection {
   audioBackend: AudioBackend;
   /** 发给模型的环境提示词语言。 */
   promptLanguage: 'zh' | 'en';
+  /**
+   * 合成引擎：`local` 走本机 GPT-SoVITS；`cloud` 走 OpenAI 兼容的 `/audio/speech`。
+   * 手动切换——云端模式不加载运行时/权重，也不影响本地音色与权重配置。
+   */
+  ttsEngine: 'local' | 'cloud';
+  /** 云端基址（到 `/v1` 这一层；也可以直接写到 `/audio/speech`）。 */
+  cloudBaseUrl: string;
+  /** 云端的模型名（OpenAI 兼容接口的 `model`）。 */
+  cloudModel: string;
+  /** 当前选中的云端音色 id。 */
+  cloudVoiceId: string;
+  /** 面板里维护的云端音色清单（id + 显示名），只给下拉用。 */
+  cloudVoices: Array<{ id: string; name: string }>;
+  /** 云端密钥的掩码（展示用；明文只以 AES-GCM 密文存在数据目录）。 */
+  cloudKeyMask: string;
+  /** 云端请求超时（毫秒）。 */
+  cloudTimeoutMs: number;
 }
 
 export const SPEED_MIN = .6, SPEED_MAX = 1.6;
@@ -170,6 +187,13 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   outputDevice: '',
   audioBackend: 'auto',
   promptLanguage: 'zh',
+  ttsEngine: 'local',
+  cloudBaseUrl: 'https://api.openai.com/v1',
+  cloudModel: 'tts-1',
+  cloudVoiceId: '',
+  cloudVoices: [],
+  cloudKeyMask: '',
+  cloudTimeoutMs: 60_000,
 };
 
 const K = `worlds.${GPT_SOVITS_ID}`;
@@ -195,6 +219,11 @@ const TEXT = {
     groupLink: { title: '与其他插件联动', description: '把语音交给 QQ 等插件：旧 QQ 插件（cortico-world-qq-final / NapCat）用本地语音接口，QQ Bot 插件（cortico-world-qqbot）用音频句柄，最老的 QQ 插件（cortico-world-qq）也吃句柄。可按插件分别开启，互不冲突。' },
     groupService: { title: '推理服务', description: '推理档、随程序自启、闲置停服，以及改用自备运行时目录或已有服务。' },
     preset: { title: '音色', description: '预设或已保存的音色（音色名后 ✓ 表示已配置完整）。添加、改名、换音频/权重都在「音色」页里做。' },
+    engine: { title: '语音引擎', description: '本地 = 本机 GPT-SoVITS（底模/权重/音色都只在这边生效）；云端 = OpenAI 兼容的 /audio/speech，不占显卡。手动切换；云端模式不需要装运行时。' },
+    cloudBase: { title: '云端地址', description: 'OpenAI 兼容接口的基址，填到 /v1 这一层（如 https://api.openai.com/v1）；也可以直接填完整的 …/audio/speech。' },
+    cloudModel: { title: '云端模型', description: '请求里的 model，例如 tts-1、FunAudioLLM/CosyVoice2-0.5B（按厂商文档填）。' },
+    cloudVoice: { title: '云端音色', description: '当前选中的云端音色 id（厂商的 voice 名，如 alloy、female-shaonv）。在「音色」页的云端分组里维护列表。' },
+    cloudTimeout: { title: '云端超时（毫秒）', description: '单句合成最多等多久；超过就报超时，不会自动重试。' },
     audio: { title: '参考音频', description: '3–10 秒的 WAV。这里是当前音色的参考音频，与「音色」页同步。' },
     text: { title: '参考音频的台本', description: '参考音频里说的话，要逐字一致。' },
     gptWeights: { title: '自备 GPT 权重', description: '自己训的 s1 权重(.ckpt)。与下面的 SoVITS 权重一起填才生效；都留空就用内置底模。选自定义音色时，这里改的是该音色自带的权重。' },
@@ -245,6 +274,11 @@ const TEXT = {
     groupLink: { title: 'Other plugins (QQ voice)', description: 'Hand the voice to QQ: the old plugin (cortico-world-qq-final / NapCat) calls the local voice API, the QQ Bot plugin (cortico-world-qqbot) takes an audio handle, and the oldest one (cortico-world-qq) takes a handle too. Each can be switched on separately.' },
     groupService: { title: 'Inference service', description: 'Tier, start with the app, stop-when-idle, and switching to your own runtime directory or an existing server.' },
     preset: { title: 'Voice', description: 'A preset or a saved voice (a ✓ after the name means fully configured). Add, rename and edit voices on the "Voices" page.' },
+    engine: { title: 'Speech engine', description: 'Local = GPT-SoVITS on this machine (base model, weights and voices only apply there); Cloud = an OpenAI-compatible /audio/speech endpoint, no GPU needed. Manual switch; cloud mode needs no runtime at all.' },
+    cloudBase: { title: 'Cloud base URL', description: 'Base URL of the OpenAI-compatible API up to /v1 (for example https://api.openai.com/v1); a full …/audio/speech endpoint also works.' },
+    cloudModel: { title: 'Cloud model', description: 'The model field of the request, for example tts-1 or FunAudioLLM/CosyVoice2-0.5B; check the provider docs.' },
+    cloudVoice: { title: 'Cloud voice', description: 'The selected cloud voice id (the provider voice, e.g. alloy or female-shaonv). Maintain the list in the cloud section of the Voices page.' },
+    cloudTimeout: { title: 'Cloud timeout (ms)', description: 'How long one line may take; a timeout is reported, never retried automatically.' },
     audio: { title: 'Reference audio', description: 'A 3–10 second WAV. The reference audio of the current voice, kept in sync with the "Voices" page.' },
     text: { title: 'Reference transcript', description: 'The exact words spoken in the reference audio.' },
     gptWeights: { title: 'Own GPT weights', description: 'Your own trained s1 weights (.ckpt). Takes effect together with the SoVITS weights below; leave both empty to use the bundled base model. For a custom voice these are the voice’s own weights.' },
@@ -338,6 +372,11 @@ export function configGroups(language: Language): ConfigGroup[] {
         title: t.groupVoice.title,
         description: t.groupVoice.description,
         properties: {
+          [`${K}.ttsEngine`]: { type: 'string', title: t.engine.title, description: t.engine.description, enum: ['local', 'cloud'], 'x-hot': true },
+          [`${K}.cloudBaseUrl`]: { type: 'string', title: t.cloudBase.title, description: t.cloudBase.description, 'x-hot': true },
+          [`${K}.cloudModel`]: { type: 'string', title: t.cloudModel.title, description: t.cloudModel.description, 'x-hot': true },
+          [`${K}.cloudVoiceId`]: { type: 'string', title: t.cloudVoice.title, description: t.cloudVoice.description, 'x-hot': true },
+          [`${K}.cloudTimeoutMs`]: { type: 'number', title: t.cloudTimeout.title, description: t.cloudTimeout.description, minimum: 5000, maximum: 300000, multipleOf: 1000, 'x-hot': true },
           [`${K}.voice.preset`]: { type: 'string', title: t.preset.title, description: t.preset.description, 'x-options': VOICE_OPTIONS, 'x-hot': true },
           [`${K}.voice.audio`]: { type: 'string', title: t.audio.title, description: t.audio.description, 'x-path': { kind: 'file', extensions: ['.wav'] }, 'x-hot': true },
           [`${K}.voice.text`]: { type: 'string', title: t.text.title, description: t.text.description, 'x-hot': true },
