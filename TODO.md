@@ -1,8 +1,30 @@
 # TODO — 更好的GPTSovits 语音（Coopanion 插件）
 
-> 最后更新：2026-11-03 09:05（Asia/Shanghai）
+> 最后更新：2026-11-08（Asia/Shanghai）
 > 工作区版本：**0.6.10（已发布 npm latest，已推送）**；本机 `data\extensions` 装的是 **0.6.10**
-> 详细交接见 [HANDOFF.md](HANDOFF.md)；ROCm 代验清单见 [docs/rocm-acceptance.md](docs/rocm-acceptance.md)。
+> 详细交接见 [HANDOFF.md](HANDOFF.md)；机器可读的状态见 [docs/STATE.md](docs/STATE.md)（`node scripts/handoff.mjs --write` 重新生成）；
+> 开新会话的提示词见 [docs/handoff-prompt.md](docs/handoff-prompt.md)；ROCm 代验清单见 [docs/rocm-acceptance.md](docs/rocm-acceptance.md)。
+> 本机训练产物（「祀」音色）在 `D:/Program Files/Coopanion/data/home/companion/data/trainers/shi`，训练记录 `D:/Program Files/Coopanion/data/shi-training.md`。
+
+## P0 — 云端语音引擎（进行中，2026-11-08 开始）
+
+目标：**本地 + 云端都通用**。手动切引擎；云端走 OpenAI 兼容的 `POST {base}/audio/speech`；
+密钥用 AES-256-GCM 加密存盘（主密钥 `CORTICO_SECRET_KEY` 在部署 `.env`，没有就自动生成并追加）；
+`config.json` 只留掩码；云端音色单独一份清单，与本地音色互不干扰。
+
+- [x] **后端**（提交 `72e3938`）：`src/cloud.ts`（只收 WAV、错误分类、密钥脱敏）、`src/secret-store.ts`
+      （AES-256-GCM、主密钥从 `.env` 读、缺失则生成并追加且写前备份、读不到时降级到 `data/secrets/master.key`）、
+      `src/config.ts`（`ttsEngine` / `cloudBaseUrl` / `cloudModel` / `cloudVoiceId` / `cloudVoices` / `cloudKeyMask` / `cloudTimeoutMs` + schema）、
+      `src/world.ts`（`engine()` / `cloudReady()` / `cloudIssue()` / `playCloudLine()`、`pump()` 与 9880 分流、
+      面板状态字段、`setEngine` / `saveCloudKey` / `clearCloudKey` / `setCloudField` / `setCloudVoices`）。`tsc` 通过。
+- [ ] **面板 UI**（「音色」页）：L0 引擎单选（本地/云端）；L1 音色分组（本地时显示现有预设+自定义音色，云端时显示云端音色清单）；
+      云端分组里要有地址/模型/音色 id/超时 + **密码输入框**（保存后只回显掩码，留空或提交掩码＝不修改）+ 音色增删。
+      注意旧宿主没有 `ui.foldSheet` 时要退回普通卡。
+- [ ] **测试**：`tests/cloud.test.ts`（URL 拼装、错误映射、脱敏、非 WAV 报错）、`tests/secret-store.test.ts`（加解密往返、掩码、主密钥缺失时写 `.env`）。
+- [ ] **文档**：README 加「云端语音」小节（配置步骤、密钥存放位置、限制：没有首块流式、整段返回）；CHANGELOG 新版本条目。
+- [ ] **版本与发布**：升到 **0.7.0**（新增能力，走 minor），跑完四项校验后等主人点头再 publish + 市场同步 + 回帖。
+- [ ] **验收**：本机切到云端，填一个真实厂商的密钥，说一句，确认出声、9880 也走云端、QQ 语音条能带上云端音频。
+
 
 ## P0 — 0.6.0 / 0.6.1 发布（已完成，待真机代验）
 

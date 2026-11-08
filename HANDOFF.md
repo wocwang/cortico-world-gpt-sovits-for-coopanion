@@ -1,10 +1,21 @@
 # 任务交接单
 
-> 交接时间：2026-11-01 10:10（Asia/Shanghai）
 > 仓库：`D:\Users\HW W\Documents\pr-gpt-sovits\repo`
 > npm 包：`@wocwang/cortico-world-gpt-sovits-for-coopanion`
-> 工作区版本：**0.6.0**（开发中，未发布）；本机 `data\extensions` 装的是 **0.5.28**
+> **当前状态快照：[docs/STATE.md](docs/STATE.md)（用 `node scripts/handoff.mjs --write` 重新生成，永远是最新的）**
 > 配套清单：[TODO.md](TODO.md)；ROCm 代验清单：[docs/rocm-acceptance.md](docs/rocm-acceptance.md)
+
+## 0. 无感交接（开新会话时按这个来）
+
+1. **先跑快照**：`node scripts/handoff.mjs`（只读；`--write` 会把结果写回 `docs/STATE.md`）。
+   它会汇总：工作区版本 / npm latest / 最近提交 / 工作树是否干净 / 本机已装版本 / 宿主配置要点 / 训练产物。
+2. **再读三份文件**：
+   - `docs/STATE.md`——机器可读的状态；
+   - [HANDOFF.md](HANDOFF.md) 本文——为什么这么做、历史踩过的坑；
+   - [TODO.md](TODO.md)——还没做完的清单（按“下一步该做什么”排序）。
+3. **还想要一段现成的提示词**：见 [docs/handoff-prompt.md](docs/handoff-prompt.md)，直接复制粘贴到新会话即可。
+4. **规矩**：动手前先 `git status` + `git log --oneline -5`；未完成的活儿**先提交成 WIP**（像 `72e3938` 那样），
+   别留在工作树里等人捡。
 
 ---
 
@@ -78,6 +89,7 @@
 | 0.6.8 | QQ Bot（qqbot）「文字+语音条」：`qqbotVoice` 开关，`sovits_speak(silent)` → `[blob …]` → `qqbot_send_message.voice`；旧插件走 9880 不变；两个开关不再互斥，按回复工具名分规则；补「c2c OpenID 不能喂给 qq_send」地址规则；联动页改五张 `ui.foldSheet` 折叠卡 | **已发布**（npm latest，`ed2d3b9` 已推送）；本机 0.6.8 验证通过（qqbot 语音条实测收到）；市场同步 issue #715；讨论 #228 已发说明 |
 | 0.6.9 | 配置页「模型版本」「音频后端」恢复下拉（`panelOptionsFor` 补两个 case 并抽成导出函数）；`normalizeVoiceModel` 把旧手填显示名归一回 key，未知回 auto + 启动 warn；`WeightsJob` 空表兜底；文案删掉底模音色主观描述，README 补实测速度表（GPU 1.72/1.90 s，CPU 7.74 s） | **已发布**（npm latest，`f73fb07` 已推送）；本机已装正式包并重启；市场同步 issue #719；讨论 #228 已回 @Sillyhou |
 | 0.6.10 | 切换音色立刻换权重（选中/增删改后直接调 `/set_*_weights`，清失败标记；官方音色不再继承全局自备权重；签名带版本与底模）；新增「系统播放器（安全模式）」音频后端（不加载 audify，WAV 交系统播放，绕开 issue #13 的 RtAudio 原生崩溃）；修正「官模 LoRA」过时说法 | **已发布**（npm latest，`ad58c7d` 已推送）；本机已装正式包并重启；#13 已回版本与用法；市场同步 issue #775 |
+| （未发布，WIP） | **云端语音引擎**（OpenAI 兼容 `/audio/speech`）：`ttsEngine` 手动切 local/cloud；密钥 AES-256-GCM 存 `data/secrets/cloud-tts.bin`，主密钥 `CORTICO_SECRET_KEY` 写在部署 `.env`（没有就自动生成并追加，写前备份），config 只留掩码；云端音色单独一份清单，与本地音色互不干扰 | **后端已写完并提交**（`72e3938`：`src/cloud.ts`、`src/secret-store.ts`、config 字段、world 分流与面板接口）；**面板 UI、测试、README/CHANGELOG、版本号都还没做**——`tsc` 通过但用户界面里还看不到云端入口 |
 | （未编号） | macOS：`platform.ts` + `afplay` 播放 + 平台解释器/PATH/进程组 + 非 Windows 短路与选项裁剪 | **本地已合入 main，未 push、未发布**；`os` 仍只有 `win32`，等 M3 实测 |
 
 ## 3. 关键假设与决策

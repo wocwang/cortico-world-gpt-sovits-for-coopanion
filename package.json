@@ -86,6 +86,7 @@
     "build": "node scripts/build-webui.mjs",
     "check:refs": "node --import tsx scripts/check-live-refs.mjs",
     "check:audio": "node scripts/check-audio-backend.mjs",
+    "handoff": "node scripts/handoff.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build && npm test && npm run typecheck && npm run check:audio"
