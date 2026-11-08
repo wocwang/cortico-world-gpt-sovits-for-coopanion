@@ -1,8 +1,8 @@
 {
   "name": "@wocwang/cortico-world-gpt-sovits-for-coopanion",
-  "version": "0.6.10",
+  "version": "0.7.5",
   "type": "module",
-  "description": "GPT-SoVITS 语音插件：支持 AMD 显卡（ROCm，实验性）和 NVIDIA 显卡，没有独显自动走 CPU；全程本机合成、不上传录音，一键装运行时与权重。",
+  "description": "给 Coopanion 桌宠用的 GPT-SoVITS 语音插件：默认全程本机合成，按 NVIDIA / AMD（ROCm，实验性）/ CPU 自动选档；也可切到云端 OpenAI 兼容接口（填自己的 Key）。内置大肥鱼、星落落音色，支持自备权重与自定义音色、QQ 语音与唱歌联动；CPU / 核显档可开播放预缓冲（默认关闭）。",
   "author": "wocwang",
   "contributors": [
     "Phantivia",
@@ -54,11 +54,11 @@
     "locales": {
       "zh": {
         "displayName": "更好的GPTSovits 语音—大肥鱼来咯",
-        "description": "支持 AMD 显卡（ROCm，实验性）和 NVIDIA 显卡，没有独显自动走 CPU。全程本机合成、不上传录音，一键装好运行时与模型；内置大肥鱼 / 星落落音色，支持自备权重与自定义音色，也能把声音交给 QQ 插件。"
+        "description": "Coopanion 桌宠的 GPT-SoVITS 语音插件：默认全程本机合成，按 NVIDIA / AMD（ROCm，实验性）/ CPU 自动选档；也可切到云端 OpenAI 兼容接口（需填 Key）。内置大肥鱼 / 星落落音色，支持自备权重与自定义音色，能把语音交给 QQ、把歌词转给唱歌插件；CPU / 核显档可开「播放预缓冲」（默认关闭）。"
       },
       "en": {
         "displayName": "Better GPTSovits Voice — Fatfish",
-        "description": "Works with AMD GPUs (ROCm, experimental) and NVIDIA GPUs, and falls back to CPU without a discrete GPU. Everything is synthesized locally, nothing is uploaded; runtime and models install in one click. Ships the Fatfish / Xll voices, supports your own weights and custom voices, and can hand the audio to QQ plugins."
+        "description": "GPT-SoVITS voice for Coopanion pets: local synthesis by default with automatic NVIDIA / AMD (ROCm, experimental) / CPU tiers; optionally switch to any OpenAI-compatible cloud endpoint with your own API key. Ships the Fatfish / Xll voices, supports your own weights and custom voices, hands audio to QQ plugins and lyrics to the singing plugin. A playback pre-buffer (off by default) smooths CPU / iGPU stutter."
       }
     },
     "tags": [

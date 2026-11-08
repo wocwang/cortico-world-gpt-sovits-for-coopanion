@@ -6,9 +6,30 @@
 .gsv-pill[data-tone="warn"] { color: var(--warn, #b8860b); }
 .gsv-pill[data-tone="bad"] { color: var(--bad, #c0392b); }
 .gsv-detail { font-size: .85em; opacity: .7; overflow-wrap: anywhere; }
+.gsv-warn { opacity: .9; color: var(--warn, #b8860b); }
+.gsv-bad { opacity: .9; color: var(--bad, #c0392b); }
 .gsv-acts { display: flex; gap: .4em; }
 .gsv-output { max-height: 12em; overflow: auto; font-size: .8em; opacity: .8; white-space: pre-wrap; }
 .gsv-voice-current { font-size: .85em; opacity: .8; overflow-wrap: anywhere; margin-bottom: .5em; }
 .gsv-cfg { margin: .7em 0; }
 .gsv-cfg .field, .gsv-cfg select, .gsv-cfg textarea { width: 100%; }
 .gsv-cfg .gsv-detail { margin-top: .2em; }
+/* 底部吸附操作条：沿用宿主 .actionbar 基类，再按本面板主题变量覆盖。 */
+.gsv-restartbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin-top: 16px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border, var(--line, rgba(127, 127, 127, .25)));
+  background: var(--background, var(--bg-2, #fff));
+  justify-content: flex-end;
+  align-items: center;
+  gap: .6em;
+}
+.gsv-restartbar[hidden] { display: none; }
+.gsv-restart-note { flex: 1 1 auto; min-width: 0; font-size: .85em; color: var(--warn, #b8860b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gsv-restart-note[hidden] { display: none; }
+.gsv-restart-note.is-bad { color: var(--bad, #c0392b); }
+/* 条贴底后去掉滚动容器原有的 56px 底内边距，避免滑到底留一道缝。 */
+.panelslot:has(> .gsv-restartbar:not([hidden])) { padding-bottom: 0; }

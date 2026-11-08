@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AUDIO_BACKEND_OPTIONS, MODEL_VERSION_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS } from '../src/config.ts';
+import { AUDIO_BACKEND_OPTIONS, configGroups, GPT_SOVITS_DEFAULTS, MODEL_VERSION_OPTIONS, PLAYBACK_LEAD_MAX, TIER_OPTIONS, VOICE_OPTIONS } from '../src/config.ts';
 import { panelOptionsFor } from '../src/world.ts';
 
 describe('配置页的 x-options（下拉选项）', () => {
@@ -25,5 +25,15 @@ describe('配置页的 x-options（下拉选项）', () => {
 
   it('没登记的 kind 返回 undefined（渲染成输入框是合理的）', () => {
     expect(panelOptionsFor('worlds.gpt-sovits:nope', 'zh')).toBeUndefined();
+  });
+
+  it('播放预缓冲默认关闭，范围与默认值一致（老配置不动就是老行为）', () => {
+    expect(GPT_SOVITS_DEFAULTS.playbackLead).toBe(0);
+    const field = configGroups('zh')
+      .find((group) => group.id.endsWith(':output'))
+      ?.schema.properties['worlds.gpt-sovits.playbackLead'] as { type?: string; minimum?: number; maximum?: number } | undefined;
+    expect(field?.type).toBe('number');
+    expect(field?.minimum).toBe(0);
+    expect(field?.maximum).toBe(PLAYBACK_LEAD_MAX);
   });
 });

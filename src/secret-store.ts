@@ -11,7 +11,7 @@
  * 不是本机管理员。
  */
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, appendFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, appendFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /** `.env` 里的变量名。 */
@@ -114,7 +114,7 @@ export class CloudKeyStore {
 
   clear(): void {
     const file = this.file();
-    if (existsSync(file)) writeFileSync(file, Buffer.alloc(0));
+    if (existsSync(file)) unlinkSync(file);
   }
 
   /** 主密钥：缓存 → `.env`（必要时生成并追加）→ 数据目录 master.key（降级）。 */

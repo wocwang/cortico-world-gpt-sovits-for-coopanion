@@ -62,6 +62,34 @@ const FRAME_MS = 40;
 /** 软限幅的拐点：绝对值超过它的样本按 tanh 压到满幅以内。 */
 const KNEE = 24000;
 
+/** 预缓冲门槛的上限：低于「第一次写声卡」的 3 秒回执等待，气泡不会早于声音太多。 */
+export const LEAD_CAP_MS = 2400;
+
+/** 实测生成至少要慢于播放这么多（实时系数 RTF）才值得预缓冲；贴得太近时缓冲只会白等。 */
+export const LEAD_MIN_RTF = 1.05;
+
+/**
+ * 预缓冲门槛（毫秒），0 表示不缓冲、第一块就播。
+ * `ratio` 是「先攒够本句预计时长的比例」；`secondsPerChar` / `rtf` 来自最近几句的实测。
+ * 生成快于播放、没有历史样本、或本句不落声卡时一律给 0——那时等只会增加首声延迟。
+ */
+export function playbackLeadMs(opts: {
+  ratio: number;
+  chars: number;
+  secondsPerChar: number;
+  rtf: number;
+  capMs?: number;
+}): number {
+  const { ratio, chars, secondsPerChar, rtf } = opts;
+  if (!(ratio > 0) || !(ratio <= 1)) return 0;
+  if (!(chars > 0) || !(secondsPerChar > 0) || !(rtf > 0)) return 0;
+  if (rtf < LEAD_MIN_RTF) return 0;
+  const cap = opts.capMs ?? LEAD_CAP_MS;
+  const ms = Math.min(ratio * secondsPerChar * chars * 1000, cap);
+  // 门槛太小时不值得为它压住第一块；80 ms 也是 audify 的两帧。
+  return ms >= 80 ? Math.round(ms) : 0;
+}
+
 /** 单声道 PCM16 复制成 `channels` 路交错。 */
 export function upmix(mono: Buffer, channels: number): Buffer {
   if (channels === 1) return mono;
@@ -207,6 +235,11 @@ export class Player {
   /** 系统播放器：macOS 一直用；Windows 选了「系统播放器」后端时用（绕开 RtAudio 原生崩溃）。 */
   private systemMode(): boolean {
     return useSystemPlayer() || normalizeAudioBackend(this.opts.backend()) === 'system';
+  }
+
+  /** 系统播放器整句落盘后才出声，播放侧不需要（也不该）预缓冲。 */
+  get usesSystemPlayer(): boolean {
+    return this.systemMode();
   }
 
   /** 正在出声(按写入量估算)。 */

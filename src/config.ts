@@ -117,20 +117,26 @@ export interface GptSovitsConfigSection {
   outputDevice: string;
   /** 本机播放走哪套 Windows 音频接口；`auto` 先 WASAPI、失败退 DirectSound。 */
   audioBackend: AudioBackend;
+  /**
+   * 播放预缓冲比例（0–0.62）。实测本机生成慢于播放（RTF>1）时，先攒够本句预计时长的这个比例
+   * 再开播，用来抹平 CPU / 核显档「一顿一顿」；0 为关闭，保持「第一块就播」的旧行为。
+   */
+  playbackLead: number;
   /** 发给模型的环境提示词语言。 */
   promptLanguage: 'zh' | 'en';
   /**
    * 合成引擎：`local` 走本机 GPT-SoVITS；`cloud` 走 OpenAI 兼容的 `/audio/speech`。
    * 手动切换——云端模式不加载运行时/权重，也不影响本地音色与权重配置。
+   * 空串 = 新装还没选（面板只显示选择提示）；此时合成按本地走，与旧版默认一致。
    */
-  ttsEngine: 'local' | 'cloud';
+  ttsEngine: '' | 'local' | 'cloud';
   /** 云端基址（到 `/v1` 这一层；也可以直接写到 `/audio/speech`）。 */
   cloudBaseUrl: string;
   /** 云端的模型名（OpenAI 兼容接口的 `model`）。 */
   cloudModel: string;
   /** 当前选中的云端音色 id。 */
   cloudVoiceId: string;
-  /** 面板里维护的云端音色清单（id + 显示名），只给下拉用。 */
+  /** 面板里维护的云端音色清单（id + 显示名），只给下拉用；留空时 OpenAI 官方地址自动用内置默认。 */
   cloudVoices: Array<{ id: string; name: string }>;
   /** 云端密钥的掩码（展示用；明文只以 AES-GCM 密文存在数据目录）。 */
   cloudKeyMask: string;
@@ -153,6 +159,9 @@ export const REF_MIN_SECONDS = 3, REF_MAX_SECONDS = 10;
 
 /** `seed = -1` 表示每次重新采样(api_v2 的默认值);其余值固定种子。 */
 export const SEED_RANDOM = -1;
+
+/** 播放预缓冲比例的上限：再高首声延迟就盖过收益了，也能压在 3 秒回执等待之下。 */
+export const PLAYBACK_LEAD_MAX = .62;
 
 export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   enabled: false,
@@ -186,8 +195,9 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   volume: 1,
   outputDevice: '',
   audioBackend: 'auto',
+  playbackLead: 0,
   promptLanguage: 'zh',
-  ttsEngine: 'local',
+  ttsEngine: '',
   cloudBaseUrl: 'https://api.openai.com/v1',
   cloudModel: 'tts-1',
   cloudVoiceId: '',
@@ -219,10 +229,10 @@ const TEXT = {
     groupLink: { title: '与其他插件联动', description: '把语音交给 QQ 等插件：旧 QQ 插件（cortico-world-qq-final / NapCat）用本地语音接口，QQ Bot 插件（cortico-world-qqbot）用音频句柄，最老的 QQ 插件（cortico-world-qq）也吃句柄。可按插件分别开启，互不冲突。' },
     groupService: { title: '推理服务', description: '推理档、随程序自启、闲置停服，以及改用自备运行时目录或已有服务。' },
     preset: { title: '音色', description: '预设或已保存的音色（音色名后 ✓ 表示已配置完整）。添加、改名、换音频/权重都在「音色」页里做。' },
-    engine: { title: '语音引擎', description: '本地 = 本机 GPT-SoVITS（底模/权重/音色都只在这边生效）；云端 = OpenAI 兼容的 /audio/speech，不占显卡。手动切换；云端模式不需要装运行时。' },
+    engine: { title: '语音引擎', description: '本地 = 本机 GPT-SoVITS（底模/权重/音色都只在这边生效）；云端 = OpenAI 兼容的 /audio/speech，不占显卡。手动切换；云端模式不需要装运行时。主入口在「语音」页顶部的下拉；未选择时按本地合成。' },
     cloudBase: { title: '云端地址', description: 'OpenAI 兼容接口的基址，填到 /v1 这一层（如 https://api.openai.com/v1）；也可以直接填完整的 …/audio/speech。' },
     cloudModel: { title: '云端模型', description: '请求里的 model，例如 tts-1、FunAudioLLM/CosyVoice2-0.5B（按厂商文档填）。' },
-    cloudVoice: { title: '云端音色', description: '当前选中的云端音色 id（厂商的 voice 名，如 alloy、female-shaonv）。在「音色」页的云端分组里维护列表。' },
+    cloudVoice: { title: '云端音色', description: '当前选中的云端音色 id（厂商的 voice 名，如 alloy、female-shaonv）。在「音色」页的云端分组里维护列表；地址是 OpenAI 官方且清单留空时，会自动用内置的 6 个默认音色。' },
     cloudTimeout: { title: '云端超时（毫秒）', description: '单句合成最多等多久；超过就报超时，不会自动重试。' },
     audio: { title: '参考音频', description: '3–10 秒的 WAV。这里是当前音色的参考音频，与「音色」页同步。' },
     text: { title: '参考音频的台本', description: '参考音频里说的话，要逐字一致。' },
@@ -261,6 +271,7 @@ const TEXT = {
     volume: { title: '音量' },
     outputDevice: { title: '输出设备', description: '留空使用系统默认设备。', system: '系统默认' },
     audioBackend: { title: '音频后端', auto: '自动（WASAPI 优先）', wasapi: 'WASAPI', directsound: 'DirectSound', system: '系统播放器（安全模式）', description: '本机播放用哪套音频接口。自动先用 WASAPI，枚举不到设备或开流后没在跑时自动退 DirectSound；有的机器 WASAPI 能开流却没声音，就手动选 DirectSound。**声卡驱动会让整个程序闪退时（RtAudio 原生崩溃），选「系统播放器」**：它完全不加载 audify，把整句写成 WAV 交给系统播放（Windows 用 SoundPlayer、macOS 用 afplay），代价是每句多几十毫秒启动、切句靠终止进程。改完下一句生效。' },
+    playbackLead: { title: '播放预缓冲比例', description: '只在本机生成慢于播放时生效：先攒够这一句预计时长的这个比例再开播，减少 CPU / 核显档一顿一顿；0 为关闭（保持原来的「第一块就播」）。实测生成快于播放时自动跳过，不会白等；门槛上限 2.4 秒，避免气泡比声音早太多。' },
     autoStart: { title: '随 Cortico 启动推理服务' },
     idle: { title: '闲置停服', description: '多久不说话就停掉本机推理服务，把显存和内存让出来；下一句会自动重新加载（显卡档通常十几秒）。0 为不停。只对本机服务生效。' },
     serverUrl: { title: '已有的 GPT-SoVITS 地址', description: '填写后连接这个 api_v2 服务，不在本机启动，也不下载运行时。' },
@@ -274,10 +285,10 @@ const TEXT = {
     groupLink: { title: 'Other plugins (QQ voice)', description: 'Hand the voice to QQ: the old plugin (cortico-world-qq-final / NapCat) calls the local voice API, the QQ Bot plugin (cortico-world-qqbot) takes an audio handle, and the oldest one (cortico-world-qq) takes a handle too. Each can be switched on separately.' },
     groupService: { title: 'Inference service', description: 'Tier, start with the app, stop-when-idle, and switching to your own runtime directory or an existing server.' },
     preset: { title: 'Voice', description: 'A preset or a saved voice (a ✓ after the name means fully configured). Add, rename and edit voices on the "Voices" page.' },
-    engine: { title: 'Speech engine', description: 'Local = GPT-SoVITS on this machine (base model, weights and voices only apply there); Cloud = an OpenAI-compatible /audio/speech endpoint, no GPU needed. Manual switch; cloud mode needs no runtime at all.' },
+    engine: { title: 'Speech engine', description: 'Local = GPT-SoVITS on this machine (base model, weights and voices only apply there); Cloud = an OpenAI-compatible /audio/speech endpoint, no GPU needed. Manual switch; cloud mode needs no runtime at all. The main switch is the dropdown at the top of the "Voice" page; when unset, synthesis uses local.' },
     cloudBase: { title: 'Cloud base URL', description: 'Base URL of the OpenAI-compatible API up to /v1 (for example https://api.openai.com/v1); a full …/audio/speech endpoint also works.' },
     cloudModel: { title: 'Cloud model', description: 'The model field of the request, for example tts-1 or FunAudioLLM/CosyVoice2-0.5B; check the provider docs.' },
-    cloudVoice: { title: 'Cloud voice', description: 'The selected cloud voice id (the provider voice, e.g. alloy or female-shaonv). Maintain the list in the cloud section of the Voices page.' },
+    cloudVoice: { title: 'Cloud voice', description: 'The selected cloud voice id (the provider voice, e.g. alloy or female-shaonv). Maintain the list in the cloud section of the Voices page; with an official OpenAI endpoint and an empty list, the 6 built-in voices are used automatically.' },
     cloudTimeout: { title: 'Cloud timeout (ms)', description: 'How long one line may take; a timeout is reported, never retried automatically.' },
     audio: { title: 'Reference audio', description: 'A 3–10 second WAV. The reference audio of the current voice, kept in sync with the "Voices" page.' },
     text: { title: 'Reference transcript', description: 'The exact words spoken in the reference audio.' },
@@ -316,6 +327,7 @@ const TEXT = {
     volume: { title: 'Volume' },
     outputDevice: { title: 'Output device', description: 'Empty for the system default.', system: 'System default' },
     audioBackend: { title: 'Audio backend', auto: 'Auto (WASAPI first)', wasapi: 'WASAPI', directsound: 'DirectSound', system: 'System player (safe mode)', description: 'Which audio interface plays the voice here. Auto tries WASAPI first and falls back to DirectSound when it finds no device, cannot open one, or the stream stops right after opening; on some machines WASAPI opens a stream but stays silent, so pick DirectSound by hand. **When the sound driver crashes the whole app (a native fault inside RtAudio), pick "System player"**: it never loads audify and writes each line to a WAV for the system to play (SoundPlayer on Windows, afplay on macOS). The cost is a few dozen milliseconds per line and cutting by terminating the player process. Takes effect on the next line.' },
+    playbackLead: { title: 'Playback pre-buffer ratio', description: 'Only applies when local synthesis is slower than playback: wait until this fraction of the estimated line duration is buffered before starting, smoothing the stutter on CPU / iGPU tiers. 0 keeps the old "play the first chunk immediately" behaviour. Skipped automatically when synthesis is faster than playback, and capped at 2.4 s so the bubble never runs ahead of the voice.' },
     autoStart: { title: 'Start the inference server with Cortico' },
     idle: { title: 'Stop when idle', description: 'Stops the local inference server after this many minutes without speech, freeing VRAM and RAM; the next line reloads it (usually ten-odd seconds on GPU). 0 keeps it running. Local server only.' },
     serverUrl: { title: 'Existing GPT-SoVITS address', description: 'Connects to this api_v2 server instead of starting one here; nothing is downloaded.' },
@@ -372,7 +384,7 @@ export function configGroups(language: Language): ConfigGroup[] {
         title: t.groupVoice.title,
         description: t.groupVoice.description,
         properties: {
-          [`${K}.ttsEngine`]: { type: 'string', title: t.engine.title, description: t.engine.description, enum: ['local', 'cloud'], 'x-hot': true },
+          [`${K}.ttsEngine`]: { type: 'string', title: t.engine.title, description: t.engine.description, enum: ['', 'local', 'cloud'], 'x-hot': true },
           [`${K}.cloudBaseUrl`]: { type: 'string', title: t.cloudBase.title, description: t.cloudBase.description, 'x-hot': true },
           [`${K}.cloudModel`]: { type: 'string', title: t.cloudModel.title, description: t.cloudModel.description, 'x-hot': true },
           [`${K}.cloudVoiceId`]: { type: 'string', title: t.cloudVoice.title, description: t.cloudVoice.description, 'x-hot': true },
@@ -404,6 +416,7 @@ export function configGroups(language: Language): ConfigGroup[] {
           [`${K}.volume`]: { type: 'number', title: t.volume.title, minimum: 0, maximum: 1, multipleOf: .05, 'x-hot': true },
           [`${K}.outputDevice`]: { type: 'string', title: t.outputDevice.title, description: t.outputDevice.description, 'x-options': DEVICE_OPTIONS, 'x-hot': true },
           [`${K}.audioBackend`]: { type: 'string', title: t.audioBackend.title, description: t.audioBackend.description, enum: [...AUDIO_BACKEND_VALUES], 'x-options': AUDIO_BACKEND_OPTIONS, 'x-hot': true },
+          [`${K}.playbackLead`]: { type: 'number', title: t.playbackLead.title, description: t.playbackLead.description, minimum: 0, maximum: PLAYBACK_LEAD_MAX, multipleOf: .01, 'x-hot': true },
           [`${K}.saveAudio`]: { type: 'boolean', title: t.saveAudio.title, description: t.saveAudio.description, 'x-hot': true },
           [`${K}.saveDir`]: { type: 'string', title: t.saveDir.title, description: t.saveDir.description, 'x-path': { kind: 'directory' }, 'x-hot': true },
           [`${K}.saveKeepHours`]: { type: 'number', title: t.saveKeepHours.title, description: t.saveKeepHours.description, minimum: 0, multipleOf: 1, 'x-hot': true },

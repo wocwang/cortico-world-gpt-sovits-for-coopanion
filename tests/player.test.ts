@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backendCandidates, listOutputDevices, normalizeAudioBackend, oneFrameBytes, pickDefaultDevice, probeVerdict } from '../src/player.ts';
+import { backendCandidates, LEAD_CAP_MS, listOutputDevices, normalizeAudioBackend, oneFrameBytes, pickDefaultDevice, playbackLeadMs, probeVerdict } from '../src/player.ts';
 
 describe('音频后端回退', () => {
   it('自动档先 WASAPI，再 DirectSound', () => {
@@ -61,5 +61,44 @@ describe('后端探针', () => {
   it('探针自己写失败没有证据力，放行后端（0.6.4 就是这里把所有人静音的）', () => {
     expect(probeVerdict(false, false)).toBe('unknown');
     expect(probeVerdict(false, true)).toBe('unknown');
+  });
+});
+
+describe('播放预缓冲门槛', () => {
+  const slow = { chars: 20, secondsPerChar: .15, rtf: 1.4 };
+
+  it('默认 0 = 关闭，第一块就播（老行为）', () => {
+    expect(playbackLeadMs({ ratio: 0, ...slow })).toBe(0);
+  });
+
+  it('生成快于播放时不缓冲：等只会多花首声延迟', () => {
+    expect(playbackLeadMs({ ratio: .5, chars: 20, secondsPerChar: .15, rtf: .8 })).toBe(0);
+    expect(playbackLeadMs({ ratio: .5, chars: 20, secondsPerChar: .15, rtf: 1 })).toBe(0);
+  });
+
+  it('还没有实测样本时按 0 处理（第一句不白等）', () => {
+    expect(playbackLeadMs({ ratio: .5, chars: 20, secondsPerChar: 0, rtf: 1.4 })).toBe(0);
+    expect(playbackLeadMs({ ratio: .5, chars: 0, secondsPerChar: .15, rtf: 1.4 })).toBe(0);
+    expect(playbackLeadMs({ ratio: .5, chars: 20, secondsPerChar: .15, rtf: 0 })).toBe(0);
+  });
+
+  it('慢于播放时按「比例 × 预计时长」攒块', () => {
+    // 预计 3 秒，先攒 30% = 900 ms
+    expect(playbackLeadMs({ ratio: .3, ...slow })).toBe(900);
+  });
+
+  it('门槛封顶 2.4 秒，气泡不会比声音早太多（回执最多等 3 秒）', () => {
+    expect(LEAD_CAP_MS).toBe(2400);
+    expect(playbackLeadMs({ ratio: .62, chars: 30, secondsPerChar: .2, rtf: 1.6 })).toBe(2400);
+    expect(playbackLeadMs({ ratio: .5, chars: 30, secondsPerChar: .2, rtf: 1.6, capMs: 1000 })).toBe(1000);
+  });
+
+  it('小于两帧（80 ms）的门槛不值得压住第一块', () => {
+    expect(playbackLeadMs({ ratio: .02, chars: 20, secondsPerChar: .1, rtf: 1.4 })).toBe(0);
+  });
+
+  it('比例非法时退回关闭', () => {
+    expect(playbackLeadMs({ ratio: -1, ...slow })).toBe(0);
+    expect(playbackLeadMs({ ratio: 1.5, ...slow })).toBe(0);
   });
 });

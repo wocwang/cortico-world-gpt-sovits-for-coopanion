@@ -89,10 +89,10 @@ export interface TrainedResult {
 }
 
 /**
- * 校验配置里的自备权重。两个都留空才算「用内置权重」；只填一个是常见的手误，直接当问题报出来，
- * 而不是悄悄只换一半——只换 s1 不换 s2 出来的音色是不对的。
+ * 只校验文件与版本头本身，不比对当前推理档；编辑音色时用，允许版本暂时不一致（换音色会自动对齐）。
+ * 版本读不出或不受支持仍然算问题，免得把坏文件存进列表。
  */
-export function resolveTrained(setting: Partial<TrainedWeights> | undefined, expected: ModelVersion): TrainedResult {
+export function checkWeights(setting: Partial<TrainedWeights> | undefined): TrainedResult & { version?: ModelVersion; lang?: string } {
   const gpt = (setting?.gpt ?? '').trim();
   const sovits = (setting?.sovits ?? '').trim();
   if (!gpt && !sovits) return { weights: null, problem: null };
@@ -107,10 +107,20 @@ export function resolveTrained(setting: Partial<TrainedWeights> | undefined, exp
   const v = sovitsVersion(sovits);
   if (!v) return { weights: null, problem: `读不出 SoVITS 权重的版本头(${headHint(sovits)})，训练出来的 .pth 开头应有两位版本号：${sovits}` };
   if (!v.version) return { weights: null, problem: `这套运行时没有 ${v.lang} 的底座，只支持 v5turbo(08) 与 v2ProPlus(06)。` };
-  if (v.version !== expected) {
-    return { weights: null, problem: `权重是 ${v.lang}，当前推理档用的是 ${expected}；换推理档或换成对应版本的权重。` };
+  return { weights: { gpt, sovits }, problem: null, version: v.version, lang: v.lang };
+}
+
+/**
+ * 校验配置里的自备权重。两个都留空才算「用内置权重」；只填一个是常见的手误，直接当问题报出来，
+ * 而不是悄悄只换一半——只换 s1 不换 s2 出来的音色是不对的。
+ */
+export function resolveTrained(setting: Partial<TrainedWeights> | undefined, expected: ModelVersion): TrainedResult {
+  const c = checkWeights(setting);
+  if (c.problem || !c.weights) return { weights: null, problem: c.problem };
+  if (c.version !== expected) {
+    return { weights: null, problem: `权重是 ${c.lang}，当前推理档用的是 ${expected}；换推理档或换成对应版本的权重。` };
   }
-  return { weights: { gpt, sovits }, problem: null };
+  return { weights: c.weights, problem: null };
 }
 
 /**

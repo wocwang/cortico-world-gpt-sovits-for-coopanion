@@ -20,6 +20,7 @@ import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
 import { normalizeVoiceModel, officialVoice, OUTPUT_GAIN, resolveModelVersion, RUNTIME_ASSETS, RUNTIME_EXTRACT_BYTES, RUNTIME_VERSION, voiceModelNeedsNormalizing, weightPaths, type ModelVersion } from './catalog.ts';
 import { synthCloud } from './cloud.ts';
+import { defaultCloudVoices, effectiveCloudVoiceId, effectiveCloudVoices, fetchCloudVoices, isOpenAiBase, OPENAI_VOICES, type CloudVoice } from './cloud-voices.ts';
 import { CloudKeyStore } from './secret-store.ts';
 import { dirBytes, topLevelBytes } from './disk.ts';
 import { detectGpus, fallbackToCpu, pickTier, type AmdProbe, type GpuVendor } from './gpu.ts';
@@ -28,7 +29,7 @@ import { effectiveWeights, emptyWeights, NEW_VOICE_PRESET, newCustomVoiceId, sel
 import { startHttpTts, SING_MARK, type HttpTtsHandle, type SynthResult, type TtsJob } from './http-tts.ts';
 import { channelWords, languageWords, panelText, qqbotWords, shareWords, stateWords } from './i18n.ts';
 import { isLinkEntry, isRuntimeDir, removeTreeSafely, RuntimeJob, WeightsJob, type JobState } from './install.ts';
-import { Player, applyGain, listOutputDevices } from './player.ts';
+import { Player, applyGain, listOutputDevices, playbackLeadMs } from './player.ts';
 import { RvcLink, type RvcProbe } from './rvc-link.ts';
 import { SovitsServer, type ServerState } from './server.ts';
 import { customVoiceOptions, registerCustomVoiceOptions } from './voice-options.ts';
@@ -38,7 +39,7 @@ import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { TrainerManager } from './trainer.ts';
 import { translateTo } from './translate.ts';
 import { DEFAULT_PRESET, isPreset, presetFileLabel, presetLabel, presetRefId, VOICE_PRESETS, type VoicePreset } from './voices.ts';
-import { installedBaseWeights, officialWeights, resolveTrained, type TrainedResult, type TrainedWeights } from './weights.ts';
+import { installedBaseWeights, officialWeights, checkWeights, resolveTrained, sovitsVersion, type TrainedResult, type TrainedWeights } from './weights.ts';
 import { readSeconds, staleSavedLine, wavBytes } from './wav.ts';
 
 const ENV_PROMPT_FILES = {
@@ -236,6 +237,8 @@ export class GptSovitsWorld implements World {
   private readonly rvc: RvcLink;
   /** 云端密钥（AES-GCM 密文 + `.env` 主密钥）。 */
   private readonly cloudKeys: CloudKeyStore;
+  /** 最近几句的实测样本（音频秒/字、实时系数 RTF），用来估预缓冲门槛；`lines = 0` 表示还没样本。 */
+  private leadStats = { lines: 0, secondsPerChar: 0, rtf: 0 };
 
   constructor(private readonly opts: GptSovitsWorldOptions) {
     this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
@@ -281,15 +284,40 @@ export class GptSovitsWorld implements World {
     return resolveModelVersion(this.cfg.voiceModel ?? 'auto', this.tier());
   }
 
-  /** 当前合成引擎：手动切换，默认本地。 */
-  private engine(): 'local' | 'cloud' {
-    return this.cfg.ttsEngine === 'cloud' ? 'cloud' : 'local';
+  /** 面板里的原始选择：`null` = 还没选（新装默认）；老配置的 local/cloud 都算已选。 */
+  private engineSelected(): 'local' | 'cloud' | null {
+    return this.cfg.ttsEngine === 'cloud' ? 'cloud' : this.cfg.ttsEngine === 'local' ? 'local' : null;
   }
 
-  /** 云端能不能接活：填了地址、选了音色、密钥可解密。 */
+  /** 合成用引擎：没选时按本地走，与 0.6.x 的默认一致，免得还没选就发不出声。 */
+  private engine(): 'local' | 'cloud' {
+    return this.engineSelected() ?? 'local';
+  }
+
+  /**
+   * 面板展示的云端音色：用户清单优先，空时按已知服务商给默认（OpenAI → 官方 6 个）。
+   * 接口不是 OpenAI 时，把「OpenAI 官方音色」标出来；这类 id 厂商很可能不认，需要在合成前就看得见。
+   */
+  private cloudVoiceOptions(): CloudVoice[] {
+    const list = effectiveCloudVoices(this.cfg.cloudVoices, this.cfg.cloudBaseUrl, this.cfg.cloudVoiceId);
+    if (isOpenAiBase(this.cfg.cloudBaseUrl)) return list;
+    return list.map((v) => (OPENAI_VOICES.some((o) => o.id === v.id) ? { ...v, official: true } : v));
+  }
+
+  /** 实际请求用的音色 id：显式选过的优先，否则用清单第一个（默认清单里是 alloy）。 */
+  private cloudVoiceId(): string {
+    return effectiveCloudVoiceId(this.cfg.cloudVoiceId, this.cloudVoiceOptions());
+  }
+
+  /** 当前是不是在用内置默认清单（用户没维护清单、也没单独选过音色）。 */
+  private usingDefaultCloudVoices(): boolean {
+    return !(this.cfg.cloudVoices ?? []).length && !this.cfg.cloudVoiceId.trim() && defaultCloudVoices(this.cfg.cloudBaseUrl).length > 0;
+  }
+
+  /** 云端能不能接活：填了地址、有可用音色（含默认）、密钥可解密。 */
   private cloudReady(): boolean {
     if (this.engine() !== 'cloud') return false;
-    if (!this.cfg.cloudBaseUrl.trim() || !this.cfg.cloudVoiceId.trim()) return false;
+    if (!this.cfg.cloudBaseUrl.trim() || !this.cloudVoiceId()) return false;
     try {
       return !!this.cloudKeys.read();
     } catch {
@@ -300,12 +328,34 @@ export class GptSovitsWorld implements World {
   /** 云端为什么没就绪（只用于回执，不抛错）。 */
   private cloudIssue(): string {
     if (!this.cfg.cloudBaseUrl.trim()) return 'the cloud base URL is empty';
-    if (!this.cfg.cloudVoiceId.trim()) return 'no cloud voice is selected';
+    if (!this.cloudVoiceId()) return 'no cloud voice is selected';
     try {
       this.cloudKeys.read();
       return 'the cloud key is missing';
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  /**
+   * 面板「从服务商拉取清单」：成功就合并进清单并选中第一个；没有这个端点的服务商按失败说明，
+   * 但保留现有清单，用户仍可手动添加。密钥只在这次请求里解密，错误文本已脱敏。
+   */
+  private async refreshCloudVoices(): Promise<PanelState | { text: string; failed: true }> {
+    const t = panelText(this.uiLanguage);
+    let key = '';
+    try { key = this.cloudKeys.read() ?? ''; } catch { /* 解不开按未设置处理 */ }
+    if (!key) return { text: t.cloudVoicesNeedKey, failed: true };
+    try {
+      const fetched = await fetchCloudVoices(this.cfg.cloudBaseUrl, key, this.cfg.cloudTimeoutMs || 60_000);
+      if (!fetched.length) return { text: t.cloudVoicesPullEmpty, failed: true };
+      const merged = [...(this.cfg.cloudVoices ?? [])];
+      for (const v of fetched) if (!merged.some((x) => x.id === v.id)) merged.push(v);
+      const keep = merged.some((v) => v.id === this.cfg.cloudVoiceId);
+      this.opts.persist({ cloudVoices: merged.slice(0, 50), ...(keep ? {} : { cloudVoiceId: merged[0]?.id ?? '' }) });
+      return { ...this.panelState(), notice: { code: 'cloudVoicesPulled', count: fetched.length } };
+    } catch (err) {
+      return { text: t.cloudVoicesPullFailed(err instanceof Error ? err.message : String(err)), failed: true };
     }
   }
 
@@ -316,7 +366,7 @@ export class GptSovitsWorld implements World {
     const audio = await synthCloud(text, {
       baseUrl: this.cfg.cloudBaseUrl,
       model: this.cfg.cloudModel,
-      voice: this.cfg.cloudVoiceId,
+      voice: this.cloudVoiceId(),
       speed: this.cfg.speed,
       timeoutMs: this.cfg.cloudTimeoutMs || 60_000,
       key,
@@ -402,7 +452,43 @@ export class GptSovitsWorld implements World {
     this.weightsFailed = '';
     const url = this.url();
     if (!url || this.server.state().phase !== 'ready') return;
+    // 推理档刚被换音色自动对齐过：当前服务还是旧底座，下一句会走重启，先别切权重。
+    if (this.appliedVersion !== null && this.appliedVersion !== this.version()) return;
     void this.applyWeights(url);
+  }
+
+  /** 一组权重需要哪个推理模型；没填或读不出返回 null。 */
+  private weightsModel(weights: TrainedWeights | null | undefined): ModelVersion | null {
+    if (!weights?.sovits) return null;
+    return sovitsVersion(weights.sovits)?.version ?? null;
+  }
+
+  /** 换音色时把推理模型对齐到该权重需要的版本；返回想要的版本与实际生效的版本。 */
+  private alignModel(weights: TrainedWeights | null | undefined): { want: ModelVersion; applied: ModelVersion | null } | null {
+    const want = this.weightsModel(weights);
+    if (!want || want === this.version()) return null;
+    this.opts.persist({ voiceModel: want });
+    const applied = this.version() === want ? want : null;
+    if (!applied) this.log.warn('推理档受硬件限制，切不到权重需要的版本', { want, current: this.version() });
+    return { want, applied };
+  }
+
+  /** 自动对齐 / 编辑保存后的回执：对齐成功报「已切换」，切不动或有版本差就报冲突。 */
+  private alignNotice(align: { want: ModelVersion; applied: ModelVersion | null } | null, mismatch: ModelVersion | null): PanelNotice | undefined {
+    if (align) {
+      return align.applied
+        ? { code: 'modelSwitched', model: align.applied }
+        : { code: 'weightsMismatch', want: align.want, current: this.version() };
+    }
+    return mismatch && mismatch !== this.version() ? { code: 'weightsMismatch', want: mismatch, current: this.version() } : undefined;
+  }
+
+  /** 当前该用的权重与推理模型的版本冲突；启动兜底与面板提示共用这一份判断。 */
+  private modelMismatch(): { want: ModelVersion; current: ModelVersion } | null {
+    const custom = selectedCustomVoice(this.cfg.voices ?? [], this.cfg.voice.preset);
+    const officialPreset = !custom && isPreset(this.cfg.voice.preset);
+    const want = this.weightsModel(effectiveWeights(custom, this.cfg.weights, officialPreset));
+    return want && want !== this.version() ? { want, current: this.version() } : null;
   }
 
   private backend(): Backend {
@@ -727,18 +813,75 @@ export class GptSovitsWorld implements World {
     // 落盘、交出去或这一句要回报附件时收整句；都没有时不占内存。
     const archive = this.cfg.saveAudio || deliver ? { rate: 0, chunks: [] as Buffer[] } : null;
     let first = 0;
+    let audioMs = 0;
+    const began = Date.now();
+    // 预缓冲只在「实测生成慢于播放」时生效；门槛 0（默认）时与旧行为完全一致：第一块就写声卡。
+    const leadMs = this.leadTargetMs(spoken, silent);
+    let held: Array<{ rate: number; pcm: Buffer }> = [];
+    let heldMs = 0;
+    let released = leadMs <= 0;
+    const release = async (): Promise<void> => {
+      const hadAudio = held.length > 0;
+      for (const part of held) await this.player.write(part.rate, part.pcm, gain);
+      held = [];
+      released = true;
+      if (hadAudio && !first) { first = Date.now(); onFirst(); }
+    };
     for await (const c of synthesize(url, this.request(spoken, voice), signal)) {
+      const ms = (c.pcm.length / 2 / c.sampleRate) * 1000;
+      audioMs += ms;
       if (archive) { archive.rate = c.sampleRate; archive.chunks.push(applyGain(c.pcm, gain)); }
-      if (!silent) await this.player.write(c.sampleRate, c.pcm, gain);
-      if (!first) { first = Date.now(); onFirst(); }
+      if (!silent) {
+        if (released) {
+          await this.player.write(c.sampleRate, c.pcm, gain);
+        } else {
+          held.push({ rate: c.sampleRate, pcm: c.pcm });
+          heldMs += ms;
+          if (heldMs >= leadMs) await release();
+        }
+      }
+      if (!first && (released || silent)) { first = Date.now(); onFirst(); }
     }
+    // 句子比门槛短时，别把最后几块压在手里白等：直接全部写出去。
+    if (!silent && !released) await release();
     if (!silent) this.player.flush();
+    // 只拿本机外放的整句做样本：silent / 交付句的墙钟含 QQ 等下游开销，算进来会把 RTF 带偏。
+    if (!silent && !signal.aborted) this.recordLeadSample(spoken.length, audioMs, Date.now() - began);
     if (!archive?.chunks.length) return { first, wav: null };
     const bytes = Buffer.concat(archive.chunks);
     if (this.cfg.saveAudio) this.saveLine(bytes, archive.rate);
     // 交出去的一律是带 RIFF 头的完整 WAV：别的插件拿这段字节去转码，裸 PCM 会被 ffmpeg 判成
     // 「Invalid data found when processing input」（QQ 语音就是这么失败的）。
     return { first, wav: deliver ? wavBytes(bytes, archive.rate) : null };
+  }
+
+  /** 本句的预缓冲门槛；没有样本、生成快于播放、系统播放器或本句不落声卡时都给 0。 */
+  private leadTargetMs(spoken: string, silent: boolean): number {
+    if (silent || this.player.usesSystemPlayer) return 0;
+    const s = this.leadStats;
+    if (!s.lines) return 0;
+    return playbackLeadMs({
+      ratio: this.cfg.playbackLead ?? 0,
+      chars: spoken.length,
+      secondsPerChar: s.secondsPerChar,
+      rtf: s.rtf,
+    });
+  }
+
+  /** 记一句本机外放的实测：音频秒/字与实时系数（合成墙钟 / 音频时长），EMA 衰减旧样本。 */
+  private recordLeadSample(chars: number, audioMs: number, synthMs: number): void {
+    if (!(chars > 0) || !(audioMs > 0) || !(synthMs > 0)) return;
+    const secondsPerChar = audioMs / 1000 / chars;
+    const rtf = synthMs / audioMs;
+    const s = this.leadStats;
+    if (!s.lines) {
+      s.secondsPerChar = secondsPerChar;
+      s.rtf = rtf;
+    } else {
+      s.secondsPerChar = s.secondsPerChar * .75 + secondsPerChar * .25;
+      s.rtf = s.rtf * .75 + rtf * .25;
+    }
+    s.lines += 1;
   }
 
   /**
@@ -954,7 +1097,7 @@ export class GptSovitsWorld implements World {
     this.appliedVersion = null;
     this.appliedTarget = null;
     this.weightsFailed = '';
-    this.launching = this.cfg.autoStart && this.backend().kind !== 'remote' && this.engine() === 'local';
+    this.launching = this.cfg.autoStart && this.backend().kind !== 'remote' && this.engineSelected() === 'local';
     const gpus = await detectGpus();
     this.cuda = gpus.nvidia;
     this.amd = gpus.amd;
@@ -967,6 +1110,9 @@ export class GptSovitsWorld implements World {
     if (this.cfg.channelVoice && !this.cfg.httpApi) this.log.warn('「其他渠道的语音交给对方插件」开着，但「开放本地语音接口」没开，旧 QQ 插件取不到音频', { httpPort: this.cfg.httpPort });
     // 启动即把当前音色的音频/台本镜像进配置字段：配置页一打开就能看到实际用的文件。
     this.settlePreset();
+    // 启动兜底：推理模型与音色权重的版本对不上（手改配置 / 旧配置遗留）时说一声。
+    const bad = this.modelMismatch();
+    if (bad) this.log.warn('推理模型与音色权重的版本不一致，换音色时会自动对齐', { want: bad.want, current: bad.current });
     this.appliedTextLang = null;
     this.syncLanguage(true);
     this.langTimer = setInterval(() => this.syncLanguage(), 1000);
@@ -1269,8 +1415,8 @@ export class GptSovitsWorld implements World {
       if (problems.length) throw new Error(problems.join(' '));
       const weights = { gpt: gpt.trim(), sovits: sovits.trim() };
       if (weights.gpt) {
-        // 权重填了就当场校验版本与文件，不让坏配置进列表。
-        const result = resolveTrained(weights, this.version());
+        // 填了就校验文件与版本头；和当前推理档不一致也允许保存，换这个音色时会自动对齐。
+        const result = checkWeights(weights);
         if (result.problem || !result.weights) throw new Error(`权重用不上：${result.problem}`);
       }
       const id = newCustomVoiceId();
@@ -1279,7 +1425,8 @@ export class GptSovitsWorld implements World {
       const voice: CustomVoice = { id, name: name.trim(), audio: file, text: text.trim(), weights: weights.gpt ? weights : emptyWeights() };
       this.opts.persist({ voices: [...(this.cfg.voices ?? []), voice], voice: { preset: id, audio: file, text: voice.text } });
       this.log.info('已添加自定义音色', { id, name: voice.name, withWeights: !!weights.gpt });
-      return this.panelState();
+      const align = this.alignModel(voice.weights);
+      return { ...this.panelState(), notice: this.alignNotice(align, null) };
     } finally {
       if (bytes.length) rmSync(tmp, { force: true });
     }
@@ -1308,9 +1455,12 @@ export class GptSovitsWorld implements World {
       if (!bytes.length && !target.audio) problems.unshift('请选择参考音频文件（3–10 秒的 WAV）。');
       if (problems.length) throw new Error(problems.join(' '));
       const weights = { gpt: gpt.trim(), sovits: sovits.trim() };
+      let weightVersion: ModelVersion | null = null;
       if (weights.gpt) {
-        const result = resolveTrained(weights, this.version());
+        // 只校验文件与版本头；版本和当前推理档不一致也不再拦保存。
+        const result = checkWeights(weights);
         if (result.problem || !result.weights) throw new Error(`权重用不上：${result.problem}`);
+        weightVersion = result.version ?? null;
       }
       const audio = bytes.length ? (writeFileSync(join(this.opts.dataDir, 'voices', `${id}.wav`), bytes), join(this.opts.dataDir, 'voices', `${id}.wav`)) : target.audio;
       const updated: CustomVoice = { id, name: (name || target.name).trim(), audio, text: text.trim(), weights: weights.gpt ? weights : emptyWeights() };
@@ -1321,7 +1471,9 @@ export class GptSovitsWorld implements World {
         ...(selected ? { voice: { preset: id, audio: updated.audio, text: updated.text } } : {}),
       });
       this.log.info('已更新自定义音色', { id, name: updated.name, newAudio: !!bytes.length, withWeights: !!weights.gpt });
-      return this.panelState();
+      // 正在用的音色：保存即按新权重的版本对齐推理模型；否则只提示版本差距，不动全局设置。
+      const align = selected ? this.alignModel(updated.weights) : null;
+      return { ...this.panelState(), notice: this.alignNotice(align, selected ? null : weightVersion) };
     } finally {
       if (bytes.length) rmSync(probe, { force: true });
     }
@@ -1347,19 +1499,20 @@ export class GptSovitsWorld implements World {
     };
     const st = this.server.state();
     const remote = this.backend().kind === 'remote';
+    // 启动兜底：本地模式下推理模型与音色权重版本不一致时，灯泡提示直接说出来。
+    const bad = this.engineSelected() === 'cloud' ? null : this.modelMismatch();
     const lamp: WorldLamp = remote
       ? { label: t.lamp, state: 'online', hint: t.remote }
       : {
         label: t.lamp,
         state: st.phase === 'ready' && this.warmed ? 'online' : st.phase === 'starting' || this.warming ? 'loading' : st.phase === 'error' ? 'error' : 'offline',
-        hint: this.sleeping ? t.asleep : st.detail ?? undefined,
+        hint: bad ? t.modelMismatchHint : this.sleeping ? t.asleep : st.detail ?? undefined,
       };
     return {
       label: t.label,
       lamps: [lamp],
       panels: [
         { id: 'voice', title: t.panel, description: t.panelHint, getMethods: ['state'] },
-        cfgPanel('cfg-voice', `world:${GPT_SOVITS_ID}`),
         cfgPanel('cfg-output', `world:${GPT_SOVITS_ID}:output`),
         cfgPanel('cfg-link', `world:${GPT_SOVITS_ID}:link`, ['config', 'qqGuide', 'writeQqVoice']),
         cfgPanel('cfg-service', `world:${GPT_SOVITS_ID}:service`),
@@ -1587,11 +1740,22 @@ export class GptSovitsWorld implements World {
         case 'use': {
           const id = String(args[0] ?? '');
           const cv = selectedCustomVoice(this.cfg.voices ?? [], id);
-          if (id && !cv) throw new Error('找不到这个自定义音色。');
+          // 预设音色（xll / dfy / female / male）也能从这里直接选中，不必只走配置页。
+          if (id && !cv && !isPreset(id)) throw new Error('找不到这个自定义音色。');
           this.opts.persist({ voice: { preset: id || DEFAULT_PRESET, name: cv?.name ?? '', audio: cv?.audio ?? '', text: cv?.text ?? '' } });
+          // 换成自带权重的音色时，推理模型跟着对齐，并在回执里明确告诉用户。
+          const align = this.alignModel(cv?.weights);
           this.syncWeightsAfterVoiceChange();
-          return this.panelState();
+          return { ...this.panelState(), notice: this.alignNotice(align, null) };
         }
+        // 云端设置的入口在「音色」页，实现与「语音」页同一套（转发过去，免得两份逻辑）。
+        case 'setEngine':
+        case 'saveCloudKey':
+        case 'clearCloudKey':
+        case 'setCloudField':
+        case 'setCloudVoices':
+        case 'refreshCloudVoices':
+          return this.invoke('voice', method, args);
         default: throw new Error(`未知方法 ${method}`);
       }
     }
@@ -1608,6 +1772,8 @@ export class GptSovitsWorld implements World {
       case 'usage': return this.usage(args[0] === 'refresh');
       case 'setEngine': {
         const engine = args[0] === 'cloud' ? 'cloud' : 'local';
+        // 换引擎后，上一档的失败原因不该当成这一档的；清掉，等下一次合成再写。
+        if (this.engine() !== engine) this.lastError = null;
         this.opts.persist({ ttsEngine: engine });
         // 切回本地且服务没起时，按 autoStart 拉起（云端模式从不启动本机服务）。
         if (engine === 'local' && this.cfg.autoStart && !this.url() && this.canStart() && !this.launching) {
@@ -1633,6 +1799,8 @@ export class GptSovitsWorld implements World {
           ? Math.max(5000, Math.min(300000, Number(args[1]) || 60_000))
           : String(args[1] ?? '').trim();
         this.opts.persist({ [key]: value } as Partial<GptSovitsConfigSection>);
+        // 改了地址/模型/音色之后，上一次的失败信息多半已经过期，别让红字一直挂着吓人。
+        if (key === 'cloudBaseUrl' || key === 'cloudModel' || key === 'cloudVoiceId') this.lastError = null;
         return this.panelState();
       }
       case 'setCloudVoices': {
@@ -1645,6 +1813,7 @@ export class GptSovitsWorld implements World {
         this.opts.persist({ cloudVoices: voices, ...(keep ? {} : { cloudVoiceId: voices[0]?.id ?? '' }) });
         return this.panelState();
       }
+      case 'refreshCloudVoices': return this.refreshCloudVoices();
       case 'setVoice': this.saveVoice(String(args[0] ?? ''), String(args[1] ?? ''), String(args[2] ?? '')); this.syncWeightsAfterVoiceChange(); return this.panelState();
       case 'resetVoice': this.opts.persist({ voice: { preset: DEFAULT_PRESET, audio: '', text: '' } }); this.syncWeightsAfterVoiceChange(); return this.panelState();
       case 'addVoice': { const s = this.addCustomVoice(args); this.syncWeightsAfterVoiceChange(); return s; }
@@ -1665,8 +1834,9 @@ export class GptSovitsWorld implements World {
         if (id && !selectedCustomVoice(this.cfg.voices ?? [], id)) throw new Error('找不到这个自定义音色。');
         const cv = id ? selectedCustomVoice(this.cfg.voices ?? [], id) : null;
         this.opts.persist({ voice: { preset: id || DEFAULT_PRESET, audio: cv?.audio ?? '', text: cv?.text ?? '' } });
+        const align = this.alignModel(cv?.weights);
         this.syncWeightsAfterVoiceChange();
-        return this.panelState();
+        return { ...this.panelState(), notice: this.alignNotice(align, null) };
       }
       default: throw new Error(`未知方法 ${method}`);
     }
@@ -1679,12 +1849,15 @@ export class GptSovitsWorld implements World {
     const voice = this.voice();
     return {
       backend: b.kind,
-      engine: this.engine(),
+      engine: this.engineSelected(),
+      mismatch: this.modelMismatch() ?? undefined,
       cloud: {
         baseUrl: this.cfg.cloudBaseUrl,
         model: this.cfg.cloudModel,
-        voiceId: this.cfg.cloudVoiceId,
-        voices: this.cfg.cloudVoices ?? [],
+        voiceId: this.cloudVoiceId(),
+        voices: this.cloudVoiceOptions(),
+        autoVoices: this.usingDefaultCloudVoices(),
+        presetMismatch: !isOpenAiBase(this.cfg.cloudBaseUrl) && OPENAI_VOICES.some((v) => v.id === this.cloudVoiceId()),
         keyMask: this.cfg.cloudKeyMask || '',
         keySet: this.cloudKeys.has(),
         timeoutMs: this.cfg.cloudTimeoutMs,
@@ -1786,16 +1959,30 @@ export interface UsageState {
   scannedAt: string;
 }
 
+/** 面板操作的一次性回执：换音色自动对齐推理模型，或权重与推理模型版本不一致。 */
+export type PanelNotice =
+  | { code: 'modelSwitched'; model: ModelVersion }
+  | { code: 'weightsMismatch'; want: ModelVersion; current: ModelVersion }
+  | { code: 'cloudVoicesPulled'; count: number };
+
 export interface PanelState {
   backend: Backend['kind'];
-  /** 当前合成引擎：本地 / 云端（手动切换）。 */
-  engine: 'local' | 'cloud';
+  /** 当前合成引擎：本地 / 云端（手动切换）；`null` = 还没选，面板只显示选择提示。 */
+  engine: 'local' | 'cloud' | null;
+  /** 当前推理模型与所选音色权重需要的版本不一致；启动兜底与面板提示共用。 */
+  mismatch?: { want: ModelVersion; current: ModelVersion };
+  /** 一次操作回执（换音色自动对齐、保存了版本不一致的权重等）。 */
+  notice?: PanelNotice;
   /** 云端配置与状态；密钥只给掩码，明文永远不出现在这里。 */
   cloud: {
     baseUrl: string;
     model: string;
     voiceId: string;
-    voices: Array<{ id: string; name: string }>;
+    voices: Array<{ id: string; name: string; official?: boolean }>;
+    /** true = 用户没维护清单，正在用内置默认（OpenAI 官方地址）。 */
+    autoVoices: boolean;
+    /** true = 生效音色是 OpenAI 官方音色，但接口不是 OpenAI（厂商很可能不认）。 */
+    presetMismatch: boolean;
     keyMask: string;
     keySet: boolean;
     timeoutMs: number;
