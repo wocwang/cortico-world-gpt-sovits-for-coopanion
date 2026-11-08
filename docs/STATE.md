@@ -1,6 +1,6 @@
 # 当前状态快照
 
-生成时间：2026-11-08T06:04:31.924Z
+生成时间：2026-11-08T06:04:51.177Z
 仓库：d:\Users\HW W\Documents\pr-gpt-sovits\repo
 
 ## 版本
@@ -13,6 +13,7 @@
 ## 提交
 
 ```
+ad78e77 docs: add a seamless handover snapshot, prompt and checklist
 72e3938 wip(tts): cloud engine backend (panel UI still missing)
 b9ae4cb docs: record the 0.6.10 release
 ad58c7d feat(player): add a system-player backend for driver crashes
@@ -20,23 +21,17 @@ b92fe60 docs: correct the official-voice weight note
 c910ce8 fix(voice): switch weights when the voice changes
 9fd31a7 docs: record the 0.6.9 release
 f73fb07 docs: drop the subjective timbre wording for the base models
-a6b3dcb docs: attribute the V5 metallic note and add measured timings
 ```
 
 ## 工作树
 
-- `M HANDOFF.md`
-- ` M TODO.md`
-- ` M package.json`
-- `?? AGENTS.md`
-- `?? CLAUDE.md`
-- `?? docs/handoff-prompt.md`
-- `?? scripts/handoff.mjs`
+- `?? AGENTS.md`（别的工具生成的，未跟踪）
+- `?? CLAUDE.md`（别的工具生成的，未跟踪）
 
 ## 本机安装
 
 - 已装版本：**0.6.10**（与工作区一致）
-- 日志：`D:\Program Files\Coopanion\data\logs\core.log`（最后写入 2026-11-08T06:04:23.593Z）
+- 日志：`D:\Program Files\Coopanion\data\logs\core.log`（最后写入 2026-11-08T06:04:35.431Z）
 
 ## 宿主配置（gpt-sovits）
 
