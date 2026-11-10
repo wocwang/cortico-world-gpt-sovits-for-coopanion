@@ -39,6 +39,12 @@ const GH_OWN = `https://github.com/Phantivia/cortico-world-gpt-sovits-for-coopan
 const MS_SELF = 'https://www.modelscope.cn/models/wocwang/gpt-sovits-for-coopanion/resolve/master';
 const GH_SELF = `https://github.com/wocwang/cortico-world-gpt-sovits-for-coopanion/releases/download/runtime-${RUNTIME_VERSION}`;
 
+/**
+ * GitHub Release 附件的来源顺序：官方排第一，两个公共加速前缀作回落。
+ * 官方在国内经常直接连不上（实测 0 字节即断），加速前缀只在官方失败后才试，SHA-256 仍按整包校验。
+ */
+const ghParts = (url: string): readonly string[] => [url, `https://ghfast.top/${url}`, `https://gh-proxy.com/${url}`];
+
 const CUDA_FILE = `gpt-sovits-${RUNTIME_VERSION}-win-x64-cu128.zip`;
 const CPU_FILE = `gpt-sovits-${RUNTIME_VERSION}-win-x64-cpu.zip`;
 const ROCM_FILE = `gpt-sovits-${RUNTIME_VERSION}-win-x64-rocm.zip`;
@@ -58,16 +64,17 @@ export const RUNTIME_ASSETS: Readonly<Record<Tier, RuntimeAsset>> = {
     sha256: '87c775a93f9b13195b83bc2901a6176f771e31076bc051acf07a5ccca1db7a78',
     sources: [`${MS_OWN}/runtime/${CUDA_FILE}`],
     parts: [
-      { bytes: 1992294400, sources: [`${GH_OWN}/${CUDA_FILE}.part0`] },
-      { bytes: 1992294400, sources: [`${GH_OWN}/${CUDA_FILE}.part1`] },
-      { bytes: 156143264, sources: [`${GH_OWN}/${CUDA_FILE}.part2`] },
+      { bytes: 1992294400, sources: ghParts(`${GH_OWN}/${CUDA_FILE}.part0`) },
+      { bytes: 1992294400, sources: ghParts(`${GH_OWN}/${CUDA_FILE}.part1`) },
+      { bytes: 156143264, sources: ghParts(`${GH_OWN}/${CUDA_FILE}.part2`) },
     ],
   },
   cpu: {
     file: CPU_FILE,
     bytes: 1036310624,
     sha256: '9ce348074e941388544b4db072ee0b9cfc50c9bd420e61f13ee9364fe90152e1',
-    sources: [`${MS_OWN}/runtime/${CPU_FILE}`, `${GH_OWN}/${CPU_FILE}`],
+    // GitHub 整包同样排在官方之后挂两个加速前缀：魔搭不通时不必啃几十 KB/s 的直连。
+    sources: [`${MS_OWN}/runtime/${CPU_FILE}`, ...ghParts(`${GH_OWN}/${CPU_FILE}`)],
   },
   rocm: {
     file: ROCM_FILE,
@@ -75,8 +82,8 @@ export const RUNTIME_ASSETS: Readonly<Record<Tier, RuntimeAsset>> = {
     sha256: '0b3f7f709f7f5f7f0dde62488a7bcab0a4d31dce46d1cf53ecc0e6bbbdccc945',
     sources: [`${MS_SELF}/runtime/${ROCM_FILE}`],
     parts: [
-      { bytes: 1992294400, sources: [`${GH_SELF}/${ROCM_FILE}.part0`] },
-      { bytes: 1147773289, sources: [`${GH_SELF}/${ROCM_FILE}.part1`] },
+      { bytes: 1992294400, sources: ghParts(`${GH_SELF}/${ROCM_FILE}.part0`) },
+      { bytes: 1147773289, sources: ghParts(`${GH_SELF}/${ROCM_FILE}.part1`) },
     ],
   },
 };

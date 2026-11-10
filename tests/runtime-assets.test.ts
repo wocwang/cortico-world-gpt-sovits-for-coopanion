@@ -39,13 +39,31 @@ describe('ROCm 运行时资产', () => {
     expect(sum).toBe(rocm.bytes);
   });
 
-  it('整包先走魔搭，GitHub 只做分片兜底', () => {
+  it('整包先走魔搭，GitHub 只做分片兜底，官方源之后才轮到加速前缀', () => {
     const rocm = RUNTIME_ASSETS.rocm;
     expect(rocm.sources.some((source) => source.includes('modelscope.cn'))).toBe(true);
     expect(rocm.parts?.length).toBeGreaterThan(0);
     for (const part of rocm.parts ?? []) {
-      expect(part.sources.every((source) => source.includes('github.com'))).toBe(true);
+      expect(part.sources[0].startsWith('https://github.com/')).toBe(true);
+      expect(part.sources.slice(1)).toEqual([
+        `https://ghfast.top/${part.sources[0]}`,
+        `https://gh-proxy.com/${part.sources[0]}`,
+      ]);
     }
+    for (const part of RUNTIME_ASSETS.cuda.parts ?? []) {
+      expect(part.sources[0].startsWith('https://github.com/')).toBe(true);
+      expect(part.sources.slice(1).every((source) => /ghfast\.top|gh-proxy\.com/.test(source))).toBe(true);
+    }
+  });
+
+  it('CPU 整包的 GitHub 兜底也挂了加速前缀', () => {
+    const cpu = RUNTIME_ASSETS.cpu;
+    expect(cpu.sources[0]).toContain('modelscope.cn');
+    expect(cpu.sources[1].startsWith('https://github.com/')).toBe(true);
+    expect(cpu.sources.slice(2)).toEqual([
+      `https://ghfast.top/${cpu.sources[1]}`,
+      `https://gh-proxy.com/${cpu.sources[1]}`,
+    ]);
   });
 
   it('共享的 cuda / cpu 资产没有被 ROCm 改动', () => {

@@ -6,6 +6,7 @@
 import type { WebUiClientBundle, WebUiPanel, WebUiPanelContext, WebUiSheet } from 'cortico/web/shared/client-panel.ts';
 import { panelText } from '../i18n.ts';
 import type { RvcProbe } from '../rvc-link.ts';
+import type { FolderReport } from '../gptsovits-folder.ts';
 import type { PanelState, UsageItem, UsageState } from '../world.ts';
 import type { TrainerState } from '../trainer.ts';
 import { VOICE_PRESETS, isPreset, presetFileLabel, presetLabel } from '../voices.ts';
@@ -179,9 +180,186 @@ const voicePanel: WebUiPanel = {
     const queue = ui.h('span', 'gsv-detail');
     test.append(line, testActs, said, queue);
 
+    // ---- 已有 GPT-SoVITS：只在选了「本地」之后才问；默认展开「选目录」
+    const setup = ui.section(t.setupTitle, t.setupHint);
+    const setupNow = ui.h('div', 'gsv-detail');
+    const setupPick = ui.actions();
+    setupPick.classList.add('gsv-setup-pick');
+    const folderBtn = ui.button(t.setupByFolder, { size: 'sm', onClick: () => showSetup('own') });
+    const serviceBtn = ui.button(t.setupByService, { size: 'sm', onClick: () => showSetup('remote') });
+    const managedBtn = ui.button(t.setupManaged, { size: 'sm', onClick: () => void call('useManaged') });
+    setupPick.append(folderBtn, serviceBtn, managedBtn);
+    setup.append(setupNow, setupPick);
+
+    // 目录：路径输入 → 检测 / 自动找 → 点选权重与参考音频 → 用这个目录
+    const folderBox = ui.h('div', 'gsv-cfg');
+    const folderInput = ui.input({ placeholder: t.setupFolderPh, onInput: () => resetReport() });
+    const folderActs = ui.actions();
+    const applyBtn = ui.button(t.setupApply, { variant: 'primary', size: 'sm', onClick: () => void applyFolder() });
+    applyBtn.disabled = true;
+    folderActs.append(
+      ui.button(t.setupCheck, { size: 'sm', onClick: () => void checkFolder() }),
+      ui.button(t.setupFind, { size: 'sm', onClick: () => void findFolder() }),
+      applyBtn,
+    );
+    const folderNote = ui.h('div', 'gsv-detail');
+    const candidateList = ui.h('div', 'gsv-detail');
+    const weightsList = ui.h('div');
+    const refsList = ui.h('div');
+    folderBox.append(folderInput, folderActs, folderNote, candidateList, weightsList, refsList);
+
+    // 服务：填地址后点「测试连接」才探一次，不自动扫端口。
+    const serviceBox = ui.h('div', 'gsv-cfg');
+    const serviceRemoteNote = ui.h('div', 'gsv-detail gsv-warn', t.setupRemoteOther);
+    serviceRemoteNote.hidden = true;
+    const serviceInput = ui.input({ placeholder: t.setupServicePh, onInput: (v) => { serviceRemoteNote.hidden = isLoopback(v) || !v.trim(); } });
+    const serviceActs = ui.actions();
+    serviceActs.append(ui.button(t.setupTest, { variant: 'primary', size: 'sm', onClick: () => void call('probeService', [serviceInput.value]) }));
+    serviceBox.append(serviceInput, serviceActs, serviceRemoteNote);
+
+    setup.append(folderBox, serviceBox);
+    showSetup('own');
+
+    let report: FolderReport | null = null;
+    let pickedWeights: { gpt: string; sovits: string } | null = null;
+    let pickedRef: string | null = null;
+    let setupPrimed = false;
+
+    /** 面板里同款的本机判定，只用来决定「跨机只提示」这句要不要出现。 */
+    function isLoopback(url: string): boolean {
+      try {
+        const host = new URL(url.trim()).hostname.toLowerCase();
+        return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+      } catch { return false; }
+    }
+
+    function showSetup(mode: 'own' | 'remote') {
+      folderBox.hidden = mode !== 'own';
+      serviceBox.hidden = mode !== 'remote';
+      folderBtn.dataset.on = mode === 'own' ? '1' : '';
+      serviceBtn.dataset.on = mode === 'remote' ? '1' : '';
+    }
+
+    function resetReport() {
+      report = null;
+      pickedWeights = null;
+      pickedRef = null;
+      applyBtn.disabled = true;
+      folderNote.textContent = '';
+      folderNote.classList.remove('gsv-bad', 'gsv-warn');
+      candidateList.replaceChildren();
+      weightsList.replaceChildren();
+      refsList.replaceChildren();
+    }
+
+    /** 目录不可用的原因按面板语言重写；`runtime.problem` 是服务端的中文兜底。 */
+    function folderProblem(r: FolderReport): string {
+      if (!r.runtime.hasApi) return t.setupNoApi;
+      if (!r.runtime.python) return t.setupNoPython;
+      if (!r.runtime.portable) return t.setupPortableMissing;
+      return r.runtime.problem ?? r.problems[0] ?? t.folderUnusable;
+    }
+
+    function renderReport(r: FolderReport) {
+      report = r;
+      pickedWeights = null;
+      pickedRef = null;
+      applyBtn.disabled = !r.runtime.usable;
+      folderNote.classList.remove('gsv-bad', 'gsv-warn');
+      if (r.runtime.usable) {
+        folderNote.textContent = t.setupReadyHint(r.root);
+      } else {
+        folderNote.textContent = folderProblem(r);
+        folderNote.classList.add('gsv-bad');
+      }
+      weightsList.replaceChildren();
+      refsList.replaceChildren();
+      if (r.weights.length) {
+        weightsList.append(ui.h('div', 'gsv-detail', t.setupWeights));
+        for (const w of r.weights) {
+          const line = ui.h('div', 'gsv-row');
+          const pill = ui.h('span', 'gsv-pill', w.problem ? t.error : w.lang);
+          pill.dataset.tone = w.problem ? 'bad' : 'on';
+          const detail = ui.h('span', 'gsv-detail', `${baseName(w.gpt)} + ${baseName(w.sovits)}${w.problem ? ` · ${w.problem}` : ''}`);
+          const acts = ui.h('span', 'gsv-acts');
+          const use = ui.button(t.setupWeightsUse, {
+            size: 'sm',
+            onClick: () => {
+              pickedWeights = { gpt: w.gpt, sovits: w.sovits };
+              for (const el of weightsList.querySelectorAll('.gsv-row')) el.classList.toggle('gsv-picked', el === line);
+            },
+          });
+          use.disabled = !!w.problem;
+          acts.append(use);
+          line.append(ui.h('span', 'gsv-name', w.lang), pill, detail, acts);
+          weightsList.append(line);
+        }
+      } else if (r.runtime.usable) {
+        weightsList.append(ui.h('div', 'gsv-detail', t.setupNoWeights));
+      }
+      if (r.refs.length) {
+        refsList.append(ui.h('div', 'gsv-detail', t.setupRefs));
+        for (const ref of r.refs) {
+          const line = ui.h('div', 'gsv-row');
+          const detail = ui.h('span', 'gsv-detail', `${baseName(ref.audio)}${ref.seconds ? ` · ${ref.seconds.toFixed(1)} s` : ''}${ref.text ? ` · ${ref.text}` : ''}`);
+          const acts = ui.h('span', 'gsv-acts');
+          acts.append(ui.button(t.setupRefUse, {
+            size: 'sm',
+            onClick: () => {
+              pickedRef = ref.audio;
+              for (const el of refsList.querySelectorAll('.gsv-row')) el.classList.toggle('gsv-picked', el === line);
+            },
+          }));
+          line.append(ui.h('span', 'gsv-name', t.setupRefs), ui.h('span'), detail, acts);
+          refsList.append(line);
+        }
+      } else if (r.runtime.usable) {
+        refsList.append(ui.h('div', 'gsv-detail', t.setupNoRefs));
+      }
+    }
+
+    async function checkFolder() {
+      const path = folderInput.value.trim();
+      if (!path) return;
+      msg.textContent = '';
+      msg.classList.remove('bad');
+      try {
+        const r = await ctx.invoke<FolderReport>('inspectFolder', [path]);
+        candidateList.replaceChildren();
+        renderReport(r);
+      } catch (err) {
+        msg.textContent = errText(err);
+        msg.classList.add('bad');
+      }
+    }
+
+    async function findFolder() {
+      msg.textContent = '';
+      try {
+        const hits = await ctx.invoke<string[]>('findFolders');
+        candidateList.replaceChildren();
+        candidateList.append(ui.h('div', null, hits.length ? t.setupCandidates(hits.length) : t.setupNoCandidates));
+        for (const hit of hits) {
+          candidateList.append(ui.button(hit, {
+            size: 'sm',
+            onClick: () => { folderInput.value = hit; void checkFolder(); },
+          }));
+        }
+      } catch (err) {
+        msg.textContent = errText(err);
+        msg.classList.add('bad');
+      }
+    }
+
+    async function applyFolder() {
+      if (!report?.runtime.usable) return;
+      await call('applyFolder', [report.root, { weights: pickedWeights ?? undefined, ref: pickedRef ?? undefined }]);
+      void refresh();
+    }
+
     // 未选引擎时整组本地设置隐藏；msg 留在外面，引擎相关的报错仍能看到。
     const localBox = ui.h('div');
-    localBox.append(status, models, test);
+    localBox.append(setup, status, models, test);
     ctx.root.append(engineSec, localBox, restartBar, msg);
 
     const setPill = (el: HTMLElement, label: string, tone: 'on' | 'off' | 'warn' | 'bad') => {
@@ -197,6 +375,16 @@ const voicePanel: WebUiPanel = {
       localBox.hidden = s.engine !== 'local';
       engineCloudNote.hidden = s.engine !== 'cloud';
       if (s.engine === 'cloud') engineCloudNote.textContent = `${cloudSummary(s, t)} · ${t.engineCloudWhere}`;
+      // 已有 GPT-SoVITS：先用配置回填一次输入框，之后交给用户自己改。
+      if (!setupPrimed) {
+        setupPrimed = true;
+        if (s.setup.runtimeDir) folderInput.value = s.setup.runtimeDir;
+        if (s.setup.serverUrl) serviceInput.value = s.setup.serverUrl;
+        serviceRemoteNote.hidden = isLoopback(serviceInput.value) || !serviceInput.value.trim();
+        showSetup(s.setup.mode === 'remote' ? 'remote' : 'own');
+      }
+      setupNow.textContent = t.setupCurrent(s.setup.mode === 'remote' ? t.setupModeRemote
+        : s.setup.mode === 'own' ? t.setupModeOwn : t.setupModeManaged);
       const bad = s.engine === 'cloud' ? null : s.mismatch;
       engineMismatch.hidden = !bad;
       if (bad) engineMismatch.textContent = t.modelMismatch(modelLabel(bad.want), modelLabel(bad.current));
@@ -718,6 +906,15 @@ const trainPanel: WebUiPanel = {
 
     status.append(ui.msgline(t.trainWarn, true));
     status.append(ui.h('div', 'gsv-detail', t.trainArtifactsTip));
+
+    // 启动失败原因直接显示，不再只藏在折叠日志里；旁边给一个直达「安装训练依赖」的入口。
+    const startErrorNote = ui.h('div', 'gsv-detail gsv-bad');
+    const fixDepsBtn = ui.button(t.trainInstallDeps, { size: 'sm', onClick: () => void call('installTrainer') });
+    const startErrorActs = ui.actions();
+    startErrorActs.append(fixDepsBtn);
+    startErrorNote.hidden = startErrorActs.hidden = true;
+    status.append(startErrorNote, startErrorActs);
+
     const logLabel = ui.h('div', 'gsv-detail', t.trainLog);
     logLabel.hidden = true;
     const log = ui.h('pre', 'gsv-output');
@@ -764,6 +961,9 @@ const trainPanel: WebUiPanel = {
       startBtn.hidden = stopFirst.el.hidden = s.running || s.starting;
       stopBtn.hidden = !(s.running || s.starting);
       openBtn.disabled = !s.url;
+      startErrorNote.hidden = startErrorActs.hidden = !s.startError;
+      startErrorNote.textContent = s.startError ?? '';
+      fixDepsBtn.disabled = s.deps === 'installing';
       // 日志：展开时才把尾部刷进去
       if (expanded) log.textContent = s.logTail.join('\n');
     }

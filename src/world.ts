@@ -20,6 +20,7 @@ import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
 import { normalizeVoiceModel, officialVoice, OUTPUT_GAIN, resolveModelVersion, RUNTIME_ASSETS, RUNTIME_EXTRACT_BYTES, RUNTIME_VERSION, voiceModelNeedsNormalizing, weightPaths, type ModelVersion } from './catalog.ts';
 import { synthCloud } from './cloud.ts';
+import { findFolders, inspectFolder, isLocalService, probeService } from './gptsovits-folder.ts';
 import { defaultCloudVoices, effectiveCloudVoiceId, effectiveCloudVoices, fetchCloudVoices, isOpenAiBase, OPENAI_VOICES, type CloudVoice } from './cloud-voices.ts';
 import { CloudKeyStore } from './secret-store.ts';
 import { dirBytes, topLevelBytes } from './disk.ts';
@@ -127,6 +128,13 @@ function referenceIssue(path: string): string | null {
 }
 
 export const STATE_EVENT = 'gpt-sovits.state';
+
+/** 「用这个目录」时用户点选的附加项；路径都会在服务端重新核对。 */
+interface FolderPick {
+  weights?: { gpt: string; sovits: string };
+  /** 选中的参考音频路径。 */
+  ref?: string;
+}
 
 /** 语音语言被切换时推给 bot；配置页写入不会通知 World，只能自己盯着。 */
 export const LANGUAGE_EVENT = 'gpt-sovits.language';
@@ -242,7 +250,7 @@ export class GptSovitsWorld implements World {
 
   constructor(private readonly opts: GptSovitsWorldOptions) {
     this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
-    this.weights = new WeightsJob(opts.modelsRoot, () => this.version(), () => officialVoice(this.cfg.voice.preset)?.files ?? []);
+    this.weights = new WeightsJob(opts.modelsRoot, () => this.version(), () => officialVoice(this.cfg.voice.preset)?.files ?? [], () => opts.dataDir);
     this.server = new SovitsServer(this.log);
     this.player = new Player({
       device: () => opts.cfg.outputDevice,
@@ -359,6 +367,66 @@ export class GptSovitsWorld implements World {
     }
   }
 
+  /**
+   * 用「我已经有 GPT-SoVITS 了」选中的目录：只改 `runtimeDir`（以及用户点选的那套权重/参考音频）。
+   * 服务端重新检查一遍目录，不直接相信面板传回来的路径。
+   */
+  private applyFolder(root: unknown, pick: FolderPick): { text: string; failed?: true } {
+    const t = panelText(this.uiLanguage);
+    const report = inspectFolder(String(root ?? ''));
+    if (!report.runtime.usable) {
+      return { text: report.runtime.problem ?? report.problems[0] ?? t.folderUnusable, failed: true };
+    }
+    const patch: DeepPartial<GptSovitsConfigSection> = { runtimeDir: report.root, serverUrl: '' };
+    const weights = pick.weights
+      ? report.weights.find((w) => w.gpt === pick.weights?.gpt && w.sovits === pick.weights?.sovits)
+      : undefined;
+    const chosen = weights && !weights.problem ? { gpt: weights.gpt, sovits: weights.sovits } : null;
+    if (chosen) patch.weights = chosen;
+    const ref = pick.ref ? report.refs.find((r) => r.audio === pick.ref) : undefined;
+    if (chosen && ref) {
+      // 官方预设不吃全局自备权重；把「权重 + 这段参考音频」落成一个自定义音色并切过去，
+      // 否则面板说「用上权重」，合成时却被官方音色挡掉。
+      const voices = this.cfg.voices ?? [];
+      const existing = voices.find((v) =>
+        v.audio === ref.audio && v.weights.gpt === chosen.gpt && v.weights.sovits === chosen.sovits);
+      const voice: CustomVoice = existing ?? {
+        id: newCustomVoiceId(),
+        name: basename(report.root) || UNNAMED_VOICE,
+        audio: ref.audio,
+        text: ref.text,
+        weights: chosen,
+      };
+      if (!existing) patch.voices = [...voices, voice];
+      patch.voice = { preset: voice.id, name: voice.name, audio: voice.audio, text: voice.text };
+    } else if (ref) {
+      patch.voice = { audio: ref.audio, text: ref.text };
+    }
+    this.opts.persist(patch);
+    if (chosen) {
+      // 与「换音色」同一条路：先按 SoVITS 版本头对齐推理模型，再就地换权重。
+      this.alignModel(chosen);
+      this.syncWeightsAfterVoiceChange();
+    }
+    if (chosen && !ref) return { text: t.folderWeightsNeedRef };
+    return { text: t.folderApplied(report.root, !!chosen && !!ref, !!ref) };
+  }
+
+  /** 连用户已经跑起来的 api_v2：先试连，通了才写进配置。 */
+  private async useService(url: string): Promise<{ text: string; failed?: true }> {
+    const t = panelText(this.uiLanguage);
+    const result = await probeService(url);
+    if (!result.ok) return { text: result.detail, failed: true };
+    this.opts.persist({ serverUrl: url.trim(), runtimeDir: '' });
+    return { text: t.serviceConnected(result.detail) };
+  }
+
+  /** 回到「下载托管运行时」这条默认路。 */
+  private useManagedRuntime(): { text: string } {
+    this.opts.persist({ serverUrl: '', runtimeDir: '' });
+    return { text: panelText(this.uiLanguage).managedChosen };
+  }
+
   /** 云端合成一句；密钥只在这次调用里解密，失败消息已脱敏。 */
   private async synthCloudLine(text: string, signal?: AbortSignal): Promise<{ sampleRate: number; pcm: Buffer; wav: Buffer }> {
     const key = this.cloudKeys.read();
@@ -420,6 +488,12 @@ export class GptSovitsWorld implements World {
    * 换失败只警告，并尽量退回上一组权重;同一条配置不重复试。
    */
   private async applyWeights(url: string): Promise<void> {
+    // 已有服务在另一台机器上时，权重/参考音频路径在对面不存在；按约定只提示、不切。
+    const backend = this.backend();
+    if (backend.kind === 'remote' && !isLocalService(backend.url)) {
+      this.log.warn('已有服务不在本机，跳过换权重（路径只在本机有效）', { url: backend.url });
+      return;
+    }
     const sig = this.weightsSignature();
     if (sig === this.appliedWeights || sig === this.weightsFailed) return;
     const target = this.wantedTarget();
@@ -1718,6 +1792,12 @@ export class GptSovitsWorld implements World {
     if (method === 'config') {
       return this.configSchema(String(args[0] ?? ''), String(args[1] ?? ''), args[2] === true);
     }
+    // 「我已经有 GPT-SoVITS 了」：只读检查目录，挑一个用；也有「填地址连已有服务」的试连。
+    if (method === 'findFolders') return findFolders();
+    if (method === 'inspectFolder') return inspectFolder(String(args[0] ?? ''));
+    if (method === 'applyFolder') return this.applyFolder(args[0], (args[1] ?? {}) as FolderPick);
+    if (method === 'probeService') return this.useService(String(args[0] ?? ''));
+    if (method === 'useManaged') return this.useManagedRuntime();
     if (method === 'trainerState') return this.trainerGate().state();
     if (method === 'installTrainer') { const m = this.trainerGate(); void m.installDeps(); return m.state(); }
     if (method === 'downloadTrainerAssets') { const m = this.trainerGate(); void m.downloadAssets(); return m.state(); }
@@ -1850,6 +1930,12 @@ export class GptSovitsWorld implements World {
     return {
       backend: b.kind,
       engine: this.engineSelected(),
+      setup: {
+        mode: b.kind,
+        runtimeDir: this.cfg.runtimeDir,
+        serverUrl: this.cfg.serverUrl,
+        localService: !this.cfg.serverUrl.trim() || isLocalService(this.cfg.serverUrl),
+      },
       mismatch: this.modelMismatch() ?? undefined,
       cloud: {
         baseUrl: this.cfg.cloudBaseUrl,
@@ -1969,6 +2055,8 @@ export interface PanelState {
   backend: Backend['kind'];
   /** 当前合成引擎：本地 / 云端（手动切换）；`null` = 还没选，面板只显示选择提示。 */
   engine: 'local' | 'cloud' | null;
+  /** 本地这一侧是怎么接上的：托管下载 / 自备目录 / 已有服务。 */
+  setup: { mode: Backend['kind']; runtimeDir: string; serverUrl: string; localService: boolean };
   /** 当前推理模型与所选音色权重需要的版本不一致；启动兜底与面板提示共用。 */
   mismatch?: { want: ModelVersion; current: ModelVersion };
   /** 一次操作回执（换音色自动对齐、保存了版本不一致的权重等）。 */

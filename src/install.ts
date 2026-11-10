@@ -6,7 +6,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, renameSync, rmSync, rmdirSync, statSync, statfsSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, rmdirSync, statSync, statfsSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -101,6 +101,205 @@ async function fetchTo(url: string, dest: string, onBytes: (n: number) => void, 
   );
 }
 
+/** 面板/日志里显示来源用的短名：只留主机名，足以区分魔搭 / hf-mirror / GitHub 与加速前缀。 */
+export function sourceLabel(url: string): string {
+  try { return new URL(url).host; } catch { return url.slice(0, 80); }
+}
+
+/** 小于这个体积不值得开分段：探测与合并的开销超过收益。 */
+export const MULTIPART_MIN_BYTES = 16 * 1024 * 1024;
+/** 默认并发路数。实测魔搭单流 1 MB/s、4 路 2.6 MB/s，8 路收益已经不明显。 */
+export const MULTIPART_CONNECTIONS = 4;
+
+/** 探一下服务端认不认 Range：返回资源总字节；不支持（不是 206、没有 Content-Range）返回 null。 */
+async function probeRange(url: string, signal: AbortSignal): Promise<number | null> {
+  try {
+    const res = await fetch(url, { signal, redirect: 'follow', headers: { range: 'bytes=0-0' } });
+    const total = /^bytes 0-0\/(\d+)$/i.exec(res.headers.get('content-range') ?? '');
+    await res.body?.cancel().catch(() => {});
+    return res.status === 206 && total ? Number(total[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 取一个字节区间到 `file`（调用方已确认服务端认 Range）。 */
+async function fetchRangePiece(url: string, file: string, from: number, to: number, onBytes: (n: number) => void, signal: AbortSignal): Promise<void> {
+  const res = await fetch(url, { signal, redirect: 'follow', headers: { range: `bytes=${from}-${to}` } });
+  if (res.status !== 206 || !res.body) {
+    await res.body?.cancel().catch(() => {});
+    throw new Error(`HTTP ${res.status}（不支持分段）`);
+  }
+  const counter = new Transform({
+    transform(chunk: Buffer, _e, cb) { onBytes(chunk.length); cb(null, chunk); },
+  });
+  await pipeline(
+    Readable.fromWeb(res.body as import('node:stream/web').ReadableStream),
+    counter,
+    createWriteStream(file),
+    { signal },
+  );
+}
+
+/**
+ * 分段并发下载到 `dest`（`start` 之后的部分），按序合并。
+ *
+ * 返回 false 表示这条路走不通（服务端不认 Range、某一段失败），调用方应退回单流；
+ * 只有外部取消才抛出。分片本身在合并前是独立文件，失败时不会污染 `dest` 已有的断点数据。
+ */
+async function fetchRanges(
+  url: string,
+  dest: string,
+  total: number,
+  start: number,
+  onBytes: (n: number) => void,
+  signal: AbortSignal,
+  connections: number,
+): Promise<boolean> {
+  const remain = total - start;
+  if (remain < MULTIPART_MIN_BYTES / 2) return false;
+  const size = await probeRange(url, signal);
+  if (signal.aborted) return false;
+  if (size === null || size !== total) return false;
+
+  const count = Math.max(2, Math.min(connections, Math.ceil(remain / MULTIPART_MIN_BYTES)));
+  const per = Math.ceil(remain / count);
+  const files = Array.from({ length: count }, (_, i) => `${dest}.chunk${i}`);
+  for (const file of files) rmSync(file, { force: true });
+
+  const inner = new AbortController();
+  const onAbort = () => inner.abort();
+  signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    await Promise.all(files.map((file, i) => {
+      const from = start + i * per;
+      const to = Math.min(total - 1, from + per - 1);
+      return fetchRangePiece(url, file, from, to, onBytes, inner.signal);
+    }));
+    mkdirSync(dirname(dest), { recursive: true });
+    // 逐段追加：任何时刻 dest 都是「已有字节 + 完整前缀」，中途失败也不破坏续传语义。
+    let flags: 'a' | 'w' = start > 0 ? 'a' : 'w';
+    for (const file of files) {
+      await pipeline(createReadStream(file), createWriteStream(dest, { flags }), { signal });
+      flags = 'a';
+    }
+    return true;
+  } catch (err) {
+    if (signal.aborted) throw err;
+    return false;
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+    for (const file of files) rmSync(file, { force: true });
+  }
+}
+
+/** 测速缓存保留 12 小时：链路不会天天变，避免每下一个小文件都探一遍。 */
+const SPEED_TTL_MS = 12 * 60 * 60 * 1000;
+/** 每个主机只读这么多就停，别为了测速把几 GB 的权重整个拖下来。 */
+const SPEED_SAMPLE_BYTES = 512 * 1024;
+const SPEED_TIMEOUT_MS = 4000;
+
+/** 下载一小段测出大约多少字节/毫秒；失败或超时返回 0。 */
+async function probeSpeed(url: string, signal: AbortSignal): Promise<number> {
+  const ctrl = new AbortController();
+  const onAbort = () => ctrl.abort();
+  signal.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => ctrl.abort(), SPEED_TIMEOUT_MS);
+  const started = Date.now();
+  let got = 0;
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, redirect: 'follow', headers: { range: `bytes=0-${SPEED_SAMPLE_BYTES - 1}` } });
+    if (!res.ok || !res.body) {
+      await res.body?.cancel().catch(() => {});
+      return 0;
+    }
+    const reader = res.body.getReader();
+    while (got < SPEED_SAMPLE_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      got += value?.length ?? 0;
+    }
+    await reader.cancel().catch(() => {});
+    return got > 0 ? got / Math.max(1, Date.now() - started) : 0;
+  } catch {
+    return 0;
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
+interface SpeedEntry { score: number; at: number }
+
+const hostOf = (url: string): string => {
+  try { return new URL(url).host; } catch { return ''; }
+};
+
+/**
+ * 按实测速度给来源排序（权重源用）。结果按主机名缓存在内存与 `source-speed.json`，
+ * 12 小时内不再重复测速；没测出速度的主机记 0，排在测出速度的主机之后，其余保持原顺序。
+ * 全部失败（或都没有缓存）时顺序与 `sources` 完全一致。
+ */
+export class SourceRanker {
+  private readonly entries = new Map<string, SpeedEntry>();
+
+  constructor(private readonly file: string | null) {
+    this.load();
+  }
+
+  private load(): void {
+    if (!this.file) return;
+    try {
+      const data = JSON.parse(readFileSync(this.file, 'utf8')) as Record<string, SpeedEntry>;
+      for (const [host, entry] of Object.entries(data)) {
+        if (entry && typeof entry.score === 'number' && typeof entry.at === 'number') this.entries.set(host, entry);
+      }
+    } catch {
+      // 没有缓存或文件坏了：重新测即可。
+    }
+  }
+
+  private save(): void {
+    if (!this.file) return;
+    try {
+      mkdirSync(dirname(this.file), { recursive: true });
+      writeFileSync(this.file, JSON.stringify(Object.fromEntries(this.entries), null, 2));
+    } catch {
+      // 缓存写不进去不影响下载。
+    }
+  }
+
+  async order(sources: readonly string[], signal: AbortSignal): Promise<readonly string[]> {
+    const now = Date.now();
+    const hosts = [...new Set(sources.map(hostOf).filter(Boolean))];
+    const first = new Map<string, string>();
+    for (const url of sources) {
+      const host = hostOf(url);
+      if (host && !first.has(host)) first.set(host, url);
+    }
+    const stale = hosts.filter((host) => {
+      const entry = this.entries.get(host);
+      return !entry || now - entry.at > SPEED_TTL_MS;
+    });
+    // 只有一个候选主机时测速没有意义。
+    if (hosts.length > 1 && stale.length > 0) {
+      const scores = await Promise.all(stale.map((host) => probeSpeed(first.get(host)!, signal)));
+      let changed = false;
+      stale.forEach((host, i) => {
+        const score = scores[i];
+        // 0 只记在内存里：这次会话内不再重测，但不写进缓存，下次启动还给链路一次机会。
+        this.entries.set(host, { score, at: Date.now() });
+        if (score > 0) changed = true;
+      });
+      if (changed) this.save();
+    }
+    return sources
+      .map((url, i) => ({ url, i, score: this.entries.get(hostOf(url))?.score ?? 0 }))
+      .sort((a, b) => b.score - a.score || a.i - b.i)
+      .map((item) => item.url);
+  }
+}
+
 /**
  * 按顺序试来源，直到下下来的文件大小与 SHA-256 都对。
  *
@@ -117,17 +316,25 @@ export async function fetchVerified(
   sha256: string,
   progress: (n: number) => void,
   signal: AbortSignal,
-  opts: { resume?: boolean; attempts?: number; onStart?: (size: number) => void } = {},
+  opts: { resume?: boolean; attempts?: number; connections?: number; onStart?: (size: number) => void; onSource?: (url: string) => void } = {},
 ): Promise<void> {
-  const { resume = false, attempts = 3, onStart } = opts;
+  const { resume = false, attempts = 3, connections = MULTIPART_CONNECTIONS, onStart, onSource } = opts;
   const errors: string[] = [];
   for (const url of sources) {
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       let got = 0;
       try {
+        onSource?.(url);
         const start = resume && existsSync(dest) ? statSync(dest).size : 0;
         onStart?.(start);
-        await fetchTo(url, dest, (n) => { got += n; progress(n); }, signal, resume);
+        const report = (n: number) => { got += n; progress(n); };
+        // 大文件先试 4 路分段；服务端不认 Range 或某段失败就退回单流，校验与续传语义不变。
+        let fetched = false;
+        if (connections > 1 && bytes >= MULTIPART_MIN_BYTES) {
+          fetched = await fetchRanges(url, dest, bytes, start, report, signal, connections);
+          if (!fetched) onStart?.(resume && existsSync(dest) ? statSync(dest).size : 0);
+        }
+        if (!fetched) await fetchTo(url, dest, report, signal, resume);
         const size = statSync(dest).size;
         if (bytes && size !== bytes) throw new Error(`大小 ${size},应为 ${bytes}`);
         if (sha256 && await sha256File(dest) !== sha256) {
@@ -279,8 +486,9 @@ export class RuntimeJob extends Job {
     this.state.detail = asset.file;
     const progress = (n: number) => { this.state.done = Math.max(0, this.state.done + n); };
     const onStart = (size: number) => { this.state.done = size; };
+    const onSource = (url: string) => { this.state.detail = `${asset.file} · 来源 ${sourceLabel(url)}`; };
     try {
-      await fetchVerified(asset.sources, archive, asset.bytes, asset.sha256, progress, signal, { resume: true, onStart });
+      await fetchVerified(asset.sources, archive, asset.bytes, asset.sha256, progress, signal, { resume: true, onStart, onSource });
     } catch (whole) {
       if (!asset.parts?.length || signal.aborted) throw whole;
       await this.fetchParts(asset.parts, archive, asset.sha256, progress, signal, onStart);
@@ -330,7 +538,12 @@ export class RuntimeJob extends Job {
     rmSync(archive, { force: true });
     for (const [i, part] of parts.entries()) {
       const file = `${archive}.part${i + 1}`;
-      await fetchVerified(part.sources, file, part.bytes, '', progress, signal, { resume: true, onStart });
+      const label = archive.split(/[\\/]/).pop() ?? '运行时包';
+      await fetchVerified(part.sources, file, part.bytes, '', progress, signal, {
+        resume: true,
+        onStart,
+        onSource: (url) => { this.state.detail = `${label} 分片 ${i + 1} · 来源 ${sourceLabel(url)}`; },
+      });
       await pipeline(createReadStream(file), createWriteStream(archive, { flags: 'a' }));
       rmSync(file, { force: true });
     }
@@ -343,11 +556,15 @@ export const isRuntimeDir = (dir: string, platform: Platform = process.platform)
 
 /** 一个模型版本要的权重文件，放在 `dir()` 下；选中官模预设时再加它那两份。 */
 export class WeightsJob extends Job {
+  private ranker: SourceRanker | null = null;
+
   constructor(
     private readonly root: () => string,
     private readonly version: () => ModelVersion,
     /** 当前选中预设的官模权重；没有官模就是空数组。 */
     private readonly official: () => readonly PinnedFile[],
+    /** 测速缓存放哪（数据目录）；不给就不测速、按清单顺序下。 */
+    private readonly cacheDir: (() => string) | null = null,
   ) { super(); }
 
   dir(): string {
@@ -388,14 +605,18 @@ export class WeightsJob extends Job {
     const todo = this.missing();
     this.state.total = todo.reduce((n, f) => n + f.bytes, 0);
     assertFreeSpace(this.dir(), this.state.total);
+    // 权重有多家来源（魔搭 / hf-mirror / 官方 HF），按实测速度择优；测速结果带 12 小时缓存。
+    if (this.cacheDir && !this.ranker) this.ranker = new SourceRanker(join(this.cacheDir(), 'source-speed.json'));
     for (const f of todo) {
       this.state.detail = f.path;
+      const sources = this.ranker ? await this.ranker.order(f.sources, signal) : f.sources;
       const dest = join(this.dir(), f.path);
       const partial = `${dest}.partial`;
       const base = this.state.done;
-      await fetchVerified(f.sources, partial, f.bytes, f.sha256, (n) => { this.state.done += n; }, signal, {
+      await fetchVerified(sources, partial, f.bytes, f.sha256, (n) => { this.state.done += n; }, signal, {
         resume: true,
         onStart: (size) => { this.state.done = base + size; },
+        onSource: (url) => { this.state.detail = `${f.path} · 来源 ${sourceLabel(url)}`; },
       });
       renameSync(partial, dest);
     }

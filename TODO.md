@@ -1,10 +1,51 @@
 # TODO — 更好的GPTSovits 语音（Coopanion 插件）
 
-> 最后更新：2026-11-08（Asia/Shanghai）
-> 工作区版本：**0.6.10（已发布 npm latest，已推送）**；本机 `data\extensions` 装的是 **0.6.10**
+> 最后更新：2026-11-10（Asia/Shanghai）
+> 工作区版本：**0.8.3（已发布 npm）**；本机 `data\extensions` 装的是 **0.8.3（已重装并核对哈希）**
 > 详细交接见 [HANDOFF.md](HANDOFF.md)；机器可读的状态见 [docs/STATE.md](docs/STATE.md)（`node scripts/handoff.mjs --write` 重新生成）；
 > 开新会话的提示词见 [docs/handoff-prompt.md](docs/handoff-prompt.md)；ROCm 代验清单见 [docs/rocm-acceptance.md](docs/rocm-acceptance.md)。
 > 本机训练产物（「祀」音色）在 `D:/Program Files/Coopanion/data/home/companion/data/trainers/shi`，训练记录 `D:/Program Files/Coopanion/data/shi-training.md`。
+
+## P0 — 下载提速（0.8.3 全部落地）
+
+- [x] 训练依赖按版本判定：读 `gradio-4.*.dist-info`（`funasr>=1.3.7`），gradio 6.x / 缺 dist-info 算未就绪。
+- [x] 运行时 GitHub 分片（cuda / rocm part0–part2）补 `ghfast.top` / `gh-proxy.com` 回落，官方仍排第一。
+- [x] CPU 整包的 GitHub 兜底同样补两个加速前缀（与 cuda / rocm 分片一致）。
+- [x] **多连接分片下载**：`fetchVerified` 对 ≥16 MiB 的文件默认开 4 路 Range 并发，按序合并；
+      服务端不认 Range / 某段失败自动退回单流；SHA-256 整包校验与断点续传语义不变。
+- [x] **pip 第二源**：训练依赖按 阿里云 → 清华 → 官方 PyPI 依次尝试（实测阿里云 1.47 MB/s > 清华 0.36 > 官方 0.03）。
+- [x] **权重源测速择优**：不再写死 hf-mirror 优先；下载前按实测速度排序（每主机读 512 KiB、4 秒超时），
+      结果缓存在数据目录 `source-speed.json` 12 小时；全部测速失败时保持清单原顺序。
+- [x] 下载来源可见：面板状态行 / 训练日志显示当前来源主机，切源可见。
+
+## P0 — 训练依赖假就绪（issue #14，0.8.1 已修）
+
+- [x] `depsReady(dataDir, runtimeDir)` 实测当前运行时 `site-packages` 里的 `gradio` / `funasr`，不再只信标记。
+- [x] 标记新增 `dir` 并绑定运行时目录；旧标记无 `dir` 视为过期，重装一次即重新绑定。
+- [x] 启动失败原因（`No module named …` / 退出码 / 超时）进 `TrainerState.startError`，面板红字直显 + 「安装训练依赖」按钮。
+- [x] `tests/trainer-deps.test.ts` 7 例；真机 cuda 有包 / cpu 缺包已核。
+- [ ] 真机验收：cpu 档启动训练 → 面板直接显示缺 `gradio` 并可一键补装。
+
+## P0 — 已有 GPT-SoVITS 接入（0.8.0，已完成待真机验收）
+
+目标：用户下载插件前已经有完整 GPT-SoVITS 时，不再重复下载运行时。选了「本地」引擎后再问，
+三选一（选目录 / 已在跑服务 / 下载托管），默认推「选目录」。
+
+- [x] **目录识别**：新增 `src/gptsovits-folder.ts`——`inspectFolder()` 检查 `api_v2.py`、`runtime` Python、
+      `tools/portable_runtime.py`；`walk()` 跳过 `runtime` / `pretrained_models` 等大目录；
+      `pairWeights()` 按文件名主干配对 `.ckpt` / `.pth`，版本复用 `sovitsVersion()` / `checkWeights()`；
+      参考音频只收 3–10 秒 wav，同名 `.txt` / `.lab` 当台本；Windows 长路径走 `fsPath()`。
+- [x] **候选扫描**：`findFolders()` 在桌面 / 下载 / 文档与 Windows 盘根下一层找名字像 GPT-SoVITS 的目录，
+      只给用户点选，不自动接入。
+- [x] **服务探测**：`probeService()` 只在用户点「测试连接」时 `GET {base}/docs`，不自动扫 9880；
+      `isLocalService()` 判断是否本机。
+- [x] **World**：`findFolders` / `inspectFolder` / `applyFolder` / `probeService` / `useManaged` 五个方法；
+      `applyFolder()` 服务端重新检查目录后才写 `runtimeDir` / `weights` / `voice.audio`；
+      `PanelState.setup` 暴露当前接入方式；`applyWeights()` 对非本机服务只警告、不换权重。
+- [x] **面板 UI**：「语音」页本地组顶部三选一卡；目录输入 + 检测 / 自动找 + 权重与参考音频列表 + 用这个目录；
+      服务地址 + 测试连接 + 跨机提示；托管按钮回到「安装」。中英文案各 33 条。
+- [x] **测试**：`tests/gptsovits-folder.test.ts` 20 例；全量 **280 例** 通过。
+- [ ] **验收**：按 [docs/cloud-acceptance.md](docs/cloud-acceptance.md) 第 0d 节跑三条接入路径。
 
 ## P0 — 云端语音引擎（进行中，2026-11-08 开始）
 
@@ -17,13 +58,33 @@
       `src/config.ts`（`ttsEngine` / `cloudBaseUrl` / `cloudModel` / `cloudVoiceId` / `cloudVoices` / `cloudKeyMask` / `cloudTimeoutMs` + schema）、
       `src/world.ts`（`engine()` / `cloudReady()` / `cloudIssue()` / `playCloudLine()`、`pump()` 与 9880 分流、
       面板状态字段、`setEngine` / `saveCloudKey` / `clearCloudKey` / `setCloudField` / `setCloudVoices`）。`tsc` 通过。
-- [ ] **面板 UI**（「音色」页）：L0 引擎单选（本地/云端）；L1 音色分组（本地时显示现有预设+自定义音色，云端时显示云端音色清单）；
-      云端分组里要有地址/模型/音色 id/超时 + **密码输入框**（保存后只回显掩码，留空或提交掩码＝不修改）+ 音色增删。
-      注意旧宿主没有 `ui.foldSheet` 时要退回普通卡。
-- [ ] **测试**：`tests/cloud.test.ts`（URL 拼装、错误映射、脱敏、非 WAV 报错）、`tests/secret-store.test.ts`（加解密往返、掩码、主密钥缺失时写 `.env`）。
-- [ ] **文档**：README 加「云端语音」小节（配置步骤、密钥存放位置、限制：没有首块流式、整段返回）；CHANGELOG 新版本条目。
-- [ ] **版本与发布**：升到 **0.7.0**（新增能力，走 minor），跑完四项校验后等主人点头再 publish + 市场同步 + 回帖。
-- [ ] **验收**：本机切到云端，填一个真实厂商的密钥，说一句，确认出声、9880 也走云端、QQ 语音条能带上云端音频。
+- [x] **面板 UI**（0.7.1 调整）：「语音」页最顶部是「语音引擎」**下拉**（请选择 / 本地 / 云端），新装默认未选择——
+      此时只显示提示、不显示任何引擎设置；选好后只显示所选引擎的设置，另一个整组隐藏。「音色」页的本地/云端卡
+      按同一规则显隐；通用设置（插件联动等）不受影响。老配置里的 `local` / `cloud` 视为已选择，未选择时合成按本地走。
+- [x] **面板 UI**（「音色」页）：L1 音色分组（本地显示预设+自定义音色，云端显示云端音色清单）；
+      云端分组含地址/模型/音色 id/超时 + 密码输入框（保存后只回显掩码，留空或提交掩码＝不修改）+ 音色增删。
+      旧宿主没有 `ui.foldSheet` 时退回普通卡。
+- [x] **测试**：`tests/cloud.test.ts`（URL 拼装、错误映射、脱敏、非 WAV 报错）、`tests/secret-store.test.ts`
+      （加解密往返、掩码、主密钥缺失时写 `.env`、损坏/换钥/clear）。顺带修 `clear()` 留空文件导致「已设置但解不开」。
+- [x] **文档**：README 加「云端语音」小节（配置步骤、密钥存放位置、限制：没有首块流式、整段返回）；
+      CHANGELOG 新增 `## 0.7.0` 条目，并把已发布的 `## 未发布` 改回 `## 0.6.10`。
+- [x] **版本**：工作区升到 **0.7.0**（新增能力，走 minor）；0.7.1 再升一档，改「语音引擎」入口与显隐；
+      0.7.2 再升一档，去重「音色与台词」页并改权重/推理档交互。
+- [x] **去重（0.7.2）**：「音色与台词」页的 `textLang` / `translateEndpoint` / `translateApiKeySecret` /
+      `translateModel` / `speed` / `seed` / `promptLanguage` 搬进「音色」页底部「台词与翻译」卡（同一 schema、
+      同一 `setConfigValue`），确认齐全后从 `webUi().panels` 移除整个 `cfg-voice` 页签（`configGroups` 保留供读取）。
+- [x] **权重与推理档解耦（0.7.2）**：`weights.ts` 拆出 `checkWeights()`，保存音色只校验文件结构；
+      换/新增/编辑选中音色时 `alignModel()` 按 SoVITS 版本头自动改 `voiceModel` 并回执 `modelSwitched`；
+      `start()` 写不匹配警告，面板 `mismatch` 显示红字（云端引擎时不提示）。
+- [x] **云端音色默认值（0.7.3）**：`src/cloud-voices.ts` 内置 OpenAI 官方 6 个音色；清单为空且地址是
+      `api.openai.com` 时自动列出并默认 `alloy`，不写盘、老配置优先；`cloudReady()` / 面板 / 合成统一走
+      「生效音色」。新增「从服务商拉取清单」（`GET {base}/audio/voices`，成功合并、失败可读提示），
+      `tests/cloud-voices.test.ts` 覆盖默认值、解析、鉴权与脱敏。默认值策略参考 `cortico-world-voice-qq`（MIT），未移植代码。
+- [x] **云端兼容性提示与设置小字（0.7.4）**：非 OpenAI 地址下把官方音色标「（OpenAI 官方）」；选中的是官方音色时
+      云端卡显示黄色说明（不硬拦）。`lastError` 在云端卡以红字显示，换地址/模型/音色/引擎时清除。
+      云端地址/模型/音色/超时/密钥与添加音色表单补中英双语小字（默认值、留空行为、必填与格式）。
+- [ ] **发布**：等主人点头再 npm publish + 打 tag / push + 市场同步 + 回帖。
+- [ ] **验收**：按 [docs/cloud-acceptance.md](docs/cloud-acceptance.md) 跑（真实厂商出声、9880 走云端、QQ 语音条带云端音频）。
 
 
 ## P0 — 0.6.0 / 0.6.1 发布（已完成，待真机代验）

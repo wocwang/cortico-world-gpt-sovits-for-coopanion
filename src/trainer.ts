@@ -9,10 +9,10 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Logger } from 'cortico/core/types.ts';
 import { RUNTIME_VERSION, TRAIN_ASSETS, UPSTREAM_COMMIT, type ModelVersion, type PinnedFile } from './catalog.ts';
-import { extract, fetchVerified } from './install.ts';
+import { extract, fetchVerified, sourceLabel } from './install.ts';
 import { envWithRuntime, pythonInRuntime } from './platform.ts';
 import { patchTrainer, TRAINER_PATCH_MARKER } from './runtime-patch.ts';
 import { freePort } from './server.ts';
@@ -28,6 +28,8 @@ export interface TrainerState {
   starting: boolean;
   port: number | null;
   url: string | null;
+  /** 上次启动失败的原因（含 `No module named …` 这类依赖缺失），面板直接显示；重试/成功时清空。 */
+  startError: string | null;
   logTail: string[];
 }
 
@@ -39,11 +41,15 @@ export interface TrainerState {
 const TRAIN_PACKAGES = ['gradio<5', 'tensorboard', 'funasr>=1.3.7', 'modelscope', 'ctranslate2>=4.0,<5', 'fastapi==0.115.2', 'starlette==0.40.0', 'faster-whisper==1.2.1'];
 
 /**
- * 训练依赖先走阿里云镜像（国内直连 PyPI 下几十到几百 MB 的包经常卡住；清华源对 pip 的 UA 返回 403，
- * 不能当主力），镜像失败再回官方 PyPI；网络参数收紧，免得默认重试把面板卡在「安装中」。
+ * 训练依赖的 pip 源，按顺序尝试：阿里云 → 清华 → 官方 PyPI。
+ * 国内直连 PyPI 下几十到几百 MB 的包经常卡住；两个镜像都可能临时限流/抽风，所以互为备份，
+ * 都失败才回官方。网络参数收紧，免得默认重试把面板卡在「安装中」。
  */
-const PIP_MIRROR = 'https://mirrors.aliyun.com/pypi/simple/';
-const PIP_OFFICIAL = 'https://pypi.org/simple';
+const PIP_SOURCES = [
+  'https://mirrors.aliyun.com/pypi/simple/',
+  'https://pypi.tuna.tsinghua.edu.cn/simple',
+  'https://pypi.org/simple',
+];
 const PIP_NET_ARGS = ['--timeout', '30', '--retries', '2'];
 
 /** faster-whisper 的模型托管在 Hugging Face；训练 WebUI 里指向国内镜像，缺模型时才下得动。 */
@@ -56,7 +62,7 @@ const DEPS_FILE = 'trainer-deps.json';
  * 依赖清单的修订号。`TRAIN_PACKAGES` 增删后 +1:光比运行时版本的话，
  * 老用户标记仍算「已装好」，新加的那几个包永远落不了地(0.5.11 加 faster-whisper 时踩到)。
  */
-const DEPS_REVISION = 2;
+export const DEPS_REVISION = 2;
 
 /** 上游 `webui.py` 写死的默认端口；补丁没生效时才用它兜底。 */
 const UPSTREAM_PORT = 9874;
@@ -89,13 +95,69 @@ const POLL_MS = 500;
 const LOG_RING = 200;
 const LOG_TAIL = 40;
 
-/** 依赖是否装好：标记文件在，运行时版本与清单修订号都对得上(升级运行时或改了包列表就要重装)。 */
-function depsReady(dataDir: string): boolean {
+/** 运行时目录归一化：Windows 不区分大小写与斜杠，避免同一个目录因写法不同被判成两个。 */
+function runtimeKey(dir: string): string {
+  const full = resolve(dir).replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? full.replace(/\//g, '\\').toLowerCase() : full;
+}
+
+/**
+ * 当前运行时自带的 site-packages。包名目录是「装没装」的可信证据：
+ * 运行时目录被整目录替换/换档后，标记文件可能还在，但这些目录会一起消失。
+ */
+function sitePackages(runtimeDir: string): string[] {
+  const root = join(runtimeDir, 'runtime');
+  if (process.platform === 'win32') return [join(root, 'Lib', 'site-packages')];
+  try {
+    return readdirSync(join(root, 'lib'))
+      .filter((name) => /^python\d+\.\d+$/.test(name))
+      .map((name) => join(root, 'lib', name, 'site-packages'));
+  } catch {
+    return [];
+  }
+}
+
+/** site-packages 里某个包的已装版本；没有 `dist-info` 就返回 null（手动拷进去的目录不算数）。 */
+function packageVersion(runtimeDir: string, name: string): string | null {
+  const pattern = new RegExp(`^${name.replace(/[-_.]/g, '[-_.]')}-(\\d[^-]*)\\.dist-info$`, 'i');
+  for (const dir of sitePackages(runtimeDir)) {
+    let entries: string[];
+    try { entries = readdirSync(dir); } catch { continue; }
+    for (const entry of entries) {
+      const found = pattern.exec(entry);
+      if (found) return found[1];
+    }
+  }
+  return null;
+}
+
+/** 版本号按数字段比大小；解析不出的段按 0 算。 */
+function versionAtLeast(version: string, want: readonly [number, number, number]): boolean {
+  const parts = version.split(/[.+-]/).map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i += 1) {
+    const got = parts[i] ?? 0;
+    if (got !== want[i]) return got > want[i];
+  }
+  return true;
+}
+
+/**
+ * 依赖是否真的可用：标记文件只说明「曾经装过」且必须绑定到**当前运行时目录**，
+ * 还要在它的 `site-packages` 里看到 gradio / funasr。旧标记没有目录字段，一律视为过期。
+ */
+export function depsReady(dataDir: string, runtimeDir: string): boolean {
+  if (!runtimeDir) return false;
   const file = join(dataDir, DEPS_FILE);
   if (!existsSync(file)) return false;
   try {
-    const mark = JSON.parse(readFileSync(file, 'utf8')) as { runtime?: unknown; revision?: unknown };
-    return mark.runtime === RUNTIME_VERSION && mark.revision === DEPS_REVISION;
+    const mark = JSON.parse(readFileSync(file, 'utf8')) as { runtime?: unknown; revision?: unknown; dir?: unknown };
+    if (mark.runtime !== RUNTIME_VERSION || mark.revision !== DEPS_REVISION) return false;
+    if (typeof mark.dir !== 'string' || runtimeKey(mark.dir) !== runtimeKey(runtimeDir)) return false;
+    // 版本口径与 TRAIN_PACKAGES 对齐：手动装了 gradio 6.x 的机器上目录存在，但 webui.py 起不来。
+    const gradio = packageVersion(runtimeDir, 'gradio');
+    if (!gradio || !versionAtLeast(gradio, [4, 0, 0]) || versionAtLeast(gradio, [5, 0, 0])) return false;
+    const funasr = packageVersion(runtimeDir, 'funasr');
+    return !!funasr && versionAtLeast(funasr, [1, 3, 7]);
   } catch {
     return false;
   }
@@ -133,6 +195,7 @@ export class TrainerManager {
   private assetsWorking = false;
   private assetsError: string | null = null;
   private assetsPromise: Promise<void> | null = null;
+  private startError: string | null = null;
 
   constructor(
     private readonly opts: {
@@ -150,7 +213,8 @@ export class TrainerManager {
     const weightsDir = this.opts.weightsDir();
     const assets = TRAIN_ASSETS.map((f) => ({ name: f.path, bytes: f.bytes, ready: assetReady(weightsDir, f) }));
     return {
-      deps: this.depsInstalling ? 'installing' : depsReady(this.opts.dataDir) ? 'ready' : 'missing',
+      deps: this.depsInstalling ? 'installing'
+        : depsReady(this.opts.dataDir, this.opts.runtimeDir()) ? 'ready' : 'missing',
       depsError: this.depsError,
       assets,
       assetsReady: assets.every((a) => a.ready),
@@ -160,6 +224,7 @@ export class TrainerManager {
       starting: this.starting,
       port: this.port,
       url: this.url,
+      startError: this.startError,
       logTail: this.tail.slice(-LOG_TAIL),
     };
   }
@@ -169,6 +234,7 @@ export class TrainerManager {
     if (this.depsPromise) return this.depsPromise;
     this.depsInstalling = true;
     this.depsError = null;
+    this.startError = null;
     this.depsPromise = this.runInstall().finally(() => {
       this.depsInstalling = false;
       this.depsPromise = null;
@@ -191,6 +257,7 @@ export class TrainerManager {
   async start(opts: { stopInference?: boolean }): Promise<void> {
     if (this.running || this.starting) return;
     this.starting = true;
+    this.startError = null;
     this.port = null;
     this.url = null;
     let child: ChildProcess | null = null;
@@ -206,6 +273,7 @@ export class TrainerManager {
         } catch (err) {
           const why = err instanceof Error ? err.message : String(err);
           this.push(`运行时不完整，缺少 tools/${missingTools.join('、tools/')}，自动补齐失败：${why}`);
+          this.startError = this.tail[this.tail.length - 1] ?? why;
           this.opts.log.warn('训练 WebUI 缺工具目录且补齐失败', { missing: missingTools, error: why });
           this.running = false;
           this.starting = false;
@@ -245,6 +313,7 @@ export class TrainerManager {
         this.port = null;
         this.url = null;
         this.push(`训练 WebUI 退出(${code})：${this.tail.slice(-3).join(' | ')}`);
+        this.startError = this.failureFromTail();
         this.opts.log.warn('训练 WebUI 退出', { code, tail: this.tail.slice(-10) });
       });
       child.on('error', (err) => {
@@ -255,6 +324,7 @@ export class TrainerManager {
         this.port = null;
         this.url = null;
         this.push(`训练服务启动失败：${err.message}`);
+        this.startError = `训练服务启动失败：${err.message}`;
         this.opts.log.warn('训练 WebUI 启动失败', { error: err.message });
       });
       const started = Date.now();
@@ -264,6 +334,7 @@ export class TrainerManager {
         if (hit) {
           this.running = true;
           this.starting = false;
+          this.startError = null;
           this.port = hit.port;
           this.url = hit.url;
           this.push(`训练 WebUI 就绪：${hit.url}`);
@@ -288,6 +359,7 @@ export class TrainerManager {
       this.url = null;
       const tail = this.tail.slice(-3).join(' | ');
       this.push(`${READY_TIMEOUT_MS / 1000} 秒内没有就绪：${tail}`);
+      this.startError = this.failureFromTail();
       this.opts.log.warn('训练 WebUI 超时未就绪', { tail });
     } catch (err) {
       if (child && this.child === child) {
@@ -300,6 +372,7 @@ export class TrainerManager {
       this.url = null;
       const message = err instanceof Error ? err.message : String(err);
       this.push(`启动训练 WebUI 失败：${message}`);
+      this.startError = `启动训练 WebUI 失败：${message}`;
       this.opts.log.warn('启动训练 WebUI 失败', { error: message });
     }
   }
@@ -317,6 +390,7 @@ export class TrainerManager {
     this.push(`缺少 ${label}，正在从上游整包补齐（约 ${Math.round(UPSTREAM_BYTES / 1024 ** 2)} MB）`);
     let got = 0;
     let shown = 0;
+    let source = '';
     const signal = new AbortController().signal;
     try {
       await fetchVerified(UPSTREAM_SOURCES, archive, UPSTREAM_BYTES, UPSTREAM_SHA256, (n) => {
@@ -327,7 +401,16 @@ export class TrainerManager {
           shown = step;
           this.push(`上游整包 ${Math.min(step * 25, 100)}%`);
         }
-      }, signal, { resume: true, onStart: (size) => { got = size; } });
+      }, signal, {
+        resume: true,
+        onStart: (size) => { got = size; },
+        onSource: (url) => {
+          const host = sourceLabel(url);
+          if (host === source) return;
+          source = host;
+          this.push(`上游整包来源：${host}`);
+        },
+      });
       rmSync(unpack, { recursive: true, force: true });
       mkdirSync(unpack, { recursive: true });
       await extract(archive, unpack);
@@ -360,20 +443,30 @@ export class TrainerManager {
     await TrainerManager.kill(child);
   }
 
-  /** 跑 pip 装依赖；镜像失败回官方，退出码非 0 就把尾部日志当失败原因。 */
+  /** 跑 pip 装依赖；按 阿里云 → 清华 → 官方 PyPI 依次尝试，退出码非 0 就把尾部日志当失败原因。 */
   private async runInstall(): Promise<void> {
     this.push(`pip install ${TRAIN_PACKAGES.join(' ')}`);
     const base = ['-I', '-X', 'utf8', '-u', '-m', 'pip', 'install', '--no-warn-script-location', ...PIP_NET_ARGS, ...TRAIN_PACKAGES];
-    this.push(`装训练依赖走镜像：${PIP_MIRROR}`);
-    let code = await this.pip([...base, '-i', PIP_MIRROR]);
-    if (code !== 0) {
-      this.push('镜像源没装成，改用官方 PyPI 重试');
-      this.opts.log.warn('训练依赖镜像源失败，改走官方 PyPI', { tail: this.tail.slice(-5) });
-      code = await this.pip([...base, '-i', PIP_OFFICIAL]);
+    let code = -1;
+    for (const [i, source] of PIP_SOURCES.entries()) {
+      const last = i === PIP_SOURCES.length - 1;
+      this.push(last ? `装训练依赖走官方 PyPI：${source}` : `装训练依赖走镜像：${source}`);
+      code = await this.pip([...base, '-i', source]);
+      if (code === 0) break;
+      if (!last) {
+        this.push(`这个源没装成，换下一个：${PIP_SOURCES[i + 1]}`);
+        this.opts.log.warn('训练依赖源失败，换下一个源重试', { source, tail: this.tail.slice(-5) });
+      }
     }
     if (code === 0) {
       mkdirSync(this.opts.dataDir, { recursive: true });
-      writeFileSync(join(this.opts.dataDir, DEPS_FILE), JSON.stringify({ runtime: RUNTIME_VERSION, revision: DEPS_REVISION, at: new Date().toISOString() }, null, 2));
+      // 标记绑定到具体运行时目录：换档 / 卸载重下后目录变了，旧标记自动失效。
+      writeFileSync(join(this.opts.dataDir, DEPS_FILE), JSON.stringify({
+        runtime: RUNTIME_VERSION,
+        revision: DEPS_REVISION,
+        dir: resolve(this.opts.runtimeDir()),
+        at: new Date().toISOString(),
+      }, null, 2));
       this.depsError = null;
       this.push('训练依赖装好了');
       this.opts.log.info('训练依赖安装完成', { packages: TRAIN_PACKAGES });
@@ -415,7 +508,15 @@ export class TrainerManager {
         const dest = join(weightsDir, f.path);
         const partial = `${dest}.partial`;
         this.push(`下载训练资源 ${f.path}`);
-        await fetchVerified(f.sources, partial, f.bytes, f.sha256, () => {}, signal);
+        let source = '';
+        await fetchVerified(f.sources, partial, f.bytes, f.sha256, () => {}, signal, {
+          onSource: (url) => {
+            const host = sourceLabel(url);
+            if (host === source) return;
+            source = host;
+            this.push(`训练资源来源：${host}`);
+          },
+        });
         renameSync(partial, dest);
         this.push(`训练资源就位 ${f.path}`);
       }
@@ -426,6 +527,17 @@ export class TrainerManager {
       this.push(`下载训练资源失败：${this.assetsError}`);
       this.opts.log.warn('训练资源下载失败', { error: this.assetsError, tail: this.tail.slice(-LOG_TAIL) });
     }
+  }
+
+  /** 从日志尾部挑出最像根因的一行：优先 `No module named`，否则最后一行。 */
+  private failureFromTail(): string | null {
+    const tail = this.tail.slice(-LOG_TAIL);
+    const missing = [...tail].reverse().find((line) => /No module named|ModuleNotFoundError/i.test(line));
+    if (missing) {
+      const name = /No module named '?([^'"\s]+)/i.exec(missing)?.[1];
+      return `训练依赖缺失${name ? `：${name}` : ''}；点「安装训练依赖」补上再启动。`;
+    }
+    return tail[tail.length - 1] ?? null;
   }
 
   private push(line: string): void {
