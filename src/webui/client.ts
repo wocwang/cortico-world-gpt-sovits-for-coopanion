@@ -182,31 +182,48 @@ const voicePanel: WebUiPanel = {
 
     // ---- 已有 GPT-SoVITS：只在选了「本地」之后才问；默认展开「选目录」
     const setup = ui.section(t.setupTitle, t.setupHint);
+    const setupHead = setup.querySelector('h4');
+    const setupDesc = setup.querySelector('.sectiondesc');
     const setupNow = ui.h('div', 'gsv-detail');
     const setupPick = ui.actions();
     setupPick.classList.add('gsv-setup-pick');
     const folderBtn = ui.button(t.setupByFolder, { size: 'sm', onClick: () => showSetup('own') });
     const serviceBtn = ui.button(t.setupByService, { size: 'sm', onClick: () => showSetup('remote') });
-    const managedBtn = ui.button(t.setupManaged, { size: 'sm', onClick: () => void call('useManaged') });
-    setupPick.append(folderBtn, serviceBtn, managedBtn);
-    setup.append(setupNow, setupPick);
+    const managedBtn = ui.button(t.setupManaged, { size: 'sm', onClick: () => { setupExpanded = false; void call('useManaged'); } });
+    const collapseBtn = ui.button(t.setupCollapse, { size: 'sm', onClick: () => { setupExpanded = false; syncSetup(); } });
+    setupPick.append(folderBtn, serviceBtn, managedBtn, collapseBtn);
+    const setupBrief = ui.actions();
+    setupBrief.append(ui.button(t.setupChange, { size: 'sm', onClick: () => { setupExpanded = true; syncSetup(); } }));
+    setup.append(setupNow, setupPick, setupBrief);
 
-    // 目录：路径输入 → 检测 / 自动找 → 点选权重与参考音频 → 用这个目录
+    // 目录：点「选择目录」弹系统对话框 → 直接检测；手动输入路径收在次要入口里
     const folderBox = ui.h('div', 'gsv-cfg');
     const folderInput = ui.input({ placeholder: t.setupFolderPh, onInput: () => resetReport() });
+    folderInput.readOnly = true;
+    const manualNote = ui.h('div', 'gsv-detail', t.setupManualHint);
+    manualNote.hidden = true;
     const folderActs = ui.actions();
     const applyBtn = ui.button(t.setupApply, { variant: 'primary', size: 'sm', onClick: () => void applyFolder() });
     applyBtn.disabled = true;
     folderActs.append(
+      ui.button(t.setupPickDir, { variant: 'primary', size: 'sm', onClick: () => void pickDirectory() }),
       ui.button(t.setupCheck, { size: 'sm', onClick: () => void checkFolder() }),
       ui.button(t.setupFind, { size: 'sm', onClick: () => void findFolder() }),
       applyBtn,
+      ui.button(t.setupManual, {
+        size: 'sm',
+        onClick: () => {
+          folderInput.readOnly = false;
+          manualNote.hidden = false;
+          folderInput.focus();
+        },
+      }),
     );
     const folderNote = ui.h('div', 'gsv-detail');
     const candidateList = ui.h('div', 'gsv-detail');
     const weightsList = ui.h('div');
     const refsList = ui.h('div');
-    folderBox.append(folderInput, folderActs, folderNote, candidateList, weightsList, refsList);
+    folderBox.append(folderInput, manualNote, folderActs, folderNote, candidateList, weightsList, refsList);
 
     // 服务：填地址后点「测试连接」才探一次，不自动扫端口。
     const serviceBox = ui.h('div', 'gsv-cfg');
@@ -214,16 +231,19 @@ const voicePanel: WebUiPanel = {
     serviceRemoteNote.hidden = true;
     const serviceInput = ui.input({ placeholder: t.setupServicePh, onInput: (v) => { serviceRemoteNote.hidden = isLoopback(v) || !v.trim(); } });
     const serviceActs = ui.actions();
-    serviceActs.append(ui.button(t.setupTest, { variant: 'primary', size: 'sm', onClick: () => void call('probeService', [serviceInput.value]) }));
+    serviceActs.append(ui.button(t.setupTest, { variant: 'primary', size: 'sm', onClick: () => { setupExpanded = false; void call('probeService', [serviceInput.value]); } }));
     serviceBox.append(serviceInput, serviceActs, serviceRemoteNote);
 
     setup.append(folderBox, serviceBox);
-    showSetup('own');
 
     let report: FolderReport | null = null;
     let pickedWeights: { gpt: string; sovits: string } | null = null;
     let pickedRef: string | null = null;
     let setupPrimed = false;
+    let setupMode: 'own' | 'remote' = 'own';
+    let setupExpanded = false;
+    let setupReady = false;
+    showSetup('own');
 
     /** 面板里同款的本机判定，只用来决定「跨机只提示」这句要不要出现。 */
     function isLoopback(url: string): boolean {
@@ -234,10 +254,32 @@ const voicePanel: WebUiPanel = {
     }
 
     function showSetup(mode: 'own' | 'remote') {
-      folderBox.hidden = mode !== 'own';
-      serviceBox.hidden = mode !== 'remote';
+      setupMode = mode;
       folderBtn.dataset.on = mode === 'own' ? '1' : '';
       serviceBtn.dataset.on = mode === 'remote' ? '1' : '';
+      syncSetup();
+    }
+
+    /**
+     * 已经配置好（自备目录校验通过 / 已有服务地址已填 / 托管运行时就绪）就只留一行摘要和「更换」；
+     * 第一次配置或主动点「更换」时才铺开完整引导。
+     */
+    function syncSetup() {
+      const collapsed = setupReady && !setupExpanded;
+      folderBox.hidden = collapsed || setupMode !== 'own';
+      serviceBox.hidden = collapsed || setupMode !== 'remote';
+      setupPick.hidden = collapsed;
+      setupBrief.hidden = !collapsed;
+      collapseBtn.hidden = !(setupReady && setupExpanded);
+      renderSetupHead(report);
+    }
+
+    /** 已识别出可用目录与权重后，顶部不再问「你已经装过…」，改成陈述式标题。 */
+    function renderSetupHead(r: FolderReport | null) {
+      const recognized = !!r && setupMode === 'own' && r.runtime.usable && r.weights.length > 0;
+      const collapsed = setupReady && !setupExpanded;
+      if (setupHead) setupHead.textContent = setupReady ? t.setupTitleDone : recognized ? t.setupTitleReady : t.setupTitle;
+      if (setupDesc) setupDesc.textContent = collapsed ? t.setupHintDone : recognized ? t.setupHintReady : t.setupHint;
     }
 
     function resetReport() {
@@ -245,6 +287,7 @@ const voicePanel: WebUiPanel = {
       pickedWeights = null;
       pickedRef = null;
       applyBtn.disabled = true;
+      renderSetupHead(null);
       folderNote.textContent = '';
       folderNote.classList.remove('gsv-bad', 'gsv-warn');
       candidateList.replaceChildren();
@@ -265,6 +308,7 @@ const voicePanel: WebUiPanel = {
       pickedWeights = null;
       pickedRef = null;
       applyBtn.disabled = !r.runtime.usable;
+      renderSetupHead(r);
       folderNote.classList.remove('gsv-bad', 'gsv-warn');
       if (r.runtime.usable) {
         folderNote.textContent = t.setupReadyHint(r.root);
@@ -318,6 +362,20 @@ const voicePanel: WebUiPanel = {
       }
     }
 
+    /** 宿主原生目录选择器：取消、关闭或宿主不支持时静默返回，不改配置。 */
+    async function pickDirectory(): Promise<void> {
+      if (typeof ctx.pickPath !== 'function') return;
+      try {
+        const picked = await ctx.pickPath({ kind: 'directory', title: t.setupPickTitle, currentPath: folderInput.value.trim() || undefined });
+        if (!picked) return;
+        folderInput.value = picked;
+        folderInput.readOnly = true;
+        manualNote.hidden = true;
+        resetReport();
+        void checkFolder();
+      } catch { /* 选择器不可用：保留手动输入这条路 */ }
+    }
+
     async function checkFolder() {
       const path = folderInput.value.trim();
       if (!path) return;
@@ -353,6 +411,7 @@ const voicePanel: WebUiPanel = {
 
     async function applyFolder() {
       if (!report?.runtime.usable) return;
+      setupExpanded = false;
       await call('applyFolder', [report.root, { weights: pickedWeights ?? undefined, ref: pickedRef ?? undefined }]);
       void refresh();
     }
@@ -383,8 +442,13 @@ const voicePanel: WebUiPanel = {
         serviceRemoteNote.hidden = isLoopback(serviceInput.value) || !serviceInput.value.trim();
         showSetup(s.setup.mode === 'remote' ? 'remote' : 'own');
       }
-      setupNow.textContent = t.setupCurrent(s.setup.mode === 'remote' ? t.setupModeRemote
-        : s.setup.mode === 'own' ? t.setupModeOwn : t.setupModeManaged);
+      const setupLabel = s.setup.mode === 'remote' ? t.setupModeRemote
+        : s.setup.mode === 'own' ? t.setupModeOwn : t.setupModeManaged;
+      const setupPath = s.setup.mode === 'remote' ? s.setup.serverUrl.trim() : s.setup.mode === 'own' ? s.setup.runtimeDir.trim() : '';
+      setupReady = s.setup.ready;
+      if (!setupReady) setupExpanded = false;
+      setupNow.textContent = t.setupCurrent(setupPath ? `${setupLabel} · ${setupPath}` : setupLabel);
+      syncSetup();
       const bad = s.engine === 'cloud' ? null : s.mismatch;
       engineMismatch.hidden = !bad;
       if (bad) engineMismatch.textContent = t.modelMismatch(modelLabel(bad.want), modelLabel(bad.current));
@@ -991,6 +1055,14 @@ type ConfigField = {
   xHot: boolean;
 };
 type ConfigResp = { groupId: string; title?: string; description?: string; properties: ConfigField[]; values: Record<string, unknown> };
+type HttpApiState = {
+  enabled: boolean;
+  port: number;
+  listening: boolean;
+  listeningPort: number | null;
+  issue: { kind: 'port' | 'failed'; port: number; detail: string } | null;
+  selfConflict: boolean;
+};
 type QqGuide = {
   installed: boolean;
   httpApi: boolean;
@@ -1177,7 +1249,7 @@ async function mountRvcCard(ctx: WebUiPanelContext, host: HTMLElement, values: R
 /**
  * 渲染一个配置字段；保存走面板的 `setConfigValue`，和原配置页是同一份值。
  */
-function mountConfigField(ctx: WebUiPanelContext, host: HTMLElement, f: ConfigField, value: unknown, afterSave?: (next: unknown) => void): void {
+function mountConfigField(ctx: WebUiPanelContext, host: HTMLElement, f: ConfigField, value: unknown, afterSave?: (next: unknown) => void): HTMLElement {
   const { ui } = ctx;
   const t = panelText(ctx.language);
   let pending: { dispose(): void } | null = null;
@@ -1236,6 +1308,7 @@ function mountConfigField(ctx: WebUiPanelContext, host: HTMLElement, f: ConfigFi
   wrap.append(ui.field(f.title + (f.xHot ? '' : t.restartNeeded), control));
   if (f.description) wrap.append(ui.h('div', 'gsv-detail', f.description));
   host.append(wrap);
+  return control;
 }
 
 /**
@@ -1317,10 +1390,10 @@ function linkPanel(): WebUiPanel {
 
       const notes: Array<() => void> = [];
       const refresh = (): void => { for (const draw of notes) draw(); };
-      const mount = (host: HTMLElement, suffix: string): void => {
+      const mount = (host: HTMLElement, suffix: string): HTMLElement | null => {
         const f = resp.properties.find((item) => item.key.endsWith(suffix));
-        if (!f) return;
-        mountConfigField(ctx, host, f, values[f.key], (next) => {
+        if (!f) return null;
+        return mountConfigField(ctx, host, f, values[f.key], (next) => {
           values[f.key] = next;
           refresh();
         });
@@ -1336,13 +1409,54 @@ function linkPanel(): WebUiPanel {
         refresh();
       };
 
-      // 新版 QQ 插件（cortico-world-qq-final / NapCat）：本机语音接口 + 渠道语音 + 对接指南。
-      const fresh = card('link-qq-final', t.newQqTitle, 'cortico-world-qq-final', t.newQqDesc);
+      // 本机语音接口（通用）：任何插件都能来取，不是 QQ 专用；放在联动页最上面。
+      const api = card('link-api', t.localApiTitle, 'local http tts', t.localApiDesc);
+      const apiQueue = ui.h('div', 'gsv-detail', t.apiQueueHint);
+      const apiState = ui.msgline();
+      const apiHowTo = ui.h('div', 'gsv-detail');
+      const apiSwitch = mount(api.body, '.httpApi');
+      const apiPort = mount(api.body, '.httpPort');
+      const apiToken = mount(api.body, '.httpToken');
+      if (apiSwitch) (apiSwitch as HTMLInputElement).setAttribute('aria-label', t.localApiTitle);
+      // 开关关着时端口与令牌不生效：置灰，别让人以为填了就在用。
+      const syncApi = (): void => {
+        const on = value('.httpApi') === true;
+        for (const el of [apiPort, apiToken]) if (el) (el as HTMLInputElement).disabled = !on;
+        apiQueue.textContent = on ? t.apiQueueHint : t.apiOffHint;
+      };
       notes.push(() => {
-        fresh.note.textContent = `${t.sumApi(value('.httpApi') === true, text('.httpPort', '9880'))} · ${t.sumToken(text('.httpToken') !== '')}`;
+        api.note.textContent = `${t.sumApi(value('.httpApi') === true, text('.httpPort', '9880'))} · ${t.sumToken(text('.httpToken') !== '')}`;
+        syncApi();
+        apiHowTo.textContent = t.apiHowTo(text('.httpPort', '9880'));
       });
+      api.body.append(apiQueue, apiState, apiHowTo);
+      ctx.root.append(api.el);
+
+      const drawApi = (s: HttpApiState): void => {
+        apiState.classList.remove('bad');
+        if (!s.enabled) { apiState.textContent = t.apiOffState; return; }
+        if (s.listening) { apiState.textContent = t.apiListening(s.listeningPort ?? s.port); return; }
+        if (s.issue?.kind === 'port') {
+          apiState.textContent = s.selfConflict ? t.apiPortSelf(s.port) : t.apiPortTaken(s.port);
+          apiState.classList.add('bad');
+        } else if (s.issue) {
+          apiState.textContent = t.apiStartFailed(s.issue.detail);
+          apiState.classList.add('bad');
+        } else {
+          apiState.textContent = t.apiStarting;
+        }
+      };
+      const refreshApi = async (): Promise<void> => {
+        try { drawApi(await ctx.invoke<HttpApiState>('httpApiState')); } catch { /* 其它卡片不受影响 */ }
+      };
+      void refreshApi();
+      ctx.interval(() => void refreshApi(), 2000);
+
+      // 新版 QQ 插件（cortico-world-qq-final / NapCat）：渠道语音规则 + 对接指南。
+      const fresh = card('link-qq-final', t.newQqTitle, 'cortico-world-qq-final', t.newQqDesc);
+      notes.push(() => { fresh.note.textContent = value('.channelVoice') === true ? t.sumOn : t.sumOff; });
       ctx.root.append(fresh.el);
-      for (const suffix of ['.httpApi', '.httpPort', '.httpToken', '.channelVoice']) mount(fresh.body, suffix);
+      mount(fresh.body, '.channelVoice');
       await mountQqGuide(ctx, fresh.body, () => void reload());
 
       // QQ Bot 插件（cortico-world-qqbot）：音频句柄 + FFmpeg。

@@ -85,7 +85,7 @@ export interface GptSovitsConfigSection {
    * 就能用本插件的声音合成并发到 QQ。只监听 127.0.0.1。
    */
   httpApi: boolean;
-  /** HTTP 语音接口的端口；默认 9880。改端口要重挂扩展（重启 World）才生效。 */
+  /** HTTP 语音接口的端口；默认 9880。改端口会立即重绑。 */
   httpPort: number;
   /** HTTP 语音接口的访问令牌；留空不校验（接口只监听回环地址）。 */
   httpToken: string;
@@ -254,12 +254,14 @@ const TEXT = {
     saveKeepHours: { title: '语音文件保留时长（小时）', description: '只清理本插件写出的 line-*.wav，别的文件不动；保存新语音时顺手清理过期的。0 为一直留着。' },
     shareAudio: { title: '把整句语音交给其他插件', description: '合成完把这一句的音频作为回执附件交出去：QQ 等插件可以用回执里的 [blob …] 句柄发送同一段音频（QQ Bot 插件的 qqbot_send_message 就是把它填进 voice），不必再读文件。代价是这句台词要等整句合成完才回执，气泡比往常晚一点出现。' },
     playLocally: { title: '本机外放', description: '关掉后语音不在本机出声，只合成——语音只发给 QQ 等渠道时用它。桌宠气泡不受影响；某一句想临时不播，让 bot 调 sovits_speak 时带 silent 参数即可。' },
-    httpApi: { title: '开放本地语音接口', description: '给会自己合成语音的插件取音频用：旧 QQ 插件（cortico-world-qq-final / NapCat）把「语音模型网址」填成本机地址，就能用这个声音合成并发到 QQ。只监听 127.0.0.1。注意 QQ Bot 插件（cortico-world-qqbot）不吃这个地址——它只接受宿主句柄或公网 URL，给 qqbot 发语音请开下面的「QQ 机器人语音条」。开关与端口改动需重挂扩展（重启 World）生效。' },
-    httpPort: { title: '语音接口端口', description: '默认 9880。与别的程序冲突时换一个。' },
-    httpToken: { title: '语音接口令牌', description: '留空不校验（接口只监听本机回环地址）。填了以后对方请求要带 Authorization: Bearer 或 ?token=。' },
-    channelVoice: { title: '其他渠道的语音交给对方插件', description: '给会自己合成语音的旧 QQ 插件（cortico-world-qq-final / NapCat）用：开启后提示词会告诉 bot，走 qq_send 回复时不要调用 sovits_speak，要发语音就传 voice=true，由对方通过本机语音接口合成。需要同时开上面的「开放本地语音接口」。QQ Bot 插件（cortico-world-qqbot）不适用这一条，用下面的「QQ 机器人语音条」。' },
+    httpApi: { title: '开放本机语音接口', description: '给任何会自己合成语音的插件取音频用：对方把「语音模型网址」填成本机地址（默认 http://127.0.0.1:9880）就能用这个声音合成。只监听 127.0.0.1，可选令牌；开关与端口改动即时生效，端口被占用时面板会说明原因并等你换一个。QQ 插件只是其中一个使用者：QQ Bot 插件（cortico-world-qqbot）不吃这个地址，给 qqbot 发语音请开下面的「QQ 机器人语音条」。' },
+    httpPort: { title: '语音接口端口', description: '默认 9880。与别的程序（包括本插件自己的推理服务，api_v2 也默认 9880）冲突时换成 9883 之类没被占用的端口，改完立即重试。' },
+    httpToken: { title: '语音接口令牌', description: '留空不校验（接口只监听本机回环地址）。填了以后对方请求要带 Authorization: Bearer 或 ?token=；改动即时生效（接口会重绑一次）。' },
+    channelVoice: { title: '其他渠道的语音交给对方插件', description: '给会自己合成语音的旧 QQ 插件（cortico-world-qq-final / NapCat）用：开启后提示词会告诉 bot，走 qq_send 回复时不要调用 sovits_speak，要发语音就传 voice=true，由对方通过本机语音接口合成。需要同时开「本机语音接口」。QQ Bot 插件（cortico-world-qqbot）不适用这一条，用下面的「QQ 机器人语音条」。' },
     qqbotVoice: { title: 'QQ 机器人语音条', description: '给 QQ Bot 插件（cortico-world-qqbot）用：开启后提示词会告诉 bot，走 qqbot_send_message 发语音时先调 sovits_speak 带 silent: true 静音合成，再把回执里的 [blob …] 句柄填进 voice，文字与语音条在同一条消息里发出，本机不出声。需要 FFmpeg（QQ Bot 插件侧用它把 WAV 转成 SILK），语音只在私聊与群可用、频道只收图片。它和上面的「其他渠道的语音交给对方插件」可以同时开，两边按回复工具分开。' },
     singUrl: { title: '唱歌插件地址', description: 'DiffSinger 唱歌插件（cortico-world-singer-for-coopanion）的地址，默认 http://127.0.0.1:9882。QQ 的语音通道里正文以「【唱】」开头的句子会转给它唱出来；留空则不转，带标记的正文按普通台词念。唱不出来（插件没装、引擎没就绪）时也会自动退回普通语音，不影响正常语音回复。' },
+    // 通用输出端口已移除（0.8.8）；旧配置里的 pushEnabled / pushUrl / pushToken 静默忽略。
+
     rvcEnabled: { title: '出口变声（RVC）', description: '合成完把音频交给本机 RVC 插件再过一遍，再交出去。只影响给其他插件的音频；RVC 没开、超时或报错时原样返回，不会断链路。' },
     rvcEndpoint: { title: 'RVC 端点', description: '默认 http://127.0.0.1:9881，即 cortico-world-rvc-for-coopanion 的本机接口。' },
     rvcToken: { title: 'RVC 接口令牌', description: 'RVC 插件配了接口令牌时填同一个值；留空表示对方不校验。' },
@@ -310,12 +312,14 @@ const TEXT = {
     saveKeepHours: { title: 'Keep speech files (hours)', description: 'Only removes line-*.wav files written by this plugin, nothing else; expired ones are swept whenever a new line is saved. 0 keeps everything.' },
     shareAudio: { title: 'Hand each line to other plugins', description: 'Returns the finished line as a result attachment, so plugins like QQ can send the same audio with the [blob …] handle instead of reading a file (the QQ Bot plugin\'s qqbot_send_message takes it as voice). The line must finish synthesizing first, so the bubble appears a little later than before.' },
     playLocally: { title: 'Play on this computer', description: 'When off, lines are synthesized but not played here — handy when the voice only goes to QQ. Bubbles are unaffected; for a single line, have the bot pass silent to sovits_speak.' },
-    httpApi: { title: 'Serve a local voice API', description: 'For plugins that synthesize voice themselves: point the old QQ plugin\'s (cortico-world-qq-final / NapCat) voice model URL at this computer and it can synthesize with this voice and send it to QQ. Loopback only. The QQ Bot plugin (cortico-world-qqbot) does not use this address — it only accepts host handles or public URLs; enable "QQ Bot voice bars" below for it. Toggling it or the port needs the extension remounted (World restarted).' },
-    httpPort: { title: 'Voice API port', description: 'Defaults to 9880; change it if something else uses that port.' },
-    httpToken: { title: 'Voice API token', description: 'Empty means no check (the server listens on loopback only). When set, callers must send Authorization: Bearer or ?token=.' },
-    channelVoice: { title: 'Channel voice comes from the other plugin', description: 'For the old QQ plugin (cortico-world-qq-final / NapCat), which synthesizes voice itself: when on, the prompt tells the bot not to call sovits_speak when replying through qq_send, and to pass voice=true so that plugin fetches the voice from the local voice API. Needs "Serve a local voice API" above. The QQ Bot plugin (cortico-world-qqbot) does not use this rule; use "QQ Bot voice bars" below instead.' },
+    httpApi: { title: 'Serve a local voice API', description: 'For any plugin that synthesizes voice itself: point its voice model URL at this computer (default http://127.0.0.1:9880) and it can synthesize with this voice. Loopback only, optional token; toggling it or changing the port takes effect immediately, and if the port is taken the panel explains why and waits for a new one. QQ is only one consumer: the QQ Bot plugin (cortico-world-qqbot) does not use this address — enable "QQ Bot voice bars" below for it.' },
+    httpPort: { title: 'Voice API port', description: 'Defaults to 9880. If it clashes with something else, including this plugin\'s own inference service (api_v2 also defaults to 9880), use a free port such as 9883; it retries immediately.' },
+    httpToken: { title: 'Voice API token', description: 'Empty means no check (the server listens on loopback only). When set, callers must send Authorization: Bearer or ?token=. Changes apply immediately (the API rebinds once).' },
+    channelVoice: { title: 'Channel voice comes from the other plugin', description: 'For the old QQ plugin (cortico-world-qq-final / NapCat), which synthesizes voice itself: when on, the prompt tells the bot not to call sovits_speak when replying through qq_send, and to pass voice=true so that plugin fetches the voice from the local voice API. Needs "Serve a local voice API". The QQ Bot plugin (cortico-world-qqbot) does not use this rule; use "QQ Bot voice bars" below instead.' },
     qqbotVoice: { title: 'QQ Bot voice bars', description: 'For the QQ Bot plugin (cortico-world-qqbot): when on, the prompt tells the bot to call sovits_speak with silent: true first, then pass the [blob …] handle from the result as voice to qqbot_send_message, so text and the voice bar arrive in one message and nothing is played here. Needs FFmpeg (the QQ Bot plugin converts the WAV to SILK); voice bars work in direct chats and groups only, channels accept images only. It can be on together with "Channel voice comes from the other plugin" — each rule names its own reply tool.' },
     singUrl: { title: 'Singing plugin endpoint', description: 'Address of the DiffSinger singing plugin (cortico-world-singer-for-coopanion), http://127.0.0.1:9882 by default. On the QQ voice channel, a line starting with 【唱】 is handed to it and sung; empty disables the hand-off and the line is read as normal speech. If singing fails (plugin missing, engine not ready) the line falls back to normal speech.' },
+    // The generic output endpoint was removed in 0.8.8; old pushEnabled / pushUrl / pushToken keys are ignored.
+
     rvcEnabled: { title: 'Voice conversion (RVC) at the exit', description: 'Hands every finished line to the local RVC plugin once before it goes out. Only affects audio for other plugins; when RVC is off, slow or failing, the original audio is returned and the chain never breaks.' },
     rvcEndpoint: { title: 'RVC endpoint', description: 'Defaults to http://127.0.0.1:9881, the loopback API of cortico-world-rvc-for-coopanion.' },
     rvcToken: { title: 'RVC API token', description: 'Fill in the same value when the RVC plugin has a token; empty means it checks nothing.' },

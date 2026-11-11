@@ -1,10 +1,80 @@
 # TODO — 更好的GPTSovits 语音（Coopanion 插件）
 
-> 最后更新：2026-11-10（Asia/Shanghai）
-> 工作区版本：**0.8.3（已发布 npm）**；本机 `data\extensions` 装的是 **0.8.3（已重装并核对哈希）**
+> 最后更新：2026-11-11（Asia/Shanghai）
+> 工作区版本：**0.8.8（未发布）**；本机 `data\extensions` 装的是 **0.8.8**
 > 详细交接见 [HANDOFF.md](HANDOFF.md)；机器可读的状态见 [docs/STATE.md](docs/STATE.md)（`node scripts/handoff.mjs --write` 重新生成）；
 > 开新会话的提示词见 [docs/handoff-prompt.md](docs/handoff-prompt.md)；ROCm 代验清单见 [docs/rocm-acceptance.md](docs/rocm-acceptance.md)。
 > 本机训练产物（「祀」音色）在 `D:/Program Files/Coopanion/data/home/companion/data/trainers/shi`，训练记录 `D:/Program Files/Coopanion/data/shi-training.md`。
+
+## P0 — 移除「通用输出端口」+ 入站引导补一句（0.8.8，已装）
+
+- [x] **删除功能**：`src/push.ts`、`tests/push.test.ts` 删除；`world.ts` 去掉 `PushSink`、合成完成入队推送与积压丢弃调用点；
+      `client.ts` 删除 `link-push` 卡片（含「发送测试音频」与非本机地址提示）。
+- [x] **配置**：`pushEnabled` / `pushUrl` / `pushToken` 从接口、默认值、`configSchema`、中英文案里移除；
+      旧配置里残留的三个字段**静默忽略**，保存后不再写出。
+- [x] **入站引导**：「本机语音接口（通用）」卡片下方新增一行 `apiHowTo`——地址 `http://127.0.0.1:<端口>`，
+      有令牌加 `Authorization: Bearer`；本机插件通常直接填地址、不用带路径。入站接口 `httpApi` / `http-tts.ts` 未改。
+- [x] 一级验证：`tsc --noEmit` 通过；`vitest run` 26 文件 **309 例** 全过；`build` / `check:audio` 通过。
+- [x] 二级验证：`describe:extension` + `check:extension` 通过。
+- [x] 本机安装：0.8.8 tgz 已装进 Coopanion，关键文件哈希与工作区一致。
+- [ ] 真机验收（需重启宿主）：联动页没有推送卡片；接口卡下方能看到填写引导；老 `config.json` 带三个字段可正常启动。
+
+## P0 — 接口卡置顶 + 端口占用提示 + 并发说明（0.8.7，已装待真机验收）
+
+- [x] **位置**：`client.ts` 的 `link-api` 卡片在 0.8.6 就已经是联动页第一张（`ctx.root.append(api.el)` 先于其它卡片），
+      本次把它变成真正的「主开关」：`httpApi` 关着时 `httpPort` / `httpToken` 置灰，小字换成 `apiOffHint`
+      「开关关闭时端口与令牌不生效」。
+- [x] **即时生效**：`world.ts` 的 `setConfigValue` 保存 `.httpApi` / `.httpPort` 后调用 `reconcileHttpApi()`：
+      关掉 → `close()` 并清空 `httpTts`；开或换端口 → 重新 `startHttpApi()`；`httpApiStarting` 防重入。
+- [x] **端口占用**：`startHttpApi` 抓 `EADDRINUSE` 存进 `httpApiIssue`；面板每 2 秒 `ctx.invoke('httpApiState')`，
+      显示「被别的程序占用」或「正被本插件的推理地址占着（api_v2 默认也是 9880）」，并提示换成 9883。
+      真机验证：对已被占用的 9880 直接调 `startHttpTts` → `REJECTED code=EADDRINUSE`。
+- [x] **并发**：`http-tts.ts` 的 `run()` 链本来就是 FIFO 串行（并发 1），不另造队列；卡片小字写明
+      「并发上限 1、排队 + 合成合计 120 秒、共用插件当前音色」。真机两路并发打 9880：两路都 200，
+      2.09 s / 3.76 s 完成，墙钟 3.76 s ≈ 两段之和（串行、无交叠、无 500）。
+- [x] **验证**：`tsc --noEmit` 通过；`vitest run` 26 文件 **315 例** 全过（新增 EADDRINUSE 1 例）；
+      `build` 产出 `dist/webui.js` 80.5 KB / `dist/webui.css` 1.7 KB；`check:audio` 通过。
+- [ ] 真机验收（需重启宿主）：联动页最上面是这张卡；关掉开关后 9880 应无监听；手动占住 9880 再开开关，
+      卡片应显示「被别的程序占用」；改端口后不重启也应恢复监听。
+
+## P0 — 「开放本机语音接口」确认为全局并移出 QQ 卡片（0.8.6，已装待真机验收）
+
+- [x] 核实：`httpApi`（`config.ts:87/195/451`，分组 `link`）是**全局入站接口**；
+      `world.ts:1278` 起服务，`http-tts.ts:220` 只绑 `127.0.0.1`，暴露 `/health`、`/models`、`/audio/speech`、`/tts`，
+      token 可选；调用方不限于 QQ。`channelVoice` 才是 QQ 专用提示词开关（`world.ts:1195` 只用于旧 qq-final 的提示词）。
+- [x] 面板：新增通用卡片「本机语音接口（通用）」承载 `httpApi` / `httpPort` / `httpToken`（`client.ts:1414-1419`）；
+      「新版 QQ 插件」卡片只留 `channelVoice` 与对接指南。
+- [x] 文案：中英文改成不绑定 QQ，说明这是入站接口（别人来取）。
+      字段名、默认值、原生配置分组与运行语义不变，不做迁移。
+- [x] 验证：`tsc` 通过；`vitest run` **26 文件 314 例** 全过；`build` 产出 `dist/webui.js` 77.5 KB；`check:audio` 通过；
+      `describe:extension` / `check:extension` 通过；0.8.6 已装本机，关键文件哈希一致。
+- [ ] 真机验收（需重启宿主）：联动页确认「本机语音接口（通用）」是独立卡片、QQ 卡片只剩渠道规则；
+      开关接口与 QQ 渠道规则互不影响。
+
+## P0 — 已配置收起引导 + 目录点选（0.8.5，已装待真机验收）
+
+- [x] **已配置后收起引导卡**：`PanelState.setup.ready` 由 World 计算：自备目录 `isRuntimeDir` + 有
+      `tools/portable_runtime.py`、已有服务地址已填、托管运行时就绪。ready 时引导卡只留
+      「当前：… · 路径」+「更换目录 / 改用已有服务」，点开才铺开，改完自动收起。
+      未配置 / 检测失败 / 缺 portable / 权重不配对仍显示完整引导；0.8.4 的陈述式标题继续生效。
+- [x] **目录改点选**：用宿主面板 `ctx.pickPath({ kind: 'directory' })`（宿主 build 已确认存在），
+      主按钮「选择目录…」→ 系统文件夹对话框 → 回填只读框 → 立即 `checkFolder()`；取消 / 异常静默。
+      路径框默认只读，「手动输入路径」次要入口默认收起，点开才可编辑。
+- [x] 一级验证：`tsc --noEmit` 通过；`vitest run` **26 文件 314 例** 全过；`build` 产出 `dist/webui.js` 78.1 KB；`check:audio` 通过。
+- [x] 二级验证：`describe:extension` + `check:extension` 通过（0.8.5；仅既有 `sovits_speak` 默认配置描述告警与标签词表证书跳过）。
+- [x] 本机安装：0.8.5 tgz 已装进 Coopanion；`dist/webui.js`、`src/world.ts`、`src/webui/client.ts` 哈希与工作区一致。
+- [ ] 真机验收（需重启宿主）：点「选择目录…」确认系统对话框真的弹出、选中后回填并自动检测、取消无副作用；
+      已配置状态下确认引导卡只剩一行摘要；清空配置后确认完整引导回来。
+
+## P0 — 引导卡收紧（0.8.4，已装）
+
+- [x] **引导卡提问收紧**：本地引擎下已选定有效目录并识别出权重后，标题改成陈述式「本机 GPT-SoVITS 目录」、
+      副标题改成「已识别到目录与权重」；未选目录仍保持提问，检测失败 / 缺 `portable_runtime.py` /
+      权重不配对的说明与按钮都不隐藏。
+- [x] 一级验证：`tsc --noEmit` 通过；`vitest run` 全过；`build` 产出 `dist/webui.js` 74.2 KB；`check:audio` 通过。
+- [x] 二级验证：`describe:extension` + `check:extension` 通过。
+- [x] 本机安装：0.8.4 tgz 已装进 Coopanion；`dist/webui.js` 哈希与工作区一致。
+- [ ] 真机验收：已配置状态下确认引导卡只剩摘要行。
 
 ## P0 — 下载提速（0.8.3 全部落地）
 

@@ -1,6 +1,6 @@
 {
   "name": "@wocwang/cortico-world-gpt-sovits-for-coopanion",
-  "version": "0.8.3",
+  "version": "0.8.8",
   "type": "module",
   "description": "给 Coopanion 桌宠用的 GPT-SoVITS 语音插件：默认全程本机合成，按 NVIDIA / AMD（ROCm，实验性）/ CPU 自动选档；也可切到云端 OpenAI 兼容接口（填自己的 Key）。内置大肥鱼、星落落音色，支持自备权重与自定义音色、QQ 语音与唱歌联动；CPU / 核显档可开播放预缓冲（默认关闭）。",
   "author": "wocwang",

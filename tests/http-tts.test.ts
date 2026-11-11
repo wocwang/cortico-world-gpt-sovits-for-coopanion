@@ -137,6 +137,16 @@ describe('HTTP 语音接口', () => {
     expect(order).toEqual([]);
   });
 
+  it('端口被占用时以 EADDRINUSE 失败，交给上层提示用户换端口', async () => {
+    const { base } = await boot();
+    const port = Number(new URL(base).port);
+    const err = await startHttpTts({
+      port,
+      deps: { log, ready: () => true, stateText: () => 'starting', synthesize: async () => fakeWav() },
+    }).then(() => null, (e: unknown) => e as NodeJS.ErrnoException);
+    expect(err?.code).toBe('EADDRINUSE');
+  });
+
   it('出口后处理成功时返回替换后的字节', async () => {
     const replaced = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(16, 0x33)]);
     const { base } = await boot({ post: async () => replaced });

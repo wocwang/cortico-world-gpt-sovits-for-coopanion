@@ -237,6 +237,12 @@ export class GptSovitsWorld implements World {
   private sleeping = false;
   /** 给其他插件取音频的本地 HTTP 接口；配置关着时为 null。 */
   private httpTts: HttpTtsHandle | null = null;
+  /** 接口上一次没起来的原因，面板原样告诉用户（端口被占是最常见的一种）。 */
+  private httpApiIssue: { kind: 'port' | 'failed'; port: number; detail: string } | null = null;
+  /** 正在启动接口，避免面板连续保存时重复 bind。 */
+  private httpApiStarting = false;
+  /** 当前监听实际用的令牌；面板改了令牌要重绑才生效。 */
+  private httpTokenInUse = '';
   /** 正在进行的启动+预热，避免休眠唤醒与面板按钮同时启动两次。 */
   private startingServer: Promise<void> | null = null;
   /** 训练页管理器，懒建；面板点开才起。 */
@@ -259,6 +265,7 @@ export class GptSovitsWorld implements World {
       log: { warn: (msg, meta) => this.log.warn(msg, meta), info: (msg, meta) => this.log.info(msg, meta) } as Logger,
     });
     this.rvc = new RvcLink(() => opts.cfg.rvc, () => this.log);
+
     this.cloudKeys = new CloudKeyStore({
       dataDir: opts.dataDir,
       envFiles: [join(opts.dataDir, '..', '..', '.env'), join(opts.dataDir, '..', '.env'), join(opts.dataDir, '.env')],
@@ -881,10 +888,10 @@ export class GptSovitsWorld implements World {
    */
   private async playLine(
     url: string, voice: { audio: string; text: string }, spoken: string,
-    signal: AbortSignal, onFirst: () => void, silent: boolean, deliver: boolean,
+    signal: AbortSignal, onFirst: () => void, silent: boolean, deliver: boolean, text = spoken,
   ): Promise<{ first: number; wav: Buffer | null }> {
     const gain = this.backend().kind === 'remote' ? 1 : OUTPUT_GAIN[this.version()];
-    // 落盘、交出去或这一句要回报附件时收整句；都没有时不占内存。
+    // 落盘或这一句要交出去时收整句；都没有时不占内存。
     const archive = this.cfg.saveAudio || deliver ? { rate: 0, chunks: [] as Buffer[] } : null;
     let first = 0;
     let audioMs = 0;
@@ -963,7 +970,7 @@ export class GptSovitsWorld implements World {
    * 音量由云端请求里的 `speed` 之外不再二次调节（交付的 WAV 保持厂商原样）。
    */
   private async playCloudLine(
-    spoken: string, signal: AbortSignal, onFirst: () => void, silent: boolean, deliver: boolean,
+    spoken: string, signal: AbortSignal, onFirst: () => void, silent: boolean, deliver: boolean, text = spoken,
   ): Promise<{ first: number; wav: Buffer | null }> {
     const audio = await this.synthCloudLine(spoken, signal);
     if (!silent) {
@@ -1048,8 +1055,8 @@ export class GptSovitsWorld implements World {
         const onFirst = (): void => { heard = true; started(); };
         try {
           const played = cloud
-            ? await this.playCloudLine(spoken, abort.signal, onFirst, silent, !!item.finish)
-            : await (async () => { await this.applyWeights(url!); return this.playLine(url!, voice!, spoken, abort.signal, onFirst, silent, !!item.finish); })();
+            ? await this.playCloudLine(spoken, abort.signal, onFirst, silent, !!item.finish, item.text)
+            : await (async () => { await this.applyWeights(url!); return this.playLine(url!, voice!, spoken, abort.signal, onFirst, silent, !!item.finish, item.text); })();
           wav = played.wav;
           this.log.info(cloud ? '云端一句合成完' : 'GPT-SoVITS 一句合成完', { chars: [...spoken].length, silent, waitMs: played.first - at, totalMs: Date.now() - at });
           this.lastError = null;
@@ -1064,7 +1071,7 @@ export class GptSovitsWorld implements World {
             // 不该拿「去掉标点」去试（社区实测 0.6.1 在 ROCm 上就是这种错）。
             if (!cloud && !heard && isConnectionDrop(message)) {
               try {
-                wav = (await this.playLine(url!, voice!, spoken, abort.signal, onFirst, silent, !!item.finish)).wav;
+                wav = (await this.playLine(url!, voice!, spoken, abort.signal, onFirst, silent, !!item.finish, item.text)).wav;
                 ok = true;
                 recovered = '连接断开后重试';
               } catch { ok = false; }
@@ -1074,7 +1081,7 @@ export class GptSovitsWorld implements World {
             const plain = ttsPlain(spoken);
             if (!cloud && !ok && !heard && plain && plain !== spoken) {
               try {
-                wav = (await this.playLine(url!, voice!, plain, abort.signal, onFirst, silent, !!item.finish)).wav;
+                wav = (await this.playLine(url!, voice!, plain, abort.signal, onFirst, silent, !!item.finish, item.text)).wav;
                 ok = true;
                 recovered = '去掉标点后';
               } catch {
@@ -1258,16 +1265,19 @@ export class GptSovitsWorld implements World {
     this.weights.cancel();
     const api = this.httpTts;
     this.httpTts = null;
+    this.httpApiIssue = null;
     if (api) await api.close();
     await this.server.stop();
   }
 
   /** 起「给其他插件取音频」的本地接口；没开或已经在跑就不做。 */
   private async startHttpApi(): Promise<void> {
-    if (!this.cfg.httpApi || this.httpTts) return;
+    if (this.stopped || !this.cfg.httpApi || this.httpTts || this.httpApiStarting) return;
+    this.httpApiStarting = true;
+    const port = this.cfg.httpPort || 9880;
     try {
       this.httpTts = await startHttpTts({
-        port: this.cfg.httpPort || 9880,
+        port,
         token: this.cfg.httpToken,
         deps: {
           synthesize: (job, signal) => this.synthesizeForApi(job, signal),
@@ -1278,8 +1288,67 @@ export class GptSovitsWorld implements World {
           log: this.log,
         },
       });
+      this.httpApiIssue = null;
+      this.httpTokenInUse = (this.cfg.httpToken ?? '').trim();
     } catch (err) {
-      this.log.warn('HTTP 语音接口没起来，其他插件取不到音频', { err: String(err), port: this.cfg.httpPort });
+      const detail = err instanceof Error ? err.message : String(err);
+      const code = (err as NodeJS.ErrnoException | null)?.code;
+      this.httpApiIssue = { kind: code === 'EADDRINUSE' ? 'port' : 'failed', port, detail };
+      this.log.warn('HTTP 语音接口没起来，其他插件取不到音频', { err: detail, port });
+    } finally {
+      this.httpApiStarting = false;
+    }
+  }
+
+  /**
+   * 开关、端口或令牌在面板上改了就立即照做：关掉就真的停，改端口/令牌就重绑。
+   * 不轮询配置，避免端口被占时每秒重试刷日志。
+   */
+  private async reconcileHttpApi(): Promise<void> {
+    if (this.stopped) return;
+    const port = this.cfg.httpPort || 9880;
+    const running = this.httpTts;
+    if (!this.cfg.httpApi) {
+      this.httpTts = null;
+      this.httpApiIssue = null;
+      this.httpTokenInUse = '';
+      if (running) await running.close();
+      return;
+    }
+    // 令牌只在绑定时读取，改了也要重绑才能生效。
+    if (running && (running.port !== port || this.httpTokenInUse !== this.cfg.httpToken.trim())) {
+      this.httpTts = null;
+      await running.close();
+    }
+    if (!this.httpTts) await this.startHttpApi();
+  }
+
+  /** 面板读的真实状态：开关、配置端口、实际监听端口，以及没起来的原因。 */
+  private httpApiState(): unknown {
+    const port = this.cfg.httpPort || 9880;
+    const issue = this.httpApiIssue;
+    return {
+      enabled: !!this.cfg.httpApi,
+      port,
+      listening: !!this.httpTts,
+      listeningPort: this.httpTts?.port ?? null,
+      issue,
+      // 撞的是本插件自己填的推理地址（api_v2 默认也在 9880）时，提示要说得更具体。
+      selfConflict: issue?.kind === 'port' && this.inferenceOnPort(port),
+    };
+  }
+
+  /** 本机推理服务是否就在这个端口上（远端填了别的机器不算）。 */
+  private inferenceOnPort(port: number): boolean {
+    const backend = this.backend();
+    const target = backend.kind === 'remote' ? backend.url : this.server.state().url;
+    if (!target) return false;
+    try {
+      const u = new URL(target);
+      const loopback = u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '0.0.0.0' || u.hostname === '::1';
+      return loopback && Number(u.port || (u.protocol === 'https:' ? 443 : 80)) === port;
+    } catch {
+      return false;
     }
   }
 
@@ -1588,7 +1657,7 @@ export class GptSovitsWorld implements World {
       panels: [
         { id: 'voice', title: t.panel, description: t.panelHint, getMethods: ['state'] },
         cfgPanel('cfg-output', `world:${GPT_SOVITS_ID}:output`),
-        cfgPanel('cfg-link', `world:${GPT_SOVITS_ID}:link`, ['config', 'qqGuide', 'writeQqVoice']),
+        cfgPanel('cfg-link', `world:${GPT_SOVITS_ID}:link`, ['config', 'qqGuide', 'writeQqVoice', 'httpApiState']),
         cfgPanel('cfg-service', `world:${GPT_SOVITS_ID}:service`),
         { id: 'voices', title: t.voicesPanel, description: t.voicesPanelHint, getMethods: ['state'] },
         { id: 'train', title: t.trainPanel, description: t.trainPanelHint, getMethods: ['trainerState'] },
@@ -1778,6 +1847,8 @@ export class GptSovitsWorld implements World {
     }
     cur[parts[parts.length - 1]] = value;
     this.opts.persist(patch as DeepPartial<GptSovitsConfigSection>);
+    // 接口开关、端口与令牌即时生效：关掉就停、改端口/令牌就重绑（端口被占时由面板说原因）。
+    if (key === `${prefix}httpApi` || key === `${prefix}httpPort` || key === `${prefix}httpToken`) void this.reconcileHttpApi();
     return { ok: true, key, value };
   }
 
@@ -1789,6 +1860,7 @@ export class GptSovitsWorld implements World {
     if (method === 'rvcProbe') return this.rvcProbe();
     if (method === 'rvcWrite') return this.rvcWrite(args[0]);
     if (method === 'rvcTest') return this.rvcTest(String(args[0] ?? ''));
+    if (method === 'httpApiState') return this.httpApiState();
     if (method === 'config') {
       return this.configSchema(String(args[0] ?? ''), String(args[1] ?? ''), args[2] === true);
     }
@@ -1935,6 +2007,9 @@ export class GptSovitsWorld implements World {
         runtimeDir: this.cfg.runtimeDir,
         serverUrl: this.cfg.serverUrl,
         localService: !this.cfg.serverUrl.trim() || isLocalService(this.cfg.serverUrl),
+        ready: b.kind === 'remote' ? !!this.cfg.serverUrl.trim()
+          : b.kind === 'own' ? isRuntimeDir(b.dir) && existsSync(join(b.dir, 'tools', 'portable_runtime.py'))
+            : this.runtime.status().phase === 'ready',
       },
       mismatch: this.modelMismatch() ?? undefined,
       cloud: {
@@ -2056,7 +2131,7 @@ export interface PanelState {
   /** 当前合成引擎：本地 / 云端（手动切换）；`null` = 还没选，面板只显示选择提示。 */
   engine: 'local' | 'cloud' | null;
   /** 本地这一侧是怎么接上的：托管下载 / 自备目录 / 已有服务。 */
-  setup: { mode: Backend['kind']; runtimeDir: string; serverUrl: string; localService: boolean };
+  setup: { mode: Backend['kind']; runtimeDir: string; serverUrl: string; localService: boolean; ready: boolean };
   /** 当前推理模型与所选音色权重需要的版本不一致；启动兜底与面板提示共用。 */
   mismatch?: { want: ModelVersion; current: ModelVersion };
   /** 一次操作回执（换音色自动对齐、保存了版本不一致的权重等）。 */
