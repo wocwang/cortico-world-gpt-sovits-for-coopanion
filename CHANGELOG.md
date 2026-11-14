@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.1
+
+- 中文显示名改为「**大肥鱼语音全能包**」；英文显示名保持 `Better GPTSovits Voice — Fatfish` 不变。
+- 简介加入溯源说明「原 GPTSovits 语音（`cortico-world-gpt-sovits-for-coopanion`）」，并列明现已全面支持
+  本地 / 云端双引擎与 NVIDIA / AMD（ROCm，实验性）/ CPU 三种方案。
+- 面板与配置页标题、README 首段、`describe.json` 的提示词标题同步新名；npm 包名、World id、
+  配置字段名均未改动，已有配置不受影响。
+- 验证：`tsc --noEmit` 通过；`vitest run` **28 文件 383 例** 全过；`build` 产出 `dist/webui.js` 92.8 KB；
+  `check:audio` 通过；`describe:extension` / `check:extension` 通过。
+
 ## 0.9.0
 
 - **云端多厂商**：「服务商」下拉支持 自定义（OpenAI 兼容）、OpenAI、Breeze Blue、Azure、MiniMax、
