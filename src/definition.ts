@@ -47,7 +47,7 @@ const presetSnippet = (id: string): string => {
 
 export const GPT_SOVITS: WorldDefinition<GptSovitsConfigSection> = {
   id: GPT_SOVITS_ID,
-  label: 'GPTSovits 语音',
+  label: '大肥鱼语音全能包',
   defaults: () => structuredClone(GPT_SOVITS_DEFAULTS),
   configOptions(kind, language) {
     if (kind === TIER_OPTIONS) return tierOptions(language);

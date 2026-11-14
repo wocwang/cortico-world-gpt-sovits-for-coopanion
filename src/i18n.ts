@@ -7,7 +7,7 @@ import type { SpeechLang } from './synth.ts';
 
 const PANEL = {
   zh: {
-    label: 'GPTSovits 语音',
+    label: '大肥鱼语音全能包',
     panel: '语音',
     panelHint: '运行时与权重、推理服务、音色和试听。',
     voicesPanel: '音色',

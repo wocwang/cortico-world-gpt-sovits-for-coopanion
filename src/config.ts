@@ -242,7 +242,7 @@ export const VOICE_OPTIONS = `${GPT_SOVITS_ID}:voice`;
 
 const TEXT = {
   zh: {
-    title: 'GPTSovits 语音',
+    title: '大肥鱼语音全能包',
     groupVoice: { title: '音色与台词', description: '选音色、配参考音频与自备权重，以及这句台词怎么说（语言、语速、种子）。' },
     groupOutput: { title: '输出与保存', description: '声音从哪出、要不要在本机外放、要不要落盘保存。' },
     groupLink: { title: '与其他插件联动', description: '把语音交给 QQ 等插件：旧 QQ 插件（cortico-world-qq-final / NapCat）用本地语音接口，QQ Bot 插件（cortico-world-qqbot）用音频句柄，最老的 QQ 插件（cortico-world-qq）也吃句柄。可按插件分别开启，互不冲突。' },
