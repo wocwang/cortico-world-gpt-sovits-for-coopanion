@@ -5,6 +5,8 @@
  */
 import type { WebUiClientBundle, WebUiPanel, WebUiPanelContext, WebUiSheet } from 'cortico/web/shared/client-panel.ts';
 import { panelText } from '../i18n.ts';
+import { cloudProvider, listedCloudProviders, resolveCloudProvider } from '../cloud-providers.ts';
+import { cloudListChrome, cloudManualSaveDisabled, cloudVoiceLabel, cloudVoicePage, showManualVoiceEntry } from '../cloud-voice-view.ts';
 import type { RvcProbe } from '../rvc-link.ts';
 import type { FolderReport } from '../gptsovits-folder.ts';
 import type { PanelState, UsageItem, UsageState } from '../world.ts';
@@ -23,17 +25,22 @@ const modelLabel = (v: string): string => (v === 'v5turbo' ? 'V5 turbo' : 'V2 Pr
 /** 一次性回执（换音色自动对齐模型 / 保存了版本不一致的权重 / 拉到云端音色清单）。 */
 const noticeText = (n: NonNullable<PanelState['notice']>, t: ReturnType<typeof panelText>): { text: string; bad: boolean } => {
   if (n.code === 'modelSwitched') return { text: t.modelSwitched(modelLabel(n.model)), bad: false };
-  if (n.code === 'cloudVoicesPulled') return { text: t.cloudVoicesPulled(n.count), bad: false };
+  if (n.code === 'cloudVoicesPulled') return { text: t.cloudVoicesPulled(n.count, n.kept, n.total, n.keywordMode), bad: false };
+  if (n.code === 'cloudVoiceSelected') return { text: t.cloudVoiceSelected(n.name), bad: false };
   return { text: t.weightsMismatch(modelLabel(n.want), modelLabel(n.current)), bad: true };
 };
 
 /** 云端就绪摘要 / 没就绪的原因；「语音」页与「音色」页共用同一份文案。 */
 const cloudSummary = (s: PanelState, t: ReturnType<typeof panelText>): string => {
-  const why = !s.cloud.baseUrl.trim() ? t.cloudWhyBase
-    : !s.cloud.voiceId.trim() ? t.cloudWhyVoice
-      : !s.cloud.keySet ? t.cloudWhyKey
-        : t.cloudKeyUnreadable;
-  return s.cloud.ready ? t.cloudReadyNote(s.cloud.baseUrl, s.cloud.voiceId) : t.cloudNotReady(why);
+  const spec = resolveCloudProvider(s.cloud.provider, s.cloud.baseUrl);
+  const where = spec.id === 'azure' ? `${s.cloud.region || '?'}.tts.speech.microsoft.com` : s.cloud.baseUrl;
+  const why = spec.status === 'unsupported' ? t.cloudWhyUnsupported
+    : spec.id === 'azure' && !s.cloud.region.trim() ? t.cloudWhyRegion
+      : spec.showBaseUrl && !s.cloud.baseUrl.trim() ? t.cloudWhyBase
+        : !s.cloud.voiceId.trim() ? t.cloudWhyVoice
+          : !s.cloud.keySet ? t.cloudWhyKey
+            : t.cloudKeyUnreadable;
+  return s.cloud.ready ? t.cloudReadyNote(where, s.cloud.voiceId) : t.cloudNotReady(why);
 };
 
 const voicePanel: WebUiPanel = {
@@ -549,19 +556,43 @@ const voicesPanel: WebUiPanel = {
   mount(ctx: WebUiPanelContext) {
     const { ui } = ctx;
     const t = panelText(ctx.language);
+    /** 语种代码 → 展示名；认不出就原样显示。 */
+    const langLabel = (code: string): string => {
+      const key = code.trim().toLowerCase().slice(0, 2);
+      if (key === 'zh') return t.langZh;
+      if (key === 'en') return t.langEn;
+      if (key === 'ja') return t.langJa;
+      if (key === 'ko') return t.langKo;
+      return code;
+    };
     const msg = ui.msgline();
     let state: PanelState | null = null;
     let editingId: string | null = null;
     let primed = false;
+    let primedProvider = '';
     let voiceSig = '';
+    // 云端清单分页：只改本地页码，翻页不发请求、也不动已选中的音色。
+    let cloudPage = 1;
+    let cloudSelectedPage = 0;
+    // 清单是否收起：面板本地状态，不写配置；重开面板默认展开。
+    let cloudCollapsed = false;
 
     // 返回是否成功：失败时保留表单与错误提示，别让用户以为「点了没反应」。
     const call = async (method: string, args: unknown[] = []): Promise<boolean> => {
       msg.textContent = '';
       msg.classList.remove('bad');
       try {
-        const next = await ctx.invoke<PanelState>(method, args);
-        if (!next || !('backend' in next)) return false;
+        const next = await ctx.invoke<PanelState | { text: string; failed?: true }>(method, args);
+        if (!next) return false;
+        // 失败/提示类回执（拉清单没密钥、404、超时…）也要显示出来，不能悄悄丢掉。
+        if (!('backend' in next)) {
+          if ('text' in next) {
+            msg.textContent = next.text;
+            msg.classList.toggle('bad', !!next.failed);
+            ui.toast(next.text);
+          }
+          return false;
+        }
         render(next);
         if (next.notice) {
           const { text, bad } = noticeText(next.notice, t);
@@ -703,22 +734,53 @@ const voicesPanel: WebUiPanel = {
     cloudFields.style.display = 'grid';
     cloudFields.style.gridTemplateColumns = 'repeat(2, minmax(9em, 1fr))';
     cloudFields.style.gap = '.6em';
-    const fBase = ui.input({ placeholder: 'https://api.openai.com/v1', onChange: (v) => void call('setCloudField', ['cloudBaseUrl', v]) });
-    const fModel = ui.input({ placeholder: 'tts-1', onChange: (v) => void call('setCloudField', ['cloudModel', v]) });
-    const fVoice = ui.select({ onChange: (v) => void call('setCloudField', ['cloudVoiceId', v]) });
-    const fTimeout = ui.input({ type: 'number', onChange: (v) => void call('setCloudField', ['cloudTimeoutMs', Number(v)]) });
-    fTimeout.min = '5000';
-    fTimeout.max = '300000';
-    fTimeout.step = '1000';
     // 每个字段下带一行小字：必填的说明格式，可不填的说明默认值与留空行为。
     const withHint = (label: string, control: HTMLElement, hint: string): HTMLElement => {
       const box = ui.h('div');
       box.append(ui.field(label, control), ui.h('div', 'gsv-detail', hint));
       return box;
     };
+    // 顶部厂商选择：选中哪家就只显示该家要填的字段，默认值由服务端填好。
+    const providerSel = ui.select({ onChange: (v) => void call('setCloudField', ['cloudProvider', v]) });
+    for (const p of listedCloudProviders()) {
+      const option = ui.h('option', null, `${p.name}${p.status === 'unsupported' ? t.cloudProviderUnsupportedTag : ''}`);
+      option.value = p.id;
+      providerSel.append(option);
+    }
+    const providerRow = withHint(t.cloudProvider, providerSel, t.cloudProviderHint);
+    providerRow.style.gridColumn = '1 / -1';
+    const cloudProviderNote = ui.h('div', 'gsv-detail gsv-warn');
+    // 旧配置存过暂不开放的厂商：说明已回退，地址/模型/音色/密钥都没动。
+    const cloudFallbackNote = ui.h('div', 'gsv-detail gsv-warn');
+    const fBase = ui.input({ placeholder: 'https://api.openai.com/v1', onChange: (v) => void call('setCloudField', ['cloudBaseUrl', v]) });
+    const fModel = ui.input({ placeholder: 'tts-1', onChange: (v) => void call('setCloudField', ['cloudModel', v]) });
+    const fRegion = ui.input({ placeholder: 'eastus', onChange: (v) => void call('setCloudField', ['cloudRegion', v]) });
+    const fGroup = ui.input({ onChange: (v) => void call('setCloudField', ['cloudGroupId', v]) });
+    const fAppId = ui.input({ onChange: (v) => void call('setCloudField', ['cloudAppId', v]) });
+    const fCluster = ui.input({ placeholder: 'volcano_tts', onChange: (v) => void call('setCloudField', ['cloudCluster', v]) });
+    const fVoice = ui.select({ onChange: (v) => void call('setCloudField', ['cloudVoiceId', v]) });
+    const fTimeout = ui.input({ type: 'number', onChange: (v) => void call('setCloudField', ['cloudTimeoutMs', Number(v)]) });
+    fTimeout.min = '5000';
+    fTimeout.max = '300000';
+    fTimeout.step = '1000';
+    const baseRow = withHint(t.cloudBase, fBase, t.cloudBaseHint);
+    const modelRow = withHint(t.cloudModel, fModel, t.cloudModelHint);
+    const regionRow = withHint(t.cloudRegion, fRegion, t.cloudRegionHint);
+    const groupRow = withHint(t.cloudGroupId, fGroup, t.cloudGroupIdHint);
+    const appIdRow = withHint(t.cloudAppId, fAppId, t.cloudAppIdHint);
+    const clusterRow = withHint(t.cloudCluster, fCluster, t.cloudClusterHint);
+    regionRow.hidden = true;
+    groupRow.hidden = true;
+    appIdRow.hidden = true;
+    clusterRow.hidden = true;
     cloudFields.append(
-      withHint(t.cloudBase, fBase, t.cloudBaseHint),
-      withHint(t.cloudModel, fModel, t.cloudModelHint),
+      providerRow,
+      baseRow,
+      modelRow,
+      regionRow,
+      groupRow,
+      appIdRow,
+      clusterRow,
       withHint(t.cloudVoice, fVoice, t.cloudVoiceHint),
       withHint(t.cloudTimeout, fTimeout, t.cloudTimeoutHint),
     );
@@ -733,30 +795,79 @@ const voicesPanel: WebUiPanel = {
     keyBox.append(ui.field(t.cloudKey, keyInput), ui.h('div', 'gsv-detail', t.cloudKeyRequired), keyActs, keyNote, ui.h('div', 'gsv-detail', t.cloudKeyHint));
 
     const cloudList = ui.h('div');
-    const cloudName = ui.input({ placeholder: t.cloudVoiceNamePh });
-    const cloudId = ui.input({ placeholder: t.cloudVoiceIdPh });
-    const cloudAdd = ui.button(t.cloudVoiceAdd, { size: 'sm', onClick: () => void addCloudVoice() });
-    const cloudRefresh = ui.button(t.cloudVoicesRefresh, { size: 'sm', onClick: () => void call('refreshCloudVoices') });
-    const cloudAddFields = ui.h('div', 'gsv-cfg');
-    cloudAddFields.style.display = 'grid';
-    cloudAddFields.style.gridTemplateColumns = 'repeat(2, minmax(9em, 1fr))';
-    cloudAddFields.style.gap = '.6em';
-    cloudAddFields.append(ui.field(t.cloudVoiceName, cloudName), ui.field(t.cloudVoiceId, cloudId));
-    const cloudAddActs = ui.actions();
-    cloudAddActs.append(cloudAdd, cloudRefresh);
+    const cloudRefresh = ui.button(t.cloudVoicesRefresh, { size: 'sm', onClick: () => void refreshCloudVoices() });
+    const cloudSearch = ui.input({ placeholder: t.cloudVoicesSearchPh });
+    const cloudPull = ui.h('div');
+    cloudPull.append(
+      ui.field(t.cloudVoicesSearch, cloudSearch),
+      ui.h('div', 'gsv-detail', t.cloudVoicesSearchHint),
+    );
+    const cloudUseNote = ui.h('div', 'gsv-detail', t.cloudUseHint);
+    const cloudListTitle = ui.h('div', 'gsv-detail', `${t.cloudVoicesList} · ${t.cloudWavOnly}`);
+    // 语种只做展示：真正的控件在「台词与翻译」卡里。
+    const cloudLangNote = ui.h('div', 'gsv-detail');
+    const cloudPager = ui.actions();
+    const cloudPrev = ui.button(t.cloudPrev, { size: 'sm', onClick: () => { cloudPage = Math.max(1, cloudPage - 1); if (state) renderCloud(state); } });
+    const cloudNext = ui.button(t.cloudNext, { size: 'sm', onClick: () => { cloudPage += 1; if (state) renderCloud(state); } });
+    const cloudPageLabel = ui.h('span', 'gsv-detail');
+    const cloudJump = ui.button(t.cloudJumpSelected, { size: 'sm', onClick: () => { cloudPage = cloudSelectedPage; if (state) renderCloud(state); } });
+    cloudPager.append(cloudPrev, cloudPageLabel, cloudNext, cloudJump);
+    // 收起/展开只重绘本地面板，不写配置、不发请求。
+    const cloudCollapse = ui.button(t.cloudListHide, { size: 'sm', onClick: () => { cloudCollapsed = true; if (state) renderCloud(state); } });
+    const cloudListActs = ui.actions();
+    cloudListActs.append(cloudCollapse);
+    const cloudCollapsedText = ui.h('span', 'gsv-detail');
+    const cloudExpand = ui.button(t.cloudListShow, { size: 'sm', onClick: () => { cloudCollapsed = false; if (state) renderCloud(state); } });
+    const cloudCollapsedNote = ui.actions();
+    cloudCollapsedNote.append(cloudCollapsedText, cloudExpand);
+    // 只有厂商档案里没有「列音色」能力时才出现；有清单的厂商靠拉取 + 「使用」。
+    const cloudManualInput = ui.input({ placeholder: t.cloudVoiceIdPh });
+    const cloudManualSave = ui.button(t.cloudVoiceSave, { variant: 'primary', size: 'sm', onClick: () => void saveManualVoice() });
+    cloudManualSave.disabled = true;
+    cloudManualInput.addEventListener('input', () => {
+      cloudManualSave.textContent = t.cloudVoiceSave;
+      cloudManualSave.disabled = cloudManualSaveDisabled(cloudManualInput.value);
+    });
+    const cloudManual = ui.actions();
+    cloudManual.append(ui.h('span', 'gsv-detail', t.cloudVoiceId), cloudManualInput, cloudManualSave);
+    const cloudRefreshActs = ui.actions();
+    cloudRefreshActs.append(cloudRefresh);
+
+    async function saveManualVoice(): Promise<void> {
+      const id = cloudManualInput.value.trim();
+      if (cloudManualSaveDisabled(cloudManualInput.value)) return;
+      cloudManualSave.disabled = true;
+      cloudManualSave.textContent = t.cloudVoiceSaving;
+      // 复用「使用」：写入 cloudVoiceId、并入清单并立刻选中。
+      const ok = await call('useCloudVoice', [id, id]);
+      if (ok) {
+        cloudManualInput.value = '';
+        cloudManualSave.textContent = t.saved;
+        return;
+      }
+      cloudManualSave.textContent = t.cloudVoiceSave;
+      cloudManualSave.disabled = cloudManualSaveDisabled(cloudManualInput.value);
+    }
 
     cloudCard.body.append(
       cloudStatus,
       autoVoicesNote,
+      cloudProviderNote,
+      cloudFallbackNote,
       cloudPresetNote,
       cloudErrorNote,
       cloudFields,
+      cloudLangNote,
       keyBox,
-      ui.h('div', 'gsv-detail', `${t.cloudVoicesList} · ${t.cloudWavOnly}`),
+      cloudListTitle,
       cloudList,
-      cloudAddFields,
-      ui.h('div', 'gsv-detail', t.cloudAddHint),
-      cloudAddActs,
+      cloudPager,
+      cloudListActs,
+      cloudCollapsedNote,
+      cloudManual,
+      cloudUseNote,
+      cloudPull,
+      cloudRefreshActs,
     );
 
     async function saveKey(): Promise<void> {
@@ -779,22 +890,29 @@ const voicesPanel: WebUiPanel = {
       if (await call('clearCloudKey')) msg.textContent = t.cloudKeyCleared;
     }
 
-    async function addCloudVoice(): Promise<void> {
-      const id = cloudId.value.trim();
-      if (!id) {
-        msg.textContent = t.cloudVoiceIdRequired;
-        msg.classList.add('bad');
-        return;
-      }
-      const voices = state?.cloud.voices ?? [];
-      if (voices.some((v) => v.id === id)) {
-        msg.textContent = t.cloudVoiceExists(id);
-        msg.classList.add('bad');
-        return;
-      }
-      if (await call('setCloudVoices', [[...voices, { id, name: cloudName.value.trim() || id }]])) {
-        cloudName.value = '';
-        cloudId.value = '';
+    /** 拉取清单：输入框里刚填的密钥先保存再拉；按钮与提示行全程可见（拉取中 / 成功几条 / 失败原因）。 */
+    let refreshing = false;
+    async function refreshCloudVoices(): Promise<void> {
+      if (refreshing) return;
+      refreshing = true;
+      // 点拉取就展开清单，拉取成功后继续保持展开。
+      cloudCollapsed = false;
+      if (state) renderCloud(state);
+      cloudRefresh.disabled = true;
+      cloudRefresh.textContent = t.cloudVoicesRefreshing;
+      msg.textContent = t.cloudVoicesRefreshing;
+      msg.classList.remove('bad');
+      try {
+        const typed = keyInput.value.trim();
+        if (typed && typed !== (state?.cloud.keyMask ?? '')) {
+          if (!(await call('saveCloudKey', [typed]))) return;
+          keyInput.value = '';
+        }
+        await call('refreshCloudVoices', [cloudSearch.value.trim()]);
+      } finally {
+        refreshing = false;
+        cloudRefresh.disabled = false;
+        cloudRefresh.textContent = t.cloudVoicesRefresh;
       }
     }
 
@@ -850,11 +968,34 @@ const voicesPanel: WebUiPanel = {
       // 上一次云端失败（例如厂商不认这个音色）也挂在卡片上；改了地址/模型/音色会自动清掉。
       cloudErrorNote.hidden = !s.lastError;
       if (s.lastError) cloudErrorNote.textContent = t.cloudLastError(s.lastError);
-      // 首次拿到状态才填输入框，之后别每秒覆盖用户正在输入的值。
-      if (!primed) {
+      // 厂商决定显示哪些输入框：Azure 用区域拼主机，不显示地址与模型；MiniMax 的 GroupId 可选。
+      const spec = resolveCloudProvider(c.provider, c.baseUrl);
+      if (providerSel.value !== spec.id) providerSel.value = spec.id;
+      baseRow.hidden = !spec.showBaseUrl;
+      modelRow.hidden = !spec.showModel;
+      regionRow.hidden = !spec.extras.includes('region');
+      groupRow.hidden = !spec.extras.includes('groupId');
+      appIdRow.hidden = !spec.extras.includes('appId');
+      clusterRow.hidden = !spec.extras.includes('cluster');
+      // 未支持的厂商：常驻一条说明，别让用户配完才发现发不出去。
+      cloudProviderNote.hidden = spec.status === 'ok';
+      if (spec.status !== 'ok') cloudProviderNote.textContent = t.cloudProviderNotes[spec.note ?? 'unverified'] ?? '';
+      cloudFallbackNote.hidden = !c.providerFallback;
+      if (c.providerFallback) cloudFallbackNote.textContent = t.cloudProviderUnlisted(cloudProvider(c.providerFallback).name);
+      cloudRefresh.hidden = !c.canListVoices;
+      cloudRefresh.disabled = !c.canListVoices || refreshing;
+      // 语种只展示，不复制控件：真正改语种的地方在「台词与翻译」卡。
+      cloudLangNote.textContent = `${t.cloudLanguageNow(langLabel(c.language), c.languageAuto)} ${t.cloudLanguageHint}`;
+      // 首次拿到状态、或切了厂商才回填输入框，之后别每秒覆盖用户正在输入的值。
+      if (!primed || spec.id !== primedProvider) {
         primed = true;
+        primedProvider = spec.id;
         fBase.value = c.baseUrl;
         fModel.value = c.model;
+        fRegion.value = c.region;
+        fGroup.value = c.groupId;
+        fAppId.value = c.appId;
+        fCluster.value = c.cluster;
         fTimeout.value = String(c.timeoutMs);
       }
       const sig = c.voices.map((v) => `${v.id}\u0000${v.name}\u0000${v.official ? 1 : 0}`).join('\u0001');
@@ -880,9 +1021,16 @@ const voicesPanel: WebUiPanel = {
         ? (c.keyMask ? t.cloudKeyMaskNote(c.keyMask) : t.cloudKeyUnreadable)
         : t.cloudKeyUnset;
       keyClear.disabled = !c.keySet;
+      const pg = cloudVoicePage(c.voices, cloudPage, c.voiceId);
+      const chrome = cloudListChrome(cloudCollapsed, pg.total, pg.pages);
+      cloudPage = pg.page;
+      cloudSelectedPage = pg.selectedPage;
+      // 收起时整块不渲染；展开时才重建行。
+      cloudListTitle.hidden = !chrome.showList;
+      cloudList.hidden = !chrome.showList;
       cloudList.replaceChildren();
-      if (!c.voices.length) cloudList.append(ui.h('div', 'gsv-detail', t.cloudVoicesEmpty));
-      for (const v of c.voices) {
+      if (chrome.showList && !pg.total) cloudList.append(ui.h('div', 'gsv-detail', t.cloudVoicesEmpty));
+      for (const v of chrome.showList ? pg.items : []) {
         const line = ui.h('div', 'gsv-row');
         const pill = ui.h('span', 'gsv-pill');
         const acts = ui.h('span', 'gsv-acts');
@@ -895,8 +1043,40 @@ const voicesPanel: WebUiPanel = {
         cloudList.append(line);
         const selected = v.id === c.voiceId;
         setPill(pill, selected ? t.using : '', selected ? 'on' : 'off');
-        if (!selected) acts.append(ui.button(t.use, { size: 'sm', onClick: () => void call('setCloudField', ['cloudVoiceId', v.id]) }));
+        if (!selected) {
+          const useBtn = ui.button(t.use, {
+            size: 'sm',
+            onClick: () => {
+              if (useBtn.disabled) return;
+              // 点击反馈：先禁用并改成「切换中…」，成功会被重绘替换，失败再恢复可点。
+              useBtn.disabled = true;
+              useBtn.textContent = t.cloudVoiceUsing;
+              void call('useCloudVoice', [v.id, v.name || v.id]).then((ok) => {
+                if (ok) return;
+                useBtn.disabled = false;
+                useBtn.textContent = t.use;
+              });
+            },
+          });
+          acts.append(useBtn);
+        }
         acts.append(ui.button(t.remove, { size: 'sm', onClick: () => void call('setCloudVoices', [c.voices.filter((item) => item.id !== v.id)]) }));
+      }
+      // 分页只在多页时出现；翻页只改本地页码，不重新拉取、不动已选中的音色。
+      cloudPager.hidden = !chrome.showPager;
+      cloudPageLabel.textContent = t.cloudPageOf(pg.page, pg.pages);
+      cloudPrev.disabled = pg.page <= 1;
+      cloudNext.disabled = pg.page >= pg.pages;
+      cloudJump.hidden = !pg.selectedPage || pg.selectedPage === pg.page;
+      if (!cloudJump.hidden) cloudJump.textContent = t.cloudVoiceOnPage(pg.selectedPage);
+      cloudListActs.hidden = !chrome.showCollapse;
+      cloudCollapsedNote.hidden = !chrome.showSummary;
+      cloudUseNote.hidden = !chrome.showList || !c.voices.length;
+      // 手填入口只跟厂商的「列音色」能力走；切厂商即时生效，已存的 id 不动。
+      cloudManual.hidden = !showManualVoiceEntry(c.canListVoices);
+      if (chrome.showSummary) {
+        const label = cloudVoiceLabel(c.voices, c.voiceId) || t.cloudVoiceNone;
+        cloudCollapsedText.textContent = t.cloudListCollapsed(label);
       }
       for (const [id, pill] of presetPills) setPill(pill, s.voice?.preset === id ? t.using : '', s.voice?.preset === id ? 'on' : 'off');
     }

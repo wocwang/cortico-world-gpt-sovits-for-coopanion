@@ -5,10 +5,15 @@
  * 默认地址是 OpenAI 时直接给出官方音色并选中 `alloy`，用户只需要填密钥就能出声。
  * 用户自己维护的清单永远优先；只有「清单为空且没显式选过音色」时才用默认值，且不写盘。
  *
- * 另外提供一个尽力而为的拉取：`GET {base}/audio/voices`。部分兼容实现提供这个端点；
- * 没有的（包括 OpenAI 官方）会 404，界面按「可以继续手动添加」处理，不当成错误。
+ * 拉取按所选厂商走：
+ * - 自定义 / OpenAI 兼容：`GET {base}/audio/voices`（没有这个端点的会 404）
+ * - Breeze Blue：`GET {base}/voices`（`xi-api-key`）
+ * - ElevenLabs：`GET {base}/voices`（`xi-api-key`，`{ voices: [{ voice_id, name }] }`）
+ * - Azure：`GET https://{region}.tts.speech.microsoft.com/cognitiveservices/voices/list`（`Ocp-Apim-Subscription-Key`）
+ * - MiniMax：没有清单端点，界面只让手动填 voice id
  */
-import { CloudError, redact } from './cloud.ts';
+import { CloudError, isBreezeBlueBase, redact } from './cloud.ts';
+import { resolveCloudProvider, type CloudProviderSpec } from './cloud-providers.ts';
 
 export interface CloudVoice {
   /** 请求里的 `voice` 字段。 */
@@ -17,6 +22,8 @@ export interface CloudVoice {
   name: string;
   /** true = 这是 OpenAI 官方音色，但当前接口不是 OpenAI（面板会打标并提示）。 */
   official?: boolean;
+  /** 服务商返回的语种（`zh` / `zh-CN` / `en`…）；用于厂商不支持服务端语种参数时本地筛选。 */
+  language?: string;
 }
 
 /** OpenAI 官方 `tts-1` / `tts-1-hd` 支持的音色。 */
@@ -75,14 +82,33 @@ export function effectiveCloudVoiceId(selectedId: string, voices: ReadonlyArray<
   return selected || voices[0]?.id || '';
 }
 
-/** `https://api.openai.com/v1` → `.../v1/audio/voices`；已经写到 `/audio/speech` 的基址先把这段剥掉。 */
-export function voicesUrl(baseUrl: string): string {
+/**
+ * `https://api.openai.com/v1` → `.../v1/audio/voices`；已经写到 `/audio/speech` 的基址先把这段剥掉。
+ * Breeze Blue / ElevenLabs 的清单在 `GET {base}/voices`；Azure 按区域拼 `voices/list`。
+ * `provider` 留空时按地址推断，老配置行为不变。
+ */
+export function voicesUrl(baseUrl: string, provider = '', region = ''): string {
+  const spec = resolveCloudProvider(provider, baseUrl);
+  if (spec.id === 'azure') return azureVoicesUrl(region);
+  if (!spec.voiceList) throw new CloudError(`「${spec.name}」没有音色清单端点，请手动填写 voice id`, 'config');
   const base = baseUrl.trim().replace(/\/+$/, '').replace(/\/audio\/speech$/i, '');
   if (!base) throw new CloudError('云端地址没填（要填到 /v1 这一层）', 'config');
+  if (spec.id === 'breeze' || spec.id === 'elevenlabs' || isBreezeBlueBase(base)) {
+    const stem = base.replace(/\/text-to-speech\/[^/]+$/i, '');
+    return /\/voices$/i.test(stem) ? stem : `${stem}/voices`;
+  }
   return /\/audio\/voices$/i.test(base) ? base : `${base}/audio/voices`;
 }
 
-/** 单条音色；兼容 `{id}` / `{voice_id}` / `{name}` / 纯字符串。 */
+/** Azure 的清单地址跟合成一样按区域拼；区域没填就明确报错，不猜。 */
+function azureVoicesUrl(region: string): string {
+  const clean = region.trim().toLowerCase();
+  if (!clean) throw new CloudError('Azure 区域没填（如 eastus、eastasia）', 'config');
+  if (!/^[a-z0-9]+$/.test(clean)) throw new CloudError(`Azure 区域格式不对：${clean}（只允许小写字母和数字）`, 'config');
+  return `https://${clean}.tts.speech.microsoft.com/cognitiveservices/voices/list`;
+}
+
+/** 单条音色；兼容 `{id}` / `{voice_id}` / `{name}` / Azure 的 `{ShortName, LocalName}` / 纯字符串。 */
 function voiceOf(item: unknown): CloudVoice | null {
   if (typeof item === 'string') {
     const id = item.trim();
@@ -90,14 +116,17 @@ function voiceOf(item: unknown): CloudVoice | null {
   }
   if (!item || typeof item !== 'object') return null;
   const row = item as Record<string, unknown>;
-  const id = String(row.id ?? row.voice_id ?? row.voiceId ?? row.name ?? row.value ?? '').trim();
+  const id = String(row.id ?? row.voice_id ?? row.voiceId ?? row.ShortName ?? row.shortName ?? row.name ?? row.value ?? '').trim();
   if (!id) return null;
-  const name = String(row.display_name ?? row.displayName ?? row.name ?? '').trim();
-  return { id, name: name || id };
+  const name = String(row.display_name ?? row.displayName ?? row.LocalName ?? row.localName ?? row.name ?? '').trim();
+  // 语种用来在「厂商不支持服务端语种参数」时本地过滤；各家字段名不同，取不到就不带。
+  const labels = row.labels && typeof row.labels === 'object' ? row.labels as Record<string, unknown> : {};
+  const language = String(row.language_code ?? row.languageCode ?? row.language ?? row.Locale ?? row.locale ?? labels.language ?? '').trim();
+  return { id, name: name || id, ...(language ? { language } : {}) };
 }
 
-/** 解析服务商返回的清单：裸数组、`{voices}`、`{data}` 都认，id 去重。 */
-export function parseVoiceList(raw: unknown): CloudVoice[] {
+/** 解析服务商返回的清单：裸数组、`{voices}`、`{data}` 都认，id 去重；`limit` 只是兜底上限。 */
+export function parseVoiceList(raw: unknown, limit = 50): CloudVoice[] {
   const rows: unknown[] = Array.isArray(raw)
     ? raw
     : raw && typeof raw === 'object' && Array.isArray((raw as { voices?: unknown }).voices)
@@ -110,25 +139,57 @@ export function parseVoiceList(raw: unknown): CloudVoice[] {
     const voice = voiceOf(row);
     if (voice && !out.some((v) => v.id === voice.id)) out.push(voice);
   }
-  return out.slice(0, 50);
+  return out.slice(0, Math.max(1, limit));
+}
+
+/** `zh-CN` / `zh_CN` / `zh` → `zh`，用来比较语种。 */
+function langRoot(value: string): string {
+  return value.trim().toLowerCase().split(/[-_]/)[0] ?? '';
+}
+
+/** 关键词只影响排序：命中的排前面，其余保持原顺序。 */
+function rankByKeyword(voices: CloudVoice[], keyword: string): CloudVoice[] {
+  const kw = keyword.trim().toLowerCase();
+  if (!kw) return voices;
+  const hit = (v: CloudVoice): boolean => v.name.toLowerCase().includes(kw) || v.id.toLowerCase().includes(kw);
+  return [...voices.filter(hit), ...voices.filter((v) => !hit(v))];
 }
 
 /**
- * 尽力拉取服务商的音色清单。没有这个端点的服务商（含 OpenAI 官方）会拿到 404，
- * 调用方按「可以继续手动添加」处理；鉴权与网络错误会给出各自的说明，密钥始终脱敏。
+ * 尽力拉取服务商的音色清单，鉴权按厂商走：Azure 用订阅密钥头，Breeze / ElevenLabs 用 `xi-api-key`，
+ * 其余用 `Bearer`。没有清单端点的服务商直接给可读错误；密钥始终脱敏。
+ *
+ * `query.language` / `query.keyword` 按厂商能力处理：
+ * - 厂商声明了服务端参数（Breeze：`language_code` / `search`）就交给服务端；
+ * - 没声明就在本地处理：语种按返回的 `language` 字段过滤（缺字段的保留），
+ *   关键词只做排序（命中的排前面，其余保持原顺序）。
  */
-export async function fetchCloudVoices(baseUrl: string, key: string, timeoutMs = 60_000): Promise<CloudVoice[]> {
+export async function fetchCloudVoices(
+  baseUrl: string,
+  key: string,
+  timeoutMs = 60_000,
+  provider = '',
+  region = '',
+  query: { language?: string; keyword?: string } = {},
+): Promise<CloudVoice[]> {
   if (!key) throw new CloudError('云端密钥还没设置', 'config');
-  const url = voicesUrl(baseUrl);
+  const spec: CloudProviderSpec = resolveCloudProvider(provider, baseUrl);
+  const language = (query.language ?? '').trim().toLowerCase();
+  const keyword = (query.keyword ?? '').trim();
+  const params = new URLSearchParams();
+  if (language && spec.pullLanguageParam) params.set(spec.pullLanguageParam, langRoot(language));
+  if (keyword && spec.pullSearchParam) params.set(spec.pullSearchParam, keyword);
+  const base = voicesUrl(baseUrl, spec.id, region);
+  const url = params.size ? `${base}${base.includes('?') ? '&' : '?'}${params.toString()}` : base;
+  const headers: Record<string, string> = { accept: 'application/json' };
+  if (spec.id === 'azure') headers['Ocp-Apim-Subscription-Key'] = key;
+  else if (spec.id === 'breeze' || spec.id === 'elevenlabs' || isBreezeBlueBase(baseUrl)) headers['xi-api-key'] = key;
+  else headers.authorization = `Bearer ${key}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(new Error('timeout')), Math.max(5000, timeoutMs));
   let res: Response;
   try {
-    res = await fetch(url, {
-      method: 'GET',
-      headers: { accept: 'application/json', authorization: `Bearer ${key}` },
-      signal: ctrl.signal,
-    });
+    res = await fetch(url, { method: 'GET', headers, signal: ctrl.signal });
   } catch (err) {
     if (ctrl.signal.aborted) throw new CloudError('拉取音色清单超时', 'timeout');
     const msg = redact(err instanceof Error ? err.message : String(err), key);
@@ -143,5 +204,13 @@ export async function fetchCloudVoices(baseUrl: string, key: string, timeoutMs =
     throw new CloudError(`拉取音色清单失败（HTTP ${res.status}）：${detail || '稍后再试'}`, 'failed');
   }
   const raw = await res.json().catch(() => null);
-  return parseVoiceList(raw);
+  let voices = parseVoiceList(raw, 200);
+  // 厂商不支持服务端语种参数：本地按返回的 language 过滤，字段缺失的保留（不误杀）。
+  if (language && !spec.pullLanguageParam) {
+    const want = langRoot(language);
+    voices = voices.filter((v) => !v.language || langRoot(v.language) === want);
+  }
+  // 服务端 search 已经是过滤/相关度排序；本地路径只负责把命中项提到前面。
+  if (keyword) voices = rankByKeyword(voices, keyword);
+  return voices.slice(0, 50);
 }

@@ -2,6 +2,7 @@ import type { ConfigGroup } from 'cortico/core/types.ts';
 import { pick, type Language } from 'cortico/core/language.ts';
 import type { CustomVoice } from './custom-voice.ts';
 import type { VoiceModelSetting } from './catalog.ts';
+import { listedCloudProviders } from './cloud-providers.ts';
 import type { AudioBackend } from './player.ts';
 import type { Platform } from './platform.ts';
 import type { RvcLinkConfig } from './rvc-link.ts';
@@ -132,6 +133,19 @@ export interface GptSovitsConfigSection {
   ttsEngine: '' | 'local' | 'cloud';
   /** 云端基址（到 `/v1` 这一层；也可以直接写到 `/audio/speech`）。 */
   cloudBaseUrl: string;
+  /**
+   * 云端语音服务商 id（`custom` / `openai` / `breeze` / `azure` / `minimax` / `elevenlabs`）。
+   * 空串 = 按地址推断（Breeze / OpenAI / 自定义），老配置升级后行为不变。
+   */
+  cloudProvider: string;
+  /** Azure 区域（如 `eastus`）；只有 Azure 用。 */
+  cloudRegion: string;
+  /** MiniMax 的 GroupId（可选）；留空就不拼在地址上。 */
+  cloudGroupId: string;
+  /** 火山引擎的应用 ID（app.appid）。 */
+  cloudAppId: string;
+  /** 火山引擎的集群，默认 volcano_tts。 */
+  cloudCluster: string;
   /** 云端的模型名（OpenAI 兼容接口的 `model`）。 */
   cloudModel: string;
   /** 当前选中的云端音色 id。 */
@@ -199,6 +213,11 @@ export const GPT_SOVITS_DEFAULTS: GptSovitsConfigSection = {
   promptLanguage: 'zh',
   ttsEngine: '',
   cloudBaseUrl: 'https://api.openai.com/v1',
+  cloudProvider: '',
+  cloudRegion: 'eastus',
+  cloudGroupId: '',
+  cloudAppId: '',
+  cloudCluster: 'volcano_tts',
   cloudModel: 'tts-1',
   cloudVoiceId: '',
   cloudVoices: [],
@@ -230,7 +249,12 @@ const TEXT = {
     groupService: { title: '推理服务', description: '推理档、随程序自启、闲置停服，以及改用自备运行时目录或已有服务。' },
     preset: { title: '音色', description: '预设或已保存的音色（音色名后 ✓ 表示已配置完整）。添加、改名、换音频/权重都在「音色」页里做。' },
     engine: { title: '语音引擎', description: '本地 = 本机 GPT-SoVITS（底模/权重/音色都只在这边生效）；云端 = OpenAI 兼容的 /audio/speech，不占显卡。手动切换；云端模式不需要装运行时。主入口在「语音」页顶部的下拉；未选择时按本地合成。' },
-    cloudBase: { title: '云端地址', description: 'OpenAI 兼容接口的基址，填到 /v1 这一层（如 https://api.openai.com/v1）；也可以直接填完整的 …/audio/speech。' },
+    cloudBase: { title: '云端地址', description: 'OpenAI 兼容接口的基址，填到 /v1 这一层（如 https://api.openai.com/v1）；也可以直接填完整的 …/audio/speech。Azure 用下面的区域拼主机，不用这一栏。' },
+    cloudProvider: { title: '云端语音服务商', description: '「音色」页云端卡顶部选中哪家，就按哪家的默认地址、字段、鉴权与请求体发送。选「自定义（OpenAI 兼容）」保持原行为；认不出的服务或老配置也按它处理。' },
+    cloudRegion: { title: 'Azure 区域', description: '只给 Azure 用，如 eastus、eastasia；决定 https://{区域}.tts.speech.microsoft.com。' },
+    cloudGroupId: { title: 'MiniMax Group ID', description: '只给 MiniMax 用，部分账号需要；留空就不拼在地址上。' },
+    cloudAppId: { title: '火山引擎应用 ID', description: '只给火山引擎用，控制台里的 appid。' },
+    cloudCluster: { title: '火山引擎集群', description: '只给火山引擎用，默认 volcano_tts；控制台给了别的集群名就照填。' },
     cloudModel: { title: '云端模型', description: '请求里的 model，例如 tts-1、FunAudioLLM/CosyVoice2-0.5B（按厂商文档填）。' },
     cloudVoice: { title: '云端音色', description: '当前选中的云端音色 id（厂商的 voice 名，如 alloy、female-shaonv）。在「音色」页的云端分组里维护列表；地址是 OpenAI 官方且清单留空时，会自动用内置的 6 个默认音色。' },
     cloudTimeout: { title: '云端超时（毫秒）', description: '单句合成最多等多久；超过就报超时，不会自动重试。' },
@@ -288,7 +312,12 @@ const TEXT = {
     groupService: { title: 'Inference service', description: 'Tier, start with the app, stop-when-idle, and switching to your own runtime directory or an existing server.' },
     preset: { title: 'Voice', description: 'A preset or a saved voice (a ✓ after the name means fully configured). Add, rename and edit voices on the "Voices" page.' },
     engine: { title: 'Speech engine', description: 'Local = GPT-SoVITS on this machine (base model, weights and voices only apply there); Cloud = an OpenAI-compatible /audio/speech endpoint, no GPU needed. Manual switch; cloud mode needs no runtime at all. The main switch is the dropdown at the top of the "Voice" page; when unset, synthesis uses local.' },
-    cloudBase: { title: 'Cloud base URL', description: 'Base URL of the OpenAI-compatible API up to /v1 (for example https://api.openai.com/v1); a full …/audio/speech endpoint also works.' },
+    cloudBase: { title: 'Cloud base URL', description: 'Base URL of the OpenAI-compatible API up to /v1 (for example https://api.openai.com/v1); a full …/audio/speech endpoint also works. Azure builds the host from the region below instead.' },
+    cloudProvider: { title: 'Cloud speech provider', description: 'The provider picked at the top of the cloud card switches defaults, visible fields, auth and request shape. "Custom (OpenAI-compatible)" keeps the old behaviour and is also the fallback for unknown providers or old configs.' },
+    cloudRegion: { title: 'Azure region', description: 'Azure only, e.g. eastus or eastasia; determines https://{region}.tts.speech.microsoft.com.' },
+    cloudGroupId: { title: 'MiniMax Group ID', description: 'MiniMax only; some accounts need it. Leave empty to omit it from the URL.' },
+    cloudAppId: { title: 'Volcengine app ID', description: 'Volcengine only; the appid from the console.' },
+    cloudCluster: { title: 'Volcengine cluster', description: 'Volcengine only; defaults to volcano_tts. Use the cluster name from the console if different.' },
     cloudModel: { title: 'Cloud model', description: 'The model field of the request, for example tts-1 or FunAudioLLM/CosyVoice2-0.5B; check the provider docs.' },
     cloudVoice: { title: 'Cloud voice', description: 'The selected cloud voice id (the provider voice, e.g. alloy or female-shaonv). Maintain the list in the cloud section of the Voices page; with an official OpenAI endpoint and an empty list, the 6 built-in voices are used automatically.' },
     cloudTimeout: { title: 'Cloud timeout (ms)', description: 'How long one line may take; a timeout is reported, never retried automatically.' },
@@ -390,6 +419,11 @@ export function configGroups(language: Language): ConfigGroup[] {
         properties: {
           [`${K}.ttsEngine`]: { type: 'string', title: t.engine.title, description: t.engine.description, enum: ['', 'local', 'cloud'], 'x-hot': true },
           [`${K}.cloudBaseUrl`]: { type: 'string', title: t.cloudBase.title, description: t.cloudBase.description, 'x-hot': true },
+          [`${K}.cloudProvider`]: { type: 'string', title: t.cloudProvider.title, description: t.cloudProvider.description, enum: ['', ...listedCloudProviders().map((p) => p.id)], 'x-hot': true },
+          [`${K}.cloudRegion`]: { type: 'string', title: t.cloudRegion.title, description: t.cloudRegion.description, 'x-hot': true },
+          [`${K}.cloudGroupId`]: { type: 'string', title: t.cloudGroupId.title, description: t.cloudGroupId.description, 'x-hot': true },
+          [`${K}.cloudAppId`]: { type: 'string', title: t.cloudAppId.title, description: t.cloudAppId.description, 'x-hot': true },
+          [`${K}.cloudCluster`]: { type: 'string', title: t.cloudCluster.title, description: t.cloudCluster.description, 'x-hot': true },
           [`${K}.cloudModel`]: { type: 'string', title: t.cloudModel.title, description: t.cloudModel.description, 'x-hot': true },
           [`${K}.cloudVoiceId`]: { type: 'string', title: t.cloudVoice.title, description: t.cloudVoice.description, 'x-hot': true },
           [`${K}.cloudTimeoutMs`]: { type: 'number', title: t.cloudTimeout.title, description: t.cloudTimeout.description, minimum: 5000, maximum: 300000, multipleOf: 1000, 'x-hot': true },

@@ -163,3 +163,111 @@ describe('probeService / 换权重', () => {
     expect(warns.some((w) => w.includes('不在本机'))).toBe(true);
   });
 });
+
+describe('云端音色拉取', () => {
+  it('合并后超过上限会给出截断提示，且关键词标明只影响排序', async () => {
+    const { world, cfg } = harness();
+    cfg.cloudProvider = 'custom';
+    cfg.cloudBaseUrl = 'https://tts.example.com/v1';
+    cfg.cloudVoices = Array.from({ length: 48 }, (_, i) => ({ id: `old${i}`, name: `old${i}` }));
+    cfg.cloudVoiceId = 'old0';
+    await world.invoke('voice', 'saveCloudKey', ['k-1']);
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      voices: Array.from({ length: 10 }, (_, i) => ({ voice_id: `new${i}`, name: `new${i}` })),
+    }), { status: 200 })) as typeof fetch;
+    const state = await world.invoke('voice', 'refreshCloudVoices', ['new']) as {
+      notice?: { code: string; count: number; kept: number; total: number; keywordMode: string };
+    };
+    expect(state.notice).toEqual({ code: 'cloudVoicesPulled', count: 10, kept: 50, total: 58, keywordMode: 'local' });
+    expect(cfg.cloudVoices).toHaveLength(50);
+    expect(cfg.cloudVoices?.at(-1)?.id).toBe('new1');
+    expect(cfg.cloudVoiceId).toBe('old0');
+  });
+
+  it('面板给出拉取用的语种：显式语种照抄，自动识别时给推断结果', async () => {
+    const { world, cfg } = harness();
+    cfg.textLang = 'ja';
+    let state = await world.invoke('voice', 'state', []) as { cloud: { language: string; languageAuto: boolean } };
+    expect(state.cloud.language).toBe('ja');
+    expect(state.cloud.languageAuto).toBe(false);
+    cfg.textLang = 'auto';
+    cfg.voice = { ...cfg.voice, text: '你好，今天过得怎么样？' };
+    state = await world.invoke('voice', 'state', []) as { cloud: { language: string; languageAuto: boolean } };
+    expect(state.cloud.language).toBe('zh');
+    expect(state.cloud.languageAuto).toBe(true);
+  });
+});
+
+describe('云端音色「使用」', () => {
+  it('点使用就写入 id、选中，并把清单里没有的音色补进去', async () => {
+    const { world, cfg } = harness();
+    cfg.cloudVoices = [{ id: 'voice_a', name: 'A' }];
+    const state = await world.invoke('voice', 'useCloudVoice', ['voc_9', '九号']) as {
+      cloud: { voiceId: string };
+      notice?: { code: string; name?: string };
+    };
+    expect(cfg.cloudVoiceId).toBe('voc_9');
+    expect(cfg.cloudVoices).toContainEqual({ id: 'voc_9', name: '九号' });
+    expect(state.cloud.voiceId).toBe('voc_9');
+    expect(state.notice).toMatchObject({ code: 'cloudVoiceSelected', name: '九号' });
+  });
+
+  it('id 为空时报错，不改动已有选择', async () => {
+    const { world, cfg } = harness();
+    cfg.cloudVoices = [{ id: 'voice_a', name: 'A' }];
+    cfg.cloudVoiceId = 'voice_a';
+    await expect(world.invoke('voice', 'useCloudVoice', ['  ', '空'])).rejects.toThrow(/不能为空/);
+    expect(cfg.cloudVoiceId).toBe('voice_a');
+    expect(cfg.cloudVoices).toEqual([{ id: 'voice_a', name: 'A' }]);
+  });
+
+  it('从「音色」面板点使用也生效（面板 id 是 voices，走转发）', async () => {
+    const { world, cfg } = harness();
+    cfg.cloudVoices = [{ id: 'voice_a', name: 'A' }, { id: 'voice_b', name: 'B' }];
+    cfg.cloudVoiceId = 'voice_a';
+    const state = await world.invoke('voices', 'useCloudVoice', ['voice_b', 'B']) as {
+      cloud: { voiceId: string; voices: Array<{ id: string }> };
+      notice?: { code: string; name?: string };
+    };
+    expect(cfg.cloudVoiceId).toBe('voice_b');
+    expect(state.cloud.voiceId).toBe('voice_b');
+    expect(state.cloud.voices.map((v) => v.id)).toContain('voice_b');
+    expect(state.notice).toMatchObject({ code: 'cloudVoiceSelected', name: 'B' });
+  });
+
+  it('无清单厂商手填 id 保存后写入并立刻选中', async () => {
+    const { world, cfg } = harness();
+    cfg.cloudProvider = 'minimax';
+    cfg.cloudBaseUrl = 'https://api.minimax.cn/v1/t2a_v2';
+    cfg.cloudVoices = [];
+    cfg.cloudVoiceId = '';
+    const state = await world.invoke('voices', 'useCloudVoice', ['female-shaonv', 'female-shaonv']) as {
+      cloud: { voiceId: string; voices: Array<{ id: string; name: string }> };
+    };
+    expect(cfg.cloudVoiceId).toBe('female-shaonv');
+    expect(cfg.cloudVoices).toContainEqual({ id: 'female-shaonv', name: 'female-shaonv' });
+    expect(state.cloud.voiceId).toBe('female-shaonv');
+    expect(state.cloud.voices.map((v) => v.id)).toContain('female-shaonv');
+  });
+});
+
+describe('云端音色旧条目', () => {
+  it('删除手动新增后，配置里已有的音色仍保留并在拉取后继续选中', async () => {
+    const { world, cfg } = harness();
+    cfg.cloudProvider = 'custom';
+    cfg.cloudBaseUrl = 'https://tts.example.com/v1';
+    cfg.cloudVoices = [{ id: 'manual_1', name: '以前手填的' }];
+    cfg.cloudVoiceId = 'manual_1';
+    await world.invoke('voice', 'saveCloudKey', ['k-2']);
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      voices: [{ voice_id: 'pulled_1', name: '拉到的' }],
+    }), { status: 200 })) as typeof fetch;
+    const state = await world.invoke('voice', 'refreshCloudVoices', []) as {
+      cloud: { voiceId: string; voices: Array<{ id: string; name: string }> };
+    };
+    expect(cfg.cloudVoices).toContainEqual({ id: 'manual_1', name: '以前手填的' });
+    expect(cfg.cloudVoices).toContainEqual({ id: 'pulled_1', name: '拉到的' });
+    expect(cfg.cloudVoiceId).toBe('manual_1');
+    expect(state.cloud.voiceId).toBe('manual_1');
+  });
+});

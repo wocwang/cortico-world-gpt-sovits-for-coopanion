@@ -36,4 +36,14 @@ describe('配置页的 x-options（下拉选项）', () => {
     expect(field?.minimum).toBe(0);
     expect(field?.maximum).toBe(PLAYBACK_LEAD_MAX);
   });
+
+  it('云端服务商默认空（老配置按地址推断），区域默认 eastus，GroupId 默认空', () => {
+    expect(GPT_SOVITS_DEFAULTS.cloudProvider).toBe('');
+    expect(GPT_SOVITS_DEFAULTS.cloudRegion).toBe('eastus');
+    expect(GPT_SOVITS_DEFAULTS.cloudGroupId).toBe('');
+    const props = configGroups('zh').flatMap((group) => Object.entries(group.schema.properties ?? {}));
+    const provider = props.find(([key]) => key === 'worlds.gpt-sovits.cloudProvider')?.[1] as { enum?: string[] } | undefined;
+    expect(provider?.enum).toContain('breeze');
+    expect(provider?.enum).toContain('azure');
+  });
 });

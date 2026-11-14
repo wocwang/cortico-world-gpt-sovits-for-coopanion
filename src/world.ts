@@ -2,7 +2,8 @@
  * GPTSovits 语音 World:`sovits_speak` 把台词排进队列，逐句经 GPT-SoVITS 流式合成，边收边从本机声卡播放;
  * `sovits_hush` 停下当前一句并清空队列。
  *
- * `sovits_speak` 等这一句的第一块音频写进声卡才返回(至多 SPEAK_WAIT_MAX_MS)。主循环按顺序执行同一次回复里的
+ * `sovits_speak` 在声音响起前后返回：本地等第一块音频写进声卡（至多 SPEAK_WAIT_MAX_MS）；
+ * 云端没有流式，等整句音频回来、写进声卡才返回（超时/失败/打断都会立刻收尾）。主循环按顺序执行同一次回复里的
  * 工具调用，所以提示词要求先 `sovits_speak`、紧跟 `pet_say`：气泡在声音响起时出现，不用任何时序接口。
  *
  * 推理后端三选一，优先级从高到低：配置的已有服务地址、配置的自备运行时目录、托管安装的运行时与权重。
@@ -20,6 +21,7 @@ import type { DeepPartial } from 'cortico/world.ts';
 import { nowIso } from 'cortico/core/util.ts';
 import { normalizeVoiceModel, officialVoice, OUTPUT_GAIN, resolveModelVersion, RUNTIME_ASSETS, RUNTIME_EXTRACT_BYTES, RUNTIME_VERSION, voiceModelNeedsNormalizing, weightPaths, type ModelVersion } from './catalog.ts';
 import { synthCloud } from './cloud.ts';
+import { cloudProvider, hiddenCloudProviderId, providerIdForStore, resolveCloudProvider } from './cloud-providers.ts';
 import { findFolders, inspectFolder, isLocalService, probeService } from './gptsovits-folder.ts';
 import { defaultCloudVoices, effectiveCloudVoiceId, effectiveCloudVoices, fetchCloudVoices, isOpenAiBase, OPENAI_VOICES, type CloudVoice } from './cloud-voices.ts';
 import { CloudKeyStore } from './secret-store.ts';
@@ -199,6 +201,8 @@ export class GptSovitsWorld implements World {
   private readonly queue: QueuedLine[] = [];
   private pumping = false;
   private current: AbortController | null = null;
+  /** 当前这一句的唤醒回调：hush 打断时立刻结束 `sovits_speak` 的等待，不依赖合成端是否响应 abort。 */
+  private currentStart: (() => void) | null = null;
   private warming = false;
   private warmed = false;
   private lastError: string | null = null;
@@ -309,6 +313,11 @@ export class GptSovitsWorld implements World {
     return this.engineSelected() ?? 'local';
   }
 
+  /** 生效的云端服务商：显式选的优先；空串按地址推断（老配置升级后行为不变）。 */
+  private cloudSpec() {
+    return resolveCloudProvider(this.cfg.cloudProvider ?? '', this.cfg.cloudBaseUrl);
+  }
+
   /**
    * 面板展示的云端音色：用户清单优先，空时按已知服务商给默认（OpenAI → 官方 6 个）。
    * 接口不是 OpenAI 时，把「OpenAI 官方音色」标出来；这类 id 厂商很可能不认，需要在合成前就看得见。
@@ -329,10 +338,16 @@ export class GptSovitsWorld implements World {
     return !(this.cfg.cloudVoices ?? []).length && !this.cfg.cloudVoiceId.trim() && defaultCloudVoices(this.cfg.cloudBaseUrl).length > 0;
   }
 
-  /** 云端能不能接活：填了地址、有可用音色（含默认）、密钥可解密。 */
+  /** 云端能不能接活：填了地址（Azure 是区域）、有可用音色（含默认）、密钥可解密。 */
   private cloudReady(): boolean {
     if (this.engine() !== 'cloud') return false;
-    if (!this.cfg.cloudBaseUrl.trim() || !this.cloudVoiceId()) return false;
+    const spec = this.cloudSpec();
+    if (spec.status === 'unsupported') return false;
+    if (spec.id === 'azure') {
+      if (!this.cfg.cloudRegion.trim()) return false;
+    } else if (!this.cfg.cloudBaseUrl.trim()) return false;
+    if (spec.id === 'volcengine' && !this.cfg.cloudAppId.trim()) return false;
+    if (!this.cloudVoiceId()) return false;
     try {
       return !!this.cloudKeys.read();
     } catch {
@@ -342,7 +357,11 @@ export class GptSovitsWorld implements World {
 
   /** 云端为什么没就绪（只用于回执，不抛错）。 */
   private cloudIssue(): string {
-    if (!this.cfg.cloudBaseUrl.trim()) return 'the cloud base URL is empty';
+    const spec = this.cloudSpec();
+    if (spec.status === 'unsupported') return `the provider (${spec.name}) cannot return a verifiable WAV`;
+    if (spec.id === 'azure' && !this.cfg.cloudRegion.trim()) return 'the Azure region is empty';
+    if (spec.id !== 'azure' && !this.cfg.cloudBaseUrl.trim()) return 'the cloud base URL is empty';
+    if (spec.id === 'volcengine' && !this.cfg.cloudAppId.trim()) return 'the Volcengine app ID is empty';
     if (!this.cloudVoiceId()) return 'no cloud voice is selected';
     try {
       this.cloudKeys.read();
@@ -356,19 +375,44 @@ export class GptSovitsWorld implements World {
    * 面板「从服务商拉取清单」：成功就合并进清单并选中第一个；没有这个端点的服务商按失败说明，
    * 但保留现有清单，用户仍可手动添加。密钥只在这次请求里解密，错误文本已脱敏。
    */
-  private async refreshCloudVoices(): Promise<PanelState | { text: string; failed: true }> {
+  /** 拉取清单用的语种：显式 textLang 优先；`auto` 时按当前参考文本推断，推不出按中文。 */
+  private cloudPullLanguage(): string {
+    const lang = this.cfg.textLang;
+    if (lang !== 'auto') return lang;
+    const text = (this.cfg.voice?.text ?? '').trim();
+    return text ? promptLanguageOf(text) : 'zh';
+  }
+
+  private async refreshCloudVoices(keyword = ''): Promise<PanelState | { text: string; failed: true }> {
     const t = panelText(this.uiLanguage);
+    const spec = this.cloudSpec();
+    if (!spec.voiceList) return { text: t.cloudProviderNoList, failed: true };
     let key = '';
     try { key = this.cloudKeys.read() ?? ''; } catch { /* 解不开按未设置处理 */ }
     if (!key) return { text: t.cloudVoicesNeedKey, failed: true };
+    const language = this.cloudPullLanguage();
+    const search = keyword.trim();
     try {
-      const fetched = await fetchCloudVoices(this.cfg.cloudBaseUrl, key, this.cfg.cloudTimeoutMs || 60_000);
+      const fetched = await fetchCloudVoices(this.cfg.cloudBaseUrl, key, this.cfg.cloudTimeoutMs || 60_000, spec.id, this.cfg.cloudRegion, {
+        language,
+        keyword: search,
+      });
       if (!fetched.length) return { text: t.cloudVoicesPullEmpty, failed: true };
       const merged = [...(this.cfg.cloudVoices ?? [])];
       for (const v of fetched) if (!merged.some((x) => x.id === v.id)) merged.push(v);
       const keep = merged.some((v) => v.id === this.cfg.cloudVoiceId);
-      this.opts.persist({ cloudVoices: merged.slice(0, 50), ...(keep ? {} : { cloudVoiceId: merged[0]?.id ?? '' }) });
-      return { ...this.panelState(), notice: { code: 'cloudVoicesPulled', count: fetched.length } };
+      const kept = merged.slice(0, 50);
+      this.opts.persist({ cloudVoices: kept, ...(keep ? {} : { cloudVoiceId: kept[0]?.id ?? '' }) });
+      return {
+        ...this.panelState(),
+        notice: {
+          code: 'cloudVoicesPulled',
+          count: fetched.length,
+          kept: kept.length,
+          total: merged.length,
+          keywordMode: search ? (spec.pullSearchParam ? 'server' : 'local') : '',
+        },
+      };
     } catch (err) {
       return { text: t.cloudVoicesPullFailed(err instanceof Error ? err.message : String(err)), failed: true };
     }
@@ -445,6 +489,12 @@ export class GptSovitsWorld implements World {
       speed: this.cfg.speed,
       timeoutMs: this.cfg.cloudTimeoutMs || 60_000,
       key,
+      language: this.cfg.textLang === 'auto' ? '' : this.cfg.textLang,
+      provider: this.cloudSpec().id,
+      region: this.cfg.cloudRegion,
+      groupId: this.cfg.cloudGroupId,
+      appId: this.cfg.cloudAppId,
+      cluster: this.cfg.cloudCluster,
     }, signal);
     return { sampleRate: audio.sampleRate, pcm: audio.pcm, wav: audio.wav };
   }
@@ -851,11 +901,13 @@ export class GptSovitsWorld implements World {
     let timer: NodeJS.Timeout | undefined;
     const started = new Promise<void>((done) => {
       this.queue.push({ text, spoken, at: Date.now(), silent, started: done, ...(finish ? { finish } : {}) });
-      timer = setTimeout(done, SPEAK_WAIT_MAX_MS);
+      // 云端没有流式：等整句音频回来（成功写声卡、或失败/打断收尾）再回执，由请求自身的超时兜底，
+      // 不套本地的 3 秒上限，免得气泡比声音早。本地仍是「第一块音频进声卡」的上限。
+      if (!cloud) timer = setTimeout(done, SPEAK_WAIT_MAX_MS);
     });
     if (ready) void this.pump();
-    // 提示词现在是先 `sovits_speak` 再 `pet_say`，回执早晚决定气泡出现的时间：有声音的句子等第一块
-    // 音频写进声卡（至多 SPEAK_WAIT_MAX_MS）；不外放的句子没有声音要对齐，直接回执，免得气泡白等 3 秒。
+    // 提示词现在是先 `sovits_speak` 再 `pet_say`，回执早晚决定气泡出现的时间：本地等第一块音频写进声卡
+    // （至多 SPEAK_WAIT_MAX_MS）；云端等整句音频到手。不外放的句子没有声音要对齐，直接回执，免得气泡白等。
     if (!silent && this.cfg.playLocally) await started;
     clearTimeout(timer);
     const said = spokenReceipt(spoken, { ahead, lang: this.cfg.textLang, translated: spoken !== text });
@@ -877,6 +929,8 @@ export class GptSovitsWorld implements World {
   private hush(): void {
     for (const item of this.queue.splice(0)) { item.started(); settleLine(item, null); }
     this.current?.abort();
+    // 被打断的当前句也要立刻结束 `sovits_speak` 的等待（合成端可能还没来得及响应 abort）。
+    this.currentStart?.();
     this.player.cut();
   }
 
@@ -1050,6 +1104,7 @@ export class GptSovitsWorld implements World {
         }
         const abort = new AbortController();
         this.current = abort;
+        this.currentStart = started;
         let heard = false;
         let wav: Buffer | null = null;
         const onFirst = (): void => { heard = true; started(); };
@@ -1102,6 +1157,7 @@ export class GptSovitsWorld implements World {
           // 交付这一句的音频：成功给 WAV，失败、被打断、没合成出来都给 null（重复调用只生效一次）。
           settleLine(item, wav);
           this.current = null;
+          this.currentStart = null;
         }
       }
     } finally {
@@ -1907,6 +1963,7 @@ export class GptSovitsWorld implements World {
         case 'setCloudField':
         case 'setCloudVoices':
         case 'refreshCloudVoices':
+        case 'useCloudVoice':
           return this.invoke('voice', method, args);
         default: throw new Error(`未知方法 ${method}`);
       }
@@ -1945,14 +2002,28 @@ export class GptSovitsWorld implements World {
         return this.panelState();
       case 'setCloudField': {
         const key = String(args[0] ?? '');
-        const allowed = ['cloudBaseUrl', 'cloudModel', 'cloudVoiceId', 'cloudTimeoutMs'] as const;
+        const allowed = ['cloudProvider', 'cloudBaseUrl', 'cloudModel', 'cloudVoiceId', 'cloudTimeoutMs', 'cloudRegion', 'cloudGroupId', 'cloudAppId', 'cloudCluster'] as const;
         if (!(allowed as readonly string[]).includes(key)) throw new Error(`不允许写这个字段：${key}`);
+        // 换厂商：填好该家的默认地址/模型/音色，附加项（区域）保留用户已填的值。
+        if (key === 'cloudProvider') {
+          const spec = cloudProvider(String(args[1] ?? ''));
+          this.lastError = null;
+          this.opts.persist({
+            cloudProvider: providerIdForStore(spec),
+            cloudBaseUrl: spec.baseUrl,
+            cloudModel: spec.model,
+            cloudVoiceId: spec.voice,
+            // 各家的音色 id 不通用：换厂商时清空面板清单，免得把上一家的 id 发给这一家。
+            cloudVoices: [],
+          });
+          return this.panelState();
+        }
         const value = key === 'cloudTimeoutMs'
           ? Math.max(5000, Math.min(300000, Number(args[1]) || 60_000))
           : String(args[1] ?? '').trim();
         this.opts.persist({ [key]: value } as Partial<GptSovitsConfigSection>);
-        // 改了地址/模型/音色之后，上一次的失败信息多半已经过期，别让红字一直挂着吓人。
-        if (key === 'cloudBaseUrl' || key === 'cloudModel' || key === 'cloudVoiceId') this.lastError = null;
+        // 改了地址/模型/音色/区域之后，上一次的失败信息多半已经过期，别让红字一直挂着吓人。
+        if (key !== 'cloudGroupId') this.lastError = null;
         return this.panelState();
       }
       case 'setCloudVoices': {
@@ -1965,7 +2036,19 @@ export class GptSovitsWorld implements World {
         this.opts.persist({ cloudVoices: voices, ...(keep ? {} : { cloudVoiceId: voices[0]?.id ?? '' }) });
         return this.panelState();
       }
-      case 'refreshCloudVoices': return this.refreshCloudVoices();
+      case 'refreshCloudVoices': return this.refreshCloudVoices(String(args[0] ?? ''));
+      case 'useCloudVoice': {
+        const id = String(args[0] ?? '').trim();
+        if (!id) throw new Error('音色 id 不能为空。');
+        const name = String(args[1] ?? '').trim() || id;
+        // 点「使用」就写入并选中：清单里没有的 id（例如拉取后手工补的）也一并收进清单，
+        // 这样「音色」下拉立刻能显示它，用户不用再手填一遍。
+        const voices = [...(this.cfg.cloudVoices ?? [])];
+        if (!voices.some((v) => v.id === id)) voices.push({ id, name });
+        this.lastError = null;
+        this.opts.persist({ cloudVoices: voices.slice(0, 50), cloudVoiceId: id });
+        return { ...this.panelState(), notice: { code: 'cloudVoiceSelected', name } };
+      }
       case 'setVoice': this.saveVoice(String(args[0] ?? ''), String(args[1] ?? ''), String(args[2] ?? '')); this.syncWeightsAfterVoiceChange(); return this.panelState();
       case 'resetVoice': this.opts.persist({ voice: { preset: DEFAULT_PRESET, audio: '', text: '' } }); this.syncWeightsAfterVoiceChange(); return this.panelState();
       case 'addVoice': { const s = this.addCustomVoice(args); this.syncWeightsAfterVoiceChange(); return s; }
@@ -2023,6 +2106,16 @@ export class GptSovitsWorld implements World {
         keySet: this.cloudKeys.has(),
         timeoutMs: this.cfg.cloudTimeoutMs,
         ready: this.cloudReady(),
+        provider: this.cloudSpec().id,
+        providerFallback: hiddenCloudProviderId(this.cfg.cloudProvider ?? ''),
+        region: this.cfg.cloudRegion ?? '',
+        groupId: this.cfg.cloudGroupId ?? '',
+        appId: this.cfg.cloudAppId ?? '',
+        cluster: this.cfg.cloudCluster ?? '',
+        canListVoices: this.cloudSpec().voiceList,
+        /** 拉取清单实际使用的语种（auto 时是推断结果），只用于展示。 */
+        language: this.cloudPullLanguage(),
+        languageAuto: this.cfg.textLang === 'auto',
       },
       platform: process.platform,
       tierSetting: this.cfg.tier,
@@ -2124,7 +2217,9 @@ export interface UsageState {
 export type PanelNotice =
   | { code: 'modelSwitched'; model: ModelVersion }
   | { code: 'weightsMismatch'; want: ModelVersion; current: ModelVersion }
-  | { code: 'cloudVoicesPulled'; count: number };
+  | { code: 'cloudVoicesPulled'; count: number; kept: number; total: number; keywordMode: 'server' | 'local' | '' }
+  /** 点「使用」选中了某个云端音色（id 已写入配置）。 */
+  | { code: 'cloudVoiceSelected'; name: string };
 
 export interface PanelState {
   backend: Backend['kind'];
@@ -2150,6 +2245,24 @@ export interface PanelState {
     keySet: boolean;
     timeoutMs: number;
     ready: boolean;
+    /** 生效的服务商 id（空配置按地址推断后的结果）。 */
+    provider: string;
+    /** 旧配置里存过「暂不开放」的厂商 id；非空时界面说明已回退到自定义。 */
+    providerFallback: string;
+    /** Azure 区域；其它厂商为空。 */
+    region: string;
+    /** MiniMax GroupId；其它厂商为空。 */
+    groupId: string;
+    /** 火山引擎应用 ID；其它厂商为空。 */
+    appId: string;
+    /** 火山引擎集群；其它厂商为空。 */
+    cluster: string;
+    /** 该厂商有没有「列出音色」端点。 */
+    canListVoices: boolean;
+    /** 拉取清单实际使用的语种；`auto` 时是推断结果。 */
+    language: string;
+    /** true = 台词语种是「自动识别」，上面是推断值。 */
+    languageAuto: boolean;
   };
   /** 面板在哪个平台上；macOS 的档位说明与 Windows 不同（没有可下载的运行时包）。 */
   platform: NodeJS.Platform;
