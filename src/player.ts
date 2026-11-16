@@ -169,10 +169,19 @@ export function pickDefaultDevice(devices: Array<{ id: number }>, defaultId: num
  * 用到时才加载原生模块;加载失败时抛出，由调用方报告。
  * 随包带 audify 1.10.1 官方 napi-v10 win32-x64 预编译件(`vendor/audify/`),不装 npm 的 audify:
  * 它安装时去 GitHub 下预编译件，下不到就现场编译，用户机器没有编译工具就装不上。
- * 枚举值取自 audify 的 index.js。
+ *
+ * 关键：Coopanion 的多个 World 共用一个 Electron 主进程，而每个插件目录里都有一份
+ * `audify.node`。即使文件路径不同，N-API 模块在同一个 environment 里注册第二次时会
+ * 对同一个 cleanup hook 再插一次，`node::AddEnvironmentCleanupHook` 断言
+ * `result.second` 失败，整个进程 exit 134。这里把加载结果挂到 globalThis 上，让
+ * DiffSinger / RVC 等插件共用第一份；没有别的插件加载时行为不变。
  */
+const AUDIFY_GLOBAL = '__corticoAudifyBinding';
+
 function loadAudify(): AudifyModule {
-  const binding = createRequire(import.meta.url)('../vendor/audify/audify.node') as Pick<AudifyModule, 'RtAudio'>;
+  const store = globalThis as typeof globalThis & { [AUDIFY_GLOBAL]?: Pick<AudifyModule, 'RtAudio'> };
+  const binding = store[AUDIFY_GLOBAL]
+    ?? (store[AUDIFY_GLOBAL] = createRequire(import.meta.url)('../vendor/audify/audify.node') as Pick<AudifyModule, 'RtAudio'>);
   return { RtAudio: binding.RtAudio, RtAudioFormat: { RTAUDIO_SINT16: 0x2 }, RtAudioApi: { WINDOWS_WASAPI: 7, WINDOWS_DS: 8 } };
 }
 

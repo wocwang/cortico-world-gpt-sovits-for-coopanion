@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.3
+
+- **修多插件共用宿主时的 audify 原生崩溃**：Coopanion 的多个 World 跑在同一个
+  Electron 主进程里，每个插件目录都带一份 `audify.node`；第二份被 `require` 时
+  N-API 重复注册 environment cleanup hook，`node::AddEnvironmentCleanupHook`
+  断言 `result.second` 失败，整个进程 `exit 134`，桌宠唱歌/说话时突然重启。
+- 修复：`loadAudify()` 把加载结果挂到 `globalThis.__corticoAudifyBinding`，与
+  DiffSinger / RVC 等插件共用第一份原生模块；没有其它插件加载时行为不变。
+- 验证：`tsc --noEmit`、385 个单测、`check:audio` 全绿。
+
 ## 0.9.2
 
 - **桌宠说话会自己拉起本机引擎**：`sovits_speak` 在本机服务没起时先启动并等预热完成（最多
