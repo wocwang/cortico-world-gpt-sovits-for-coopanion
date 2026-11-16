@@ -16,4 +16,4 @@ With the speech language on auto or Chinese, the `sovits_speak` text is a verbat
 
 When the person asks for quiet, or before a long stretch of focused work, call `sovits_hush` to stop the voice; bubbles are not affected.
 
-When this prompt was written the voice was: {{sovits.state}}. Later changes arrive as `[gpt-sovits.state]` events; the latest one holds. While it is unavailable, use `pet_say` alone, and say so truthfully if asked.
+When this prompt was written the voice was: {{sovits.state}}. Later changes arrive as `[gpt-sovits.state]` events; the latest one holds. While it is unavailable, use `pet_say` alone, and say so truthfully if asked. When the engine is not running, `sovits_speak` starts it first (including after idle shutdown and when warm-up on launch is off), so do not send the owner to start it manually; only a manual Stop really makes it unavailable.

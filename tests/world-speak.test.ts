@@ -1,4 +1,5 @@
 import { mkdtempSync } from 'node:fs';
+import type { ToolCallContext } from 'cortico/core/types.ts';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -129,5 +130,50 @@ describe('sovits_speak 何时返回', () => {
     await vi.advanceTimersByTimeAsync(1);
     const out = await p as { text: string };
     expect(out.text).toContain('Said');
+  });
+});
+
+describe('本地服务按需拉起', () => {
+  function localWorld(): { w: GptSovitsWorld; state: { ready: boolean; starts: number } } {
+    const { world: w } = world('local');
+    const state = { ready: false, starts: 0 };
+    (w as unknown as { voice: () => { audio: string; text: string } }).voice = () => ({ audio: 'ref.wav', text: '参考' });
+    (w as unknown as { canStart: () => boolean }).canStart = () => true;
+    (w as unknown as { url: () => string | null }).url = () => (state.ready ? 'http://127.0.0.1:9' : null);
+    (w as unknown as { startServer: () => Promise<void> }).startServer = () => {
+      state.starts += 1;
+      state.ready = true;
+      return Promise.resolve();
+    };
+    // 队列里的句子直接“合成完”：silent 会等 finish，不能让它等 45 秒。
+    (w as unknown as { pump: () => void }).pump = () => {
+      const item = (w as unknown as { queue: Array<{ started: () => void; finish?: (wav: Buffer) => void }> }).queue.shift();
+      item?.started();
+      item?.finish?.(AUDIO.wav);
+    };
+    return { w, state };
+  }
+
+  const speak = (w: GptSovitsWorld): Promise<{ text: string; failed?: boolean }> =>
+    w.tools().find((tool) => tool.name === 'sovits_speak')!.handler(
+      { text: '你好', silent: true },
+      {} as unknown as ToolCallContext,
+    ) as Promise<{ text: string; failed?: boolean }>;
+
+  it('引擎没起但可启动：先拉起再合成', async () => {
+    const { w, state } = localWorld();
+    const out = await within(speak(w), 1000);
+    expect(state.starts).toBe(1);
+    expect(out.failed).toBeUndefined();
+    expect(out.text).toContain('Said');
+  });
+
+  it('手动停止后：桌宠调用不覆盖，并说明原因', async () => {
+    const { w, state } = localWorld();
+    (w as unknown as { serviceHeld: boolean }).serviceHeld = true;
+    const out = await within(speak(w), 1000);
+    expect(state.starts).toBe(0);
+    expect(out.failed).toBe(true);
+    expect(out.text).toContain('stopped manually');
   });
 });
