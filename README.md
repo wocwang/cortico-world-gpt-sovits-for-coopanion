@@ -1,5 +1,9 @@
 # 大肥鱼语音全能包
 
+## 支持我
+
+项目开源免费，特别喜欢可前往我的[爱发电主页](https://afdian.com/a/wocwang) 支持我～
+
 `@wocwang/cortico-world-gpt-sovits-for-coopanion`
 
 原「GPTSovits 语音」（`cortico-world-gpt-sovits-for-coopanion`）。现已全面支持**本地 / 云端双引擎**与
