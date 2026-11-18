@@ -98,8 +98,5 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
-  },
-  "dependencies": {
-    "@wocwang/cortico-world-gpt-sovits-for-coopanion": "file:D:/Users/HW W/Documents/pr-gpt-sovits/repo/wocwang-cortico-world-gpt-sovits-for-coopanion-0.9.5.tgz"
   }
 }
