@@ -5,6 +5,7 @@ import {
   cloudProvider,
   detectCloudProvider,
   hiddenCloudProviderId,
+  isForeignCloudKey,
   listedCloudProviders,
   providerIdForStore,
   resolveCloudProvider,
@@ -97,5 +98,25 @@ describe('回退与推断', () => {
     expect(hiddenCloudProviderId('gemini')).toBe('gemini');
     expect(hiddenCloudProviderId('azure')).toBe('');
     expect(hiddenCloudProviderId('')).toBe('');
+  });
+});
+
+describe('切换厂商后的密钥前缀提示', () => {
+  it('Breeze 的 brz_ 密钥切到火山要提示', () => {
+    expect(isForeignCloudKey('volcengine', 'brz_1…lKDP')).toBe(true);
+    expect(isForeignCloudKey('azure', 'brz_1…lKDP')).toBe(true);
+    expect(isForeignCloudKey('breeze', 'brz_1…lKDP')).toBe(false);
+  });
+
+  it('OpenAI 的 sk- 密钥切到别家要提示，OpenAI/自定义不提示', () => {
+    expect(isForeignCloudKey('volcengine', 'sk-1…cdef')).toBe(true);
+    expect(isForeignCloudKey('elevenlabs', 'sk-1…cdef')).toBe(true);
+    expect(isForeignCloudKey('openai', 'sk-1…cdef')).toBe(false);
+    expect(isForeignCloudKey('custom', 'sk-1…cdef')).toBe(false);
+  });
+
+  it('火山 Access Token、空掩码不误报', () => {
+    expect(isForeignCloudKey('volcengine', 'FYaWxBiJnuh-0KBTS00KCo73rxmDnalivd1UDSD-W5E=')).toBe(false);
+    expect(isForeignCloudKey('volcengine', '')).toBe(false);
   });
 });

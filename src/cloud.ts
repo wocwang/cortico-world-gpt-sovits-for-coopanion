@@ -394,7 +394,16 @@ export async function synthCloud(text: string, opts: CloudOptions, signal?: Abor
       detail = (typeof e === 'string' ? e : e?.message) ?? j.message ?? j.detail ?? detail;
     } catch { /* 非 JSON 用原文 */ }
     detail = redact(String(detail), opts.key).trim();
-    if (res.status === 401 || res.status === 403) throw new CloudError(`云端拒绝鉴权（HTTP ${res.status}）：${detail || '密钥无效'}`, 'auth');
+    if (res.status === 401 || res.status === 403) {
+      // 火山引擎的 401/403 绝大多数不是「密钥错了」，而是用错了凭证或用了 V1 不支持的 2.0 音色；
+      // 把这两条直接写进错误里，省得用户继续试 AK/SK。
+      const hint = spec.id === 'volcengine'
+        ? (res.status === 401
+          ? '；火山引擎：密钥要填控制台的 Access Token（不是 AccessKey / Secret Key / API Key），请求头必须是 Bearer; <token>'
+          : '；火山引擎：Token 有效但无权限。检查 cluster 是否 volcano_tts、voice_type 是否属于该集群、语音合成服务是否开通；豆包语音合成 2.0 的 *_bigtts 音色不支持 V1 接口')
+        : '';
+      throw new CloudError(`云端拒绝鉴权（HTTP ${res.status}）：${detail || '密钥无效'}${hint}`, 'auth');
+    }
     if (res.status === 402) throw new CloudError(`云端额度不足（HTTP 402）：${detail}`, 'quota');
     if (res.status === 429) throw new CloudError(`云端限流（HTTP 429）：${detail || '稍后再试'}`, 'rate');
     throw new CloudError(`云端合成失败（HTTP ${res.status}）：${detail}`, 'failed');

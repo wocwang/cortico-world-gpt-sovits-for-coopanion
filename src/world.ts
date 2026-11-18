@@ -239,6 +239,8 @@ export class GptSovitsWorld implements World {
   /** 闲置停服的定时器，以及服务是否已因闲置停下（下一句自动唤醒）。 */
   private idleTimer: NodeJS.Timeout | undefined;
   private sleeping = false;
+  /** 用户在面板手动点了「停止」：桌宠 / 对话页的调用默认不覆盖这个意图。 */
+  private serviceHeld = false;
   /** 给其他插件取音频的本地 HTTP 接口；配置关着时为 null。 */
   private httpTts: HttpTtsHandle | null = null;
   /** 接口上一次没起来的原因，面板原样告诉用户（端口被占是最常见的一种）。 */
@@ -881,14 +883,13 @@ export class GptSovitsWorld implements World {
     } else if (!this.voice()) {
       return { text: `Voice unavailable: ${this.voiceIssue ?? 'no reference audio is set'}.`, failed: true };
     }
-    const ready = cloud || !!this.url();
-    if (!ready) {
-      if (!this.sleeping || !this.canStart()) return { text: `Voice unavailable: ${this.stateFor(stateWords('en'))}.`, failed: true };
-      // 闲置停服后第一句：先叫醒服务，这一句排在队列里等它加载完。
-      this.sleeping = false;
-      this.log.info('推理服务在休眠，这句话会叫醒它');
-      void this.startServer().finally(() => { this.armIdle(); void this.pump(); });
+    // 本机服务没起（随机启动关着 / 闲置回收 / 意外退出）：先拉起并等预热，再排这一句。
+    if (!cloud && !this.url()) {
+      const started = await this.ensureLocalReadyForTool();
+      if (!started.ok) return { text: `Voice unavailable: ${started.reason}.`, failed: true };
     }
+    const ready = cloud || !!this.url();
+    if (!ready) return { text: `Voice unavailable: ${this.stateFor(stateWords('en'))}.`, failed: true };
     // 翻译放在排队之前：回执要写清真正念出去的是哪句；放进 pump 里做的话，模型永远看不到译文。
     const spoken = await this.prepareSpeechText(text, this.cfg.textLang);
     this.lastSpoken = { text: spoken, translated: spoken !== text, at: nowIso(this.opts.timezone) };
@@ -1230,6 +1231,7 @@ export class GptSovitsWorld implements World {
     this.stopped = false;
     this.announced = null;
     this.sleeping = false;
+    this.serviceHeld = false;
     this.appliedWeights = '';
     this.appliedVersion = null;
     this.appliedTarget = null;
@@ -1518,6 +1520,38 @@ export class GptSovitsWorld implements World {
     if (this.startingServer) return this.startingServer;
     this.startingServer = this.launchServer().finally(() => { this.startingServer = null; });
     return this.startingServer;
+  }
+
+  /**
+   * 桌宠 / 对话页说话前的「先拉起再执行」：服务没起（随机启动关着、闲置回收、
+   * 意外退出）就先启动并等预热完成；手动点过「停止」则不覆盖。
+   */
+  private async ensureLocalReadyForTool(timeoutMs = 90_000): Promise<{ ok: boolean; reason?: string }> {
+    if (this.url()) return { ok: true };
+    if (this.stopped) return { ok: false, reason: 'the voice world is stopped' };
+    if (this.serviceHeld) return { ok: false, reason: 'the local engine was stopped manually; start it on the Voice page first' };
+    if (this.backend().kind === 'remote') {
+      return { ok: false, reason: `the configured service is not ready (${this.server.state().detail ?? 'no response'})` };
+    }
+    if (!this.canStart()) return { ok: false, reason: this.stateFor(stateWords('en')) };
+    let timeout = '';
+    try {
+      await Promise.race([
+        this.startServer(),
+        new Promise<never>((_resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error(`the local engine did not become ready within ${Math.round(timeoutMs / 1000)} s`)),
+            timeoutMs,
+          );
+          timer.unref?.();
+        }),
+      ]);
+    } catch (err) {
+      timeout = err instanceof Error ? err.message : String(err);
+    }
+    if (this.url()) return { ok: true };
+    const detail = this.server.state().detail || this.lastError || timeout;
+    return { ok: false, reason: detail || this.stateFor(stateWords('en')) };
   }
 
   private async launchServer(): Promise<void> {
@@ -1973,9 +2007,20 @@ export class GptSovitsWorld implements World {
       case 'state': return this.panelState();
       case 'install': void this.install(); return this.panelState();
       case 'cancel': this.runtime.cancel(); this.weights.cancel(); return this.panelState();
-      case 'start': void this.startServer(); return this.panelState();
-      case 'stop': this.hush(); await this.server.stop(); return this.panelState();
-      case 'restart': void this.restartServer(); return this.panelState();
+      case 'start':
+        this.serviceHeld = false;
+        this.sleeping = false;
+        void this.startServer();
+        return this.panelState();
+      case 'stop':
+        this.serviceHeld = true;
+        this.hush();
+        await this.server.stop();
+        return this.panelState();
+      case 'restart':
+        this.serviceHeld = false;
+        void this.restartServer();
+        return this.panelState();
       case 'test': return this.speak(String(args[0] ?? ''));
       case 'hush': this.hush(); return this.panelState();
       case 'usage': return this.usage(args[0] === 'refresh');
@@ -1985,7 +2030,7 @@ export class GptSovitsWorld implements World {
         if (this.engine() !== engine) this.lastError = null;
         this.opts.persist({ ttsEngine: engine });
         // 切回本地且服务没起时，按 autoStart 拉起（云端模式从不启动本机服务）。
-        if (engine === 'local' && this.cfg.autoStart && !this.url() && this.canStart() && !this.launching) {
+        if (engine === 'local' && this.cfg.autoStart && !this.serviceHeld && !this.url() && this.canStart() && !this.launching) {
           void this.startServer().finally(() => { this.launching = false; });
         }
         return this.panelState();

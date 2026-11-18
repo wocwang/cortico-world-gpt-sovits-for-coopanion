@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.9.5
+
+- **切换云端厂商不会自动换密钥**：密钥目前是单份保存的，从 Breeze 切到火山时会把 `brz_…`
+  当成火山 Access Token 发出去，表现就是 401/403。面板现在检测 `brz_` / `sk-` 前缀与当前
+  厂商不符时给出警告，README 也写明「切换厂商要重新保存对应密钥」。
+- 火山引擎面板补「APP ID / voice_type 缺失」提示；配合 0.9.4 的 Access Token、cluster、
+  2.0 音色说明，把 401/403 的常见原因写在面板上。
+- 验证：`tsc --noEmit`、389 个单测、`npm run build`。
+
+## 0.9.4
+
+- **火山引擎云端语音 401/403 排查**：面板把「云端密钥」按厂商区分，火山引擎明确要求
+  控制台的 **Access Token**（不是 AccessKey ID / Secret Access Key / 方舟 API Key）；
+  应用 ID 提示不是 AccessKey ID；集群提示标准 TTS 用 `volcano_tts`；音色提示填
+  `voice_type` 而不是显示名。
+- 选中火山引擎时显示专用说明；音色带 `_bigtts` 时提示「豆包语音合成 2.0 音色不支持
+  V1 接口，会 403」。401/403 错误文本直接附带排查方向，不再只报状态码。
+- README 增加火山引擎配置清单。验证：`tsc --noEmit`、`cloud.test.ts` 38 个用例、
+  `npm run build` 全绿。
+
+## 0.9.3
+
+- **修多插件共用宿主时的 audify 原生崩溃**：Coopanion 的多个 World 跑在同一个
+  Electron 主进程里，每个插件目录都带一份 `audify.node`；第二份被 `require` 时
+  N-API 重复注册 environment cleanup hook，`node::AddEnvironmentCleanupHook`
+  断言 `result.second` 失败，整个进程 `exit 134`，桌宠唱歌/说话时突然重启。
+- 修复：`loadAudify()` 把加载结果挂到 `globalThis.__corticoAudifyBinding`，与
+  DiffSinger / RVC 等插件共用第一份原生模块；没有其它插件加载时行为不变。
+- 验证：`tsc --noEmit`、385 个单测、`check:audio` 全绿。
+
+## 0.9.2
+
+- **桌宠说话会自己拉起本机引擎**：`sovits_speak` 在本机服务没起时先启动并等预热完成（最多
+  90 秒），再排队合成；覆盖「随 Coopanion 启动」关闭的冷启动、闲置回收后退出、服务意外停着。
+  之前只有 `sleeping` 状态会唤醒，冷启动会一直回「Voice unavailable」。
+- 启动超时或失败把服务端原因 / 超时说明直接回给模型，不再长时间无响应。
+- **手动点「停止」仍是硬开关**：新增 `serviceHeld`，桌宠 / 对话页调用不会覆盖；面板「启动 /
+  重启」会清除这个状态。配置文案与环境提示词同步说明。
+- 云端模式和「已有服务地址」不变，仍按原逻辑检查可用性，不在本机启动。
+- 验证：`tsc --noEmit`、385 个单测全绿；未改本机 9880 接口契约。
+
 ## 0.9.1
 
 - 中文显示名改为「**大肥鱼语音全能包**」；英文显示名保持 `Better GPTSovits Voice — Fatfish` 不变。

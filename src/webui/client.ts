@@ -5,7 +5,7 @@
  */
 import type { WebUiClientBundle, WebUiPanel, WebUiPanelContext, WebUiSheet } from 'cortico/web/shared/client-panel.ts';
 import { panelText } from '../i18n.ts';
-import { cloudProvider, listedCloudProviders, resolveCloudProvider } from '../cloud-providers.ts';
+import { cloudProvider, isForeignCloudKey, listedCloudProviders, resolveCloudProvider } from '../cloud-providers.ts';
 import { cloudListChrome, cloudManualSaveDisabled, cloudVoiceLabel, cloudVoicePage, showManualVoiceEntry } from '../cloud-voice-view.ts';
 import type { RvcProbe } from '../rvc-link.ts';
 import type { FolderReport } from '../gptsovits-folder.ts';
@@ -730,6 +730,8 @@ const voicesPanel: WebUiPanel = {
     const autoVoicesNote = ui.h('div', 'gsv-detail');
     const cloudPresetNote = ui.h('div', 'gsv-detail gsv-warn');
     const cloudErrorNote = ui.h('div', 'gsv-detail gsv-bad');
+    const cloudVolcNote = ui.h('div', 'gsv-detail gsv-warn');
+    const cloudKeyMismatchNote = ui.h('div', 'gsv-detail gsv-warn');
     const cloudFields = ui.h('div', 'gsv-cfg');
     cloudFields.style.display = 'grid';
     cloudFields.style.gridTemplateColumns = 'repeat(2, minmax(9em, 1fr))';
@@ -791,8 +793,9 @@ const voicesPanel: WebUiPanel = {
     const keyActs = ui.actions();
     keyActs.append(keySave, keyClear);
     const keyNote = ui.h('span', 'gsv-detail');
+    const keyHint = ui.h('div', 'gsv-detail', t.cloudKeyHint);
     const keyBox = ui.h('div', 'gsv-cfg');
-    keyBox.append(ui.field(t.cloudKey, keyInput), ui.h('div', 'gsv-detail', t.cloudKeyRequired), keyActs, keyNote, ui.h('div', 'gsv-detail', t.cloudKeyHint));
+    keyBox.append(ui.field(t.cloudKey, keyInput), ui.h('div', 'gsv-detail', t.cloudKeyRequired), keyActs, keyNote, keyHint);
 
     const cloudList = ui.h('div');
     const cloudRefresh = ui.button(t.cloudVoicesRefresh, { size: 'sm', onClick: () => void refreshCloudVoices() });
@@ -856,6 +859,8 @@ const voicesPanel: WebUiPanel = {
       cloudFallbackNote,
       cloudPresetNote,
       cloudErrorNote,
+      cloudVolcNote,
+      cloudKeyMismatchNote,
       cloudFields,
       cloudLangNote,
       keyBox,
@@ -971,6 +976,27 @@ const voicesPanel: WebUiPanel = {
       // 厂商决定显示哪些输入框：Azure 用区域拼主机，不显示地址与模型；MiniMax 的 GroupId 可选。
       const spec = resolveCloudProvider(c.provider, c.baseUrl);
       if (providerSel.value !== spec.id) providerSel.value = spec.id;
+      // 火山引擎的字段名和别家不同：密钥是 Access Token，voice 是 voice_type；
+      // 2.0 音色在 V1 接口会 403，这里提前说清楚，别让用户以为是 appid 填错。
+      cloudVolcNote.hidden = spec.id !== 'volcengine';
+      if (spec.id === 'volcengine') {
+        const missing: string[] = [];
+        if (!(c.appId ?? '').trim()) missing.push('APP ID');
+        if (!c.voiceId.trim()) missing.push('voice_type');
+        cloudVolcNote.textContent = t.cloudVolcNote
+          + (/_bigtts/i.test(c.voiceId) ? ` ${t.cloudVolc2Note}` : '')
+          + (missing.length ? ` ${t.cloudVolcMissing(missing.join(' / '))}` : '');
+        keyHint.textContent = `${t.cloudKeyHintVolc} ${t.cloudKeyHint}`;
+        cloudManualInput.placeholder = 'zh_female_qingxin';
+      } else {
+        keyHint.textContent = t.cloudKeyHint;
+        cloudManualInput.placeholder = t.cloudVoiceIdPh;
+      }
+      // 密钥是全局单份：从 Breeze 切到火山时不会自动换 key。用前缀做一次明显提示，
+      // 避免把 brz_… 当火山 Access Token 一遍遍重试。
+      const foreignKey = isForeignCloudKey(spec.id, c.keyMask);
+      cloudKeyMismatchNote.hidden = !foreignKey;
+      if (foreignKey) cloudKeyMismatchNote.textContent = t.cloudKeyForeign(spec.name);
       baseRow.hidden = !spec.showBaseUrl;
       modelRow.hidden = !spec.showModel;
       regionRow.hidden = !spec.extras.includes('region');
@@ -1016,7 +1042,9 @@ const voicesPanel: WebUiPanel = {
       }
       const current = c.voices.some((v) => v.id === c.voiceId) ? c.voiceId : (c.voices[0]?.id ?? '');
       if (document.activeElement !== fVoice) fVoice.value = current;
-      keyInput.placeholder = c.keyMask ? t.cloudKeyPhSet(c.keyMask) : t.cloudKeyPh;
+      keyInput.placeholder = c.keyMask
+        ? t.cloudKeyPhSet(c.keyMask)
+        : (spec.id === 'volcengine' ? t.cloudKeyPhVolc : t.cloudKeyPh);
       keyNote.textContent = c.keySet
         ? (c.keyMask ? t.cloudKeyMaskNote(c.keyMask) : t.cloudKeyUnreadable)
         : t.cloudKeyUnset;

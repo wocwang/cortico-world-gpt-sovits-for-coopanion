@@ -317,6 +317,19 @@ export function resolveCloudProvider(id: string, baseUrl: string): CloudProvider
   return spec.listed === false ? cloudProvider(CUSTOM_PROVIDER_ID) : spec;
 }
 
+/**
+ * 密钥是全局单份保存的：从 Breeze 切到火山时，面板里仍是 `brz_…`；
+ * 从 OpenAI 切到别家时仍可能是 `sk-…`。用前缀做一次可见提示，
+ * 避免把上一家的 key 发过去后只看到 401/403。
+ */
+export function isForeignCloudKey(providerId: string, keyMask: string): boolean {
+  const mask = String(keyMask ?? '').trim();
+  if (!mask) return false;
+  if (providerId !== 'breeze' && mask.startsWith('brz_')) return true;
+  if (providerId !== 'openai' && providerId !== 'custom' && mask.startsWith('sk-')) return true;
+  return false;
+}
+
 /** 面板下拉里真正展示的厂商；实现保留但不暴露的先不出现在这里。 */
 export function listedCloudProviders(): CloudProviderSpec[] {
   return CLOUD_PROVIDERS.filter((p) => p.listed !== false);

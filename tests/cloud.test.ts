@@ -379,6 +379,24 @@ describe('火山引擎合成', () => {
     expect((err as CloudError).kind).toBe('failed');
     expect((err as CloudError).message).toContain('火山引擎合成失败');
   });
+
+  it('401 提示 Access Token，403 提示 V1 不支持 2.0 音色', async () => {
+    stubFetch(async () => new Response(
+      JSON.stringify({ code: 4001, message: 'invalid token' }),
+      { status: 401, headers: { 'content-type': 'application/json' } },
+    ));
+    const authErr = await synthCloud('你好', opts({ provider: 'volcengine', voice: 'v1', appId: 'a' })).catch((e: unknown) => e);
+    expect((authErr as CloudError).kind).toBe('auth');
+    expect((authErr as CloudError).message).toContain('Access Token');
+
+    stubFetch(async () => new Response(
+      JSON.stringify({ code: 4003, message: 'permission denied' }),
+      { status: 403, headers: { 'content-type': 'application/json' } },
+    ));
+    const denied = await synthCloud('你好', opts({ provider: 'volcengine', voice: 'v1', appId: 'a' })).catch((e: unknown) => e);
+    expect((denied as CloudError).kind).toBe('auth');
+    expect((denied as CloudError).message).toContain('2.0');
+  });
 });
 
 describe('小米 MiMo 合成', () => {
