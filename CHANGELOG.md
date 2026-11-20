@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.6
+
+- **火山引擎复刻音色 cluster**：自己复刻/克隆的音色要用 `volcano_icl`，系统音色用
+  `volcano_tts`。面板集群输入加了这两个候选与说明；`Init Engine Instance failed` /
+  `Fail to feed text` 的 500 错误现在直接提示是 voice_type / cluster 不匹配。
+- **云端网络错误可诊断**：`fetch failed` 会带出 `err.cause` 的底层原因（DNS / 连接重置 /
+  TLS / 代理等），并自动重试一次；Breeze Blue 偶发断连时不再只显示四个字。
+- 其他厂商复核：Azure、MiniMax、ElevenLabs、MiMo、Fish、OpenAI 兼容的端点、鉴权、
+  音色字段与响应解析未发现新问题。
+- **重装运行时不再被推理服务锁住**：下载/解压期间服务可以继续用，真正替换 `runtime/`
+  前自动停服并等文件句柄释放；替换期间禁止桌宠/接口按需拉起，装好后恢复。替换失败时
+  提示检查任务管理器里残留的 python.exe。
+- 验证：392 个单测、`tsc --noEmit`、`npm run build`。
+
 ## 0.9.5
 
 - **切换云端厂商不会自动换密钥**：密钥目前是单份保存的，从 Breeze 切到火山时会把 `brz_…`

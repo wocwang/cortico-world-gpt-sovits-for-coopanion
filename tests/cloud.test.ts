@@ -104,6 +104,19 @@ describe('Breeze Blue', () => {
     const [, init] = spy.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ text: 'hi', model_id: 'breeze-tts-2' });
   });
+
+  it('fetch failed 带出底层 cause，并自动重试一次', async () => {
+    let calls = 0;
+    stubFetch(async () => {
+      calls += 1;
+      throw new TypeError('fetch failed', { cause: new Error('proxy tunnel closed') });
+    });
+    const err = await synthCloud('hi', opts({ baseUrl: 'https://api.breeze.blue/v1', voice: 'voc_1' })).catch((e: unknown) => e);
+    expect(calls).toBe(2);
+    expect((err as CloudError).kind).toBe('network');
+    expect((err as CloudError).message).toContain('proxy tunnel closed');
+    expect((err as CloudError).message).toContain('已自动重试一次');
+  });
 });
 
 describe('密钥脱敏', () => {
@@ -396,6 +409,26 @@ describe('火山引擎合成', () => {
     const denied = await synthCloud('你好', opts({ provider: 'volcengine', voice: 'v1', appId: 'a' })).catch((e: unknown) => e);
     expect((denied as CloudError).kind).toBe('auth');
     expect((denied as CloudError).message).toContain('2.0');
+  });
+
+  it('复刻音色把 cluster 原样送 volcano_icl', async () => {
+    const wav = okWav();
+    const spy = stubFetch(async () => new Response(JSON.stringify({ code: 3000, data: wav.toString('base64') })));
+    await synthCloud('你好', opts({
+      provider: 'volcengine', voice: 'S_clone', appId: 'a', cluster: 'volcano_icl',
+    }));
+    const body = JSON.parse(String((spy.mock.calls[0] as [string, RequestInit])[1].body)) as Record<string, any>;
+    expect(body.app.cluster).toBe('volcano_icl');
+  });
+
+  it('Init Engine Instance failed 直接提示 cluster 不匹配', async () => {
+    stubFetch(async () => new Response(
+      JSON.stringify({ code: 5500, message: 'Fail to feed text, reason Init Engine Instance failed' }),
+      { status: 500, headers: { 'content-type': 'application/json' } },
+    ));
+    const err = await synthCloud('你好', opts({ provider: 'volcengine', voice: 'S_clone', appId: 'a' })).catch((e: unknown) => e);
+    expect((err as CloudError).kind).toBe('failed');
+    expect((err as CloudError).message).toContain('volcano_icl');
   });
 });
 

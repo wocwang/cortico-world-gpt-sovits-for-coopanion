@@ -449,7 +449,12 @@ abstract class Job {
 
 /** 一档运行时;`dir()` 下有 `runtime/python.exe`（macOS 是 `runtime/bin/python3`）与 `api_v2.py` 才算装好。 */
 export class RuntimeJob extends Job {
-  constructor(private readonly root: () => string, private readonly tier: () => Tier) { super(); }
+  constructor(
+    private readonly root: () => string,
+    private readonly tier: () => Tier,
+    /** 替换目录前调用：Windows 上推理服务开着会锁住 runtime/，必须先停服。 */
+    private readonly beforeReplace: () => Promise<void> = async () => {},
+  ) { super(); }
 
   dir(): string {
     return join(this.root(), 'gpt-sovits', RUNTIME_VERSION, this.tier());
@@ -501,6 +506,8 @@ export class RuntimeJob extends Job {
     }
     writeFileSync(join(partial, 'cortico-runtime.json'), JSON.stringify({ id: 'gpt-sovits', version: RUNTIME_VERSION, upstream: UPSTREAM_COMMIT, tier: this.tier() }, null, 2));
     this.state.detail = '正在替换运行时目录';
+    // 下载/解压期间服务可以继续用；真正替换前再停，减少中断时间。
+    await this.beforeReplace();
     let stale: string | null = null;
     try {
       try {
@@ -516,7 +523,7 @@ export class RuntimeJob extends Job {
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'EPERM' || code === 'EBUSY') {
-        throw new Error('替换运行时目录失败：推理服务还在占用文件。请先在「语音」页停止推理服务，再重装运行时。');
+        throw new Error('替换运行时目录失败：推理服务还在占用文件。请先在「语音」页停止推理服务；如果已经停止，检查任务管理器里是否还有 python.exe 占用 runtime 目录。');
       }
       throw err;
     }

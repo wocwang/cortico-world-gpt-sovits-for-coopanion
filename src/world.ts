@@ -241,6 +241,8 @@ export class GptSovitsWorld implements World {
   private sleeping = false;
   /** 用户在面板手动点了「停止」：桌宠 / 对话页的调用默认不覆盖这个意图。 */
   private serviceHeld = false;
+  /** 正在替换运行时：先停服，替换期间禁止任何自动/按需拉起。 */
+  private maintaining = false;
   /** 给其他插件取音频的本地 HTTP 接口；配置关着时为 null。 */
   private httpTts: HttpTtsHandle | null = null;
   /** 接口上一次没起来的原因，面板原样告诉用户（端口被占是最常见的一种）。 */
@@ -261,7 +263,15 @@ export class GptSovitsWorld implements World {
   private leadStats = { lines: 0, secondsPerChar: 0, rtf: 0 };
 
   constructor(private readonly opts: GptSovitsWorldOptions) {
-    this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier());
+    this.runtime = new RuntimeJob(opts.runtimesRoot, () => this.tier(), async () => {
+      // 下载/解压时服务可以继续跑；真正替换目录前必须停掉，否则 Windows 会锁住 runtime/。
+      this.maintaining = true;
+      this.hush();
+      if (this.startingServer) await this.startingServer.catch(() => { /* 启动失败也要继续停服 */ });
+      await this.server.stop();
+      // taskkill 返回后给 Windows 一点时间释放文件句柄。
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
     this.weights = new WeightsJob(opts.modelsRoot, () => this.version(), () => officialVoice(this.cfg.voice.preset)?.files ?? [], () => opts.dataDir);
     this.server = new SovitsServer(this.log);
     this.player = new Player({
@@ -1509,6 +1519,7 @@ export class GptSovitsWorld implements World {
 
   /** 本机服务要的东西都在。 */
   private canStart(): boolean {
+    if (this.maintaining) return false;
     const b = this.backend();
     if (b.kind === 'remote') return false;
     if (b.kind === 'own') return isRuntimeDir(b.dir);
@@ -1517,6 +1528,7 @@ export class GptSovitsWorld implements World {
 
   /** 启动本机服务并预热；同一时间只跑一次（休眠唤醒、面板按钮、World 启动都可能触发）。 */
   private startServer(): Promise<void> {
+    if (this.maintaining) return Promise.resolve();
     if (this.startingServer) return this.startingServer;
     this.startingServer = this.launchServer().finally(() => { this.startingServer = null; });
     return this.startingServer;
@@ -1529,6 +1541,7 @@ export class GptSovitsWorld implements World {
   private async ensureLocalReadyForTool(timeoutMs = 90_000): Promise<{ ok: boolean; reason?: string }> {
     if (this.url()) return { ok: true };
     if (this.stopped) return { ok: false, reason: 'the voice world is stopped' };
+    if (this.maintaining) return { ok: false, reason: 'the runtime is being replaced; try again when installation finishes' };
     if (this.serviceHeld) return { ok: false, reason: 'the local engine was stopped manually; start it on the Voice page first' };
     if (this.backend().kind === 'remote') {
       return { ok: false, reason: `the configured service is not ready (${this.server.state().detail ?? 'no response'})` };
@@ -1606,14 +1619,20 @@ export class GptSovitsWorld implements World {
     if (this.canStart()) await this.startServer();
   }
 
-  /** 先装运行时，再装权重，都好了就启动服务。 */
+  /** 先装运行时，再装权重；替换运行时前停服，装好后恢复。 */
   private async install(): Promise<void> {
     if (this.backend().kind !== 'managed') return;
-    await this.runtime.install();
-    if (this.runtime.status().phase !== 'ready') return;
-    await this.weights.install();
-    if (this.weights.status().phase !== 'ready') return;
-    await this.restartServer();
+    const wasRunning = this.server.state().phase !== 'stopped';
+    try {
+      await this.runtime.install();
+      if (this.runtime.status().phase !== 'ready') return;
+      await this.weights.install();
+      if (this.weights.status().phase !== 'ready') return;
+    } finally {
+      // beforeReplace 里可能已经置 true；失败时也要解除，避免服务永远起不来。
+      this.maintaining = false;
+    }
+    if (wasRunning) await this.restartServer();
   }
 
   private saveVoice(name: string, base64: string, text: string): void {

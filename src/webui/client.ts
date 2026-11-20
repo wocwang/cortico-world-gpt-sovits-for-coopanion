@@ -759,7 +759,14 @@ const voicesPanel: WebUiPanel = {
     const fRegion = ui.input({ placeholder: 'eastus', onChange: (v) => void call('setCloudField', ['cloudRegion', v]) });
     const fGroup = ui.input({ onChange: (v) => void call('setCloudField', ['cloudGroupId', v]) });
     const fAppId = ui.input({ onChange: (v) => void call('setCloudField', ['cloudAppId', v]) });
-    const fCluster = ui.input({ placeholder: 'volcano_tts', onChange: (v) => void call('setCloudField', ['cloudCluster', v]) });
+    const fCluster = ui.input({ placeholder: 'volcano_tts / volcano_icl', onChange: (v) => void call('setCloudField', ['cloudCluster', v]) });
+    const clusterList = document.createElement('datalist');
+    clusterList.id = 'gsv-volc-clusters';
+    clusterList.append(
+      new Option(t.cloudClusterSystem, 'volcano_tts'),
+      new Option(t.cloudClusterClone, 'volcano_icl'),
+    );
+    fCluster.setAttribute('list', clusterList.id);
     const fVoice = ui.select({ onChange: (v) => void call('setCloudField', ['cloudVoiceId', v]) });
     const fTimeout = ui.input({ type: 'number', onChange: (v) => void call('setCloudField', ['cloudTimeoutMs', Number(v)]) });
     fTimeout.min = '5000';
@@ -771,6 +778,7 @@ const voicesPanel: WebUiPanel = {
     const groupRow = withHint(t.cloudGroupId, fGroup, t.cloudGroupIdHint);
     const appIdRow = withHint(t.cloudAppId, fAppId, t.cloudAppIdHint);
     const clusterRow = withHint(t.cloudCluster, fCluster, t.cloudClusterHint);
+    clusterRow.append(clusterList);
     regionRow.hidden = true;
     groupRow.hidden = true;
     appIdRow.hidden = true;

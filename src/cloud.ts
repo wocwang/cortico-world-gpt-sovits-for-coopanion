@@ -42,7 +42,7 @@ export interface CloudOptions {
   groupId?: string;
   /** 火山引擎的应用 ID（app.appid）。 */
   appId?: string;
-  /** 火山引擎的集群（默认 volcano_tts）。 */
+  /** 火山引擎的集群：系统音色 volcano_tts，自己复刻的音色 volcano_icl。 */
   cluster?: string;
 }
 
@@ -359,31 +359,53 @@ export async function synthCloud(text: string, opts: CloudOptions, signal?: Abor
   const headers = req.headers;
   const body = req.body;
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(new Error('timeout')), Math.max(5000, opts.timeoutMs));
-  const onAbort = (): void => ctrl.abort(signal?.reason);
-  signal?.addEventListener('abort', onAbort, { once: true });
+  const timeoutMs = Math.max(5000, opts.timeoutMs);
   const started = Date.now();
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: typeof body === 'string' ? body : new Uint8Array(body),
-      signal: ctrl.signal,
-    });
-  } catch (err) {
+  let res: Response | undefined;
+  let firstFailure: CloudError | undefined;
+  // Breeze Blue 这类厂商偶尔会直接断连，undici 只给一个笼统的 `fetch failed`。
+  // 网络层失败自动重试一次，并把 err.cause 里的真实错误码带出来，别让用户只看到四个字。
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     if (signal?.aborted) throw new CloudError('这一句被取消了', 'failed');
-    if (ctrl.signal.aborted) throw new CloudError(`云端超时（${Math.round(Math.max(5000, opts.timeoutMs) / 1000)} s 没回完）`, 'timeout');
-    const msg = redact(err instanceof Error ? err.message : String(err), opts.key);
-    if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(msg)) throw new CloudError('云端地址解析失败（DNS）', 'network');
-    if (/ECONNREFUSED|ECONNRESET|socket hang up|terminated/i.test(msg)) throw new CloudError('连不上云端（连接被拒或中断）', 'network');
-    if (/certificate|TLS|SSL/i.test(msg)) throw new CloudError('云端 TLS 握手失败（证书问题）', 'network');
-    throw new CloudError(`云端请求失败：${msg}`, 'network');
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', onAbort);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(new Error('timeout')), timeoutMs);
+    const onAbort = (): void => ctrl.abort(signal?.reason);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: typeof body === 'string' ? body : new Uint8Array(body),
+        signal: ctrl.signal,
+      });
+      break;
+    } catch (err) {
+      if (signal?.aborted) throw new CloudError('这一句被取消了', 'failed');
+      if (ctrl.signal.aborted) throw new CloudError(`云端超时（${Math.round(timeoutMs / 1000)} s 没回完）`, 'timeout');
+      const raw = err instanceof Error ? err.message : String(err);
+      const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+      const causeText = cause instanceof Error ? `${cause.name}: ${cause.message}` : cause ? String(cause) : '';
+      const msg = redact(causeText ? `${raw}（${causeText}）` : raw, opts.key);
+      let mapped: CloudError;
+      if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(msg)) mapped = new CloudError('云端地址解析失败（DNS）', 'network');
+      else if (/ECONNREFUSED|ECONNRESET|socket hang up|terminated|UND_ERR_SOCKET|other side closed/i.test(msg)) {
+        mapped = new CloudError('连不上云端（连接被拒或中断）', 'network');
+      } else if (/certificate|TLS|SSL/i.test(msg)) mapped = new CloudError('云端 TLS 握手失败（证书问题）', 'network');
+      else if (/UND_ERR_CONNECT_TIMEOUT|ETIMEDOUT|timeout/i.test(msg)) mapped = new CloudError('连接云端超时', 'timeout');
+      else mapped = new CloudError(`云端请求失败：${msg}`, 'network');
+      if (attempt === 0) {
+        firstFailure = mapped;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        continue;
+      }
+      const note = spec.id === 'breeze' ? '；Breeze Blue 已自动重试一次' : '（已自动重试 1 次）';
+      throw new CloudError(`${mapped.message}${note}`, mapped.kind);
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    }
   }
+  if (!res) throw firstFailure ?? new CloudError('云端请求失败', 'network');
 
   if (!res.ok) {
     const raw = await res.text().catch(() => '');
@@ -400,13 +422,18 @@ export async function synthCloud(text: string, opts: CloudOptions, signal?: Abor
       const hint = spec.id === 'volcengine'
         ? (res.status === 401
           ? '；火山引擎：密钥要填控制台的 Access Token（不是 AccessKey / Secret Key / API Key），请求头必须是 Bearer; <token>'
-          : '；火山引擎：Token 有效但无权限。检查 cluster 是否 volcano_tts、voice_type 是否属于该集群、语音合成服务是否开通；豆包语音合成 2.0 的 *_bigtts 音色不支持 V1 接口')
+          : '；火山引擎：Token 有效但无权限。系统音色 cluster 用 volcano_tts，自己复刻的音色用 volcano_icl；再检查 voice_type 是否属于该集群、语音合成服务是否开通；豆包语音合成 2.0 的 *_bigtts 音色不支持 V1 接口')
         : '';
       throw new CloudError(`云端拒绝鉴权（HTTP ${res.status}）：${detail || '密钥无效'}${hint}`, 'auth');
     }
     if (res.status === 402) throw new CloudError(`云端额度不足（HTTP 402）：${detail}`, 'quota');
     if (res.status === 429) throw new CloudError(`云端限流（HTTP 429）：${detail || '稍后再试'}`, 'rate');
-    throw new CloudError(`云端合成失败（HTTP ${res.status}）：${detail}`, 'failed');
+    // 火山引擎把 voice_type / cluster 不匹配报成 500 + Init Engine Instance failed，
+    // 不是服务端故障；直接把正确的集群写出来。
+    const clusterHint = spec.id === 'volcengine' && /Init Engine Instance failed|Fail to feed text/i.test(detail)
+      ? '；火山引擎：voice_type 与 cluster 不匹配。自己复刻的音色用 volcano_icl，系统音色用 volcano_tts'
+      : '';
+    throw new CloudError(`云端合成失败（HTTP ${res.status}）：${detail}${clusterHint}`, 'failed');
   }
 
   let bytes: Buffer = Buffer.from(await res.arrayBuffer());

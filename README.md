@@ -61,6 +61,8 @@
 **提示 `ModuleNotFoundError: No module named 'AR'`？**
 运行时解压不完整，缺 `GPT_SoVITS/AR`。0.5.16 起会在启动推理前自动用包内副本补齐，不用管；旧版可以重装运行时，或从上游 GPT-SoVITS 整包里把 `GPT_SoVITS/AR` 复制到运行时的同名目录。
 
+重装/更新运行时不需要手动先停服务：下载和解压期间可以继续说话，真正替换 `runtime/` 前会自动停服并等文件句柄释放，装好后恢复。若仍提示占用，检查任务管理器里是否有残留的 `python.exe` 正在使用运行时目录。
+
 **想换个声音？**
 设置 → 「大肥鱼语音全能包」→ 音色下拉，四个预设任选：
 
@@ -219,7 +221,7 @@ ElevenLabs、火山引擎、小米 MiMo、Fish Audio（实验）。每家的地�
 - 密钥填控制台的 **Access Token**，不是 AccessKey ID / Secret Access Key，也不是方舟 API Key；
 - 如果之前配过 Breeze / OpenAI，切到火山后必须重新保存密钥（密钥是单份的，不会自动切换）；
 - 「应用 ID」填语音控制台的 **APP ID**，不是 AccessKey ID；
-- 「集群」标准语音合成填 `volcano_tts`；
+- 「集群」系统音色填 `volcano_tts`，**自己复刻/克隆的音色填 `volcano_icl`**；传错会报 `Init Engine Instance failed`；
 - 「音色 id」填文档里的 **voice_type**（如 `zh_female_qingxin`），不是音色显示名；
 - `/api/v1/tts` 不支持豆包语音合成 2.0 的音色（例如 `zh_female_vv_uranus_bigtts`）。如果控制台标的是 2.0，请换标准音色；遇到 403 先查这一条。
 
