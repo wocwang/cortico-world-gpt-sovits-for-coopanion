@@ -17,7 +17,9 @@ import './style.css';
 const MB = (n: number) => Math.round(n / 1048576);
 /** 面板里显示体积：过 1 GB 用 GB，否则 MB。 */
 const sizeText = (n: number) => (n >= 1073741824 ? `${(n / 1073741824).toFixed(2)} GB` : `${Math.max(1, MB(n))} MB`);
-const pct = (done: number, total: number) => (total ? `${Math.round((done / total) * 100)}%` : `${MB(done)} MB`);
+const pct = (done: number, total: number) => (
+  total ? `${Math.max(0, Math.min(100, Math.round((done / total) * 100)))}%` : `${MB(done)} MB`
+);
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
 /** 推理模型的展示名。 */
@@ -578,7 +580,11 @@ const voicesPanel: WebUiPanel = {
     let cloudCollapsed = false;
 
     // 返回是否成功：失败时保留表单与错误提示，别让用户以为「点了没反应」。
-    const call = async (method: string, args: unknown[] = []): Promise<boolean> => {
+    const call = async (
+      method: string,
+      args: unknown[] = [],
+      onError?: (text: string) => void,
+    ): Promise<boolean> => {
       msg.textContent = '';
       msg.classList.remove('bad');
       try {
@@ -587,8 +593,11 @@ const voicesPanel: WebUiPanel = {
         // 失败/提示类回执（拉清单没密钥、404、超时…）也要显示出来，不能悄悄丢掉。
         if (!('backend' in next)) {
           if ('text' in next) {
-            msg.textContent = next.text;
-            msg.classList.toggle('bad', !!next.failed);
+            if (onError) onError(next.text);
+            else {
+              msg.textContent = next.text;
+              msg.classList.toggle('bad', !!next.failed);
+            }
             ui.toast(next.text);
           }
           return false;
@@ -602,8 +611,12 @@ const voicesPanel: WebUiPanel = {
         }
         return true;
       } catch (err) {
-        msg.textContent = errText(err);
-        msg.classList.add('bad');
+        const text = errText(err);
+        if (onError) onError(text);
+        else {
+          msg.textContent = text;
+          msg.classList.add('bad');
+        }
         return false;
       }
     };
@@ -666,6 +679,28 @@ const voicesPanel: WebUiPanel = {
     fText.rows = 2;
     const fGpt = ui.input({ placeholder: t.gptWeightOpt });
     const fSov = ui.input({ placeholder: t.sovitsWeightOpt });
+    // 报错贴着对应输入框：参考音频时长错误不要跑到页面最下面。
+    const audioError = ui.h('div', 'gsv-detail gsv-bad');
+    const textError = ui.h('div', 'gsv-detail gsv-bad');
+    const weightsError = ui.h('div', 'gsv-detail gsv-bad');
+    const formError = ui.h('div', 'gsv-detail gsv-bad');
+    for (const box of [audioError, textError, weightsError, formError]) box.hidden = true;
+    const setFieldError = (box: HTMLElement, text: string): void => {
+      box.textContent = text;
+      box.hidden = !text;
+    };
+    const clearFormErrors = (): void => {
+      for (const box of [audioError, textError, weightsError, formError]) setFieldError(box, '');
+    };
+    const showFormError = (text: string): void => {
+      const audio = /参考音频|3[–-]10|WAV|音频/.test(text);
+      const script = !audio && /台本/.test(text);
+      const weights = !audio && !script && /权重/.test(text);
+      setFieldError(audioError, audio ? text : '');
+      setFieldError(textError, script ? text : '');
+      setFieldError(weightsError, weights ? text : '');
+      setFieldError(formError, audio || script || weights ? '' : text);
+    };
     const saveBtn = ui.button(t.saveVoice, { variant: 'primary', size: 'sm', onClick: () => void save() });
     const cancelBtn = ui.button(t.cancelAdd, { size: 'sm', onClick: () => closeForm() });
     const formActs = ui.actions();
@@ -674,9 +709,13 @@ const voicesPanel: WebUiPanel = {
       ui.h('div', 'gsv-detail', t.requiredHint),
       ui.field(t.voiceName, fName),
       ui.field(t.voiceAudio, fAudio),
+      audioError,
       ui.field(t.voiceTextRequired, fText),
+      textError,
       ui.field(t.gptWeightOpt, fGpt),
       ui.field(t.sovitsWeightOpt, fSov),
+      weightsError,
+      formError,
       formActs,
     );
     sec.append(ui.h('div', 'gsv-detail', `${t.customVoices} · ${t.customVoicesHint}`), list, addBtn, form);
@@ -692,6 +731,7 @@ const voicesPanel: WebUiPanel = {
       saveBtn.textContent = v ? t.saveVoice : t.confirmAdd;
       form.hidden = false;
       addBtn.hidden = true;
+      clearFormErrors();
       msg.textContent = t.requiredHint;
       msg.classList.remove('bad');
     }
@@ -701,18 +741,20 @@ const voicesPanel: WebUiPanel = {
       form.hidden = true;
       addBtn.hidden = false;
       fAudio.value = '';
+      clearFormErrors();
       msg.textContent = '';
     }
 
     async function save(): Promise<void> {
       const f = fAudio.files?.[0];
       const pairOk = !!fGpt.value.trim() === !!fSov.value.trim();
-      // 参考音频与台本必填，权重成对或都不填；缺了就地提示，不发请求。
-      if ((!f && !editingId) || !fText.value.trim() || !pairOk) {
-        msg.textContent = t.incomplete;
-        msg.classList.add('bad');
-        return;
-      }
+      clearFormErrors();
+      // 缺什么就把红字放在对应输入框下面，不再只往页面底部丢一句。
+      let bad = false;
+      if (!f && !editingId) { setFieldError(audioError, t.incompleteAudio); bad = true; }
+      if (!fText.value.trim()) { setFieldError(textError, t.incompleteText); bad = true; }
+      if (!pairOk) { setFieldError(weightsError, t.incompleteWeights); bad = true; }
+      if (bad) return;
       let b64 = '';
       if (f) {
         const buf = new Uint8Array(await f.arrayBuffer());
@@ -720,8 +762,10 @@ const voicesPanel: WebUiPanel = {
         for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
         b64 = btoa(bin);
       }
-      if (editingId) { if (await call('update', [editingId, fName.value, b64, fText.value, fGpt.value.trim(), fSov.value.trim()])) closeForm(); }
-      else if (await call('add', [fName.value, f!.name, b64, fText.value, fGpt.value.trim(), fSov.value.trim()])) closeForm();
+      const ok = editingId
+        ? await call('update', [editingId, fName.value, b64, fText.value, fGpt.value.trim(), fSov.value.trim()], showFormError)
+        : await call('add', [fName.value, f!.name, b64, fText.value, fGpt.value.trim(), fSov.value.trim()], showFormError);
+      if (ok) closeForm();
     }
 
     // ---- L1 云端：连接参数、密钥、音色清单

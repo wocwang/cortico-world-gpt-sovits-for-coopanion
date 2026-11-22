@@ -424,9 +424,13 @@ abstract class Job {
   protected abstract work(signal: AbortSignal): Promise<void>;
 
   status(): JobState {
-    if (this.running) return { ...this.state };
-    if (this.present()) return { phase: 'ready', done: 0, total: 0, detail: null };
-    return { ...this.state, phase: this.state.phase === 'error' ? 'error' : 'absent' };
+    let state: JobState;
+    if (this.running) state = { ...this.state };
+    else if (this.present()) state = { phase: 'ready', done: 0, total: 0, detail: null };
+    else state = { ...this.state, phase: this.state.phase === 'error' ? 'error' : 'absent' };
+    // 多来源重试/续传时 done 可能短暂超过 total；进度条永远不要显示 114%。
+    if (state.total > 0) state.done = Math.max(0, Math.min(state.total, state.done));
+    return state;
   }
 
   install(): Promise<void> {
