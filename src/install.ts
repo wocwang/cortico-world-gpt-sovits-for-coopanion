@@ -170,12 +170,13 @@ async function fetchRanges(
   const inner = new AbortController();
   const onAbort = () => inner.abort();
   signal.addEventListener('abort', onAbort, { once: true });
+  const pieces = files.map((file, i) => {
+    const from = start + i * per;
+    const to = Math.min(total - 1, from + per - 1);
+    return fetchRangePiece(url, file, from, to, onBytes, inner.signal);
+  });
   try {
-    await Promise.all(files.map((file, i) => {
-      const from = start + i * per;
-      const to = Math.min(total - 1, from + per - 1);
-      return fetchRangePiece(url, file, from, to, onBytes, inner.signal);
-    }));
+    await Promise.all(pieces);
     mkdirSync(dirname(dest), { recursive: true });
     // 逐段追加：任何时刻 dest 都是「已有字节 + 完整前缀」，中途失败也不破坏续传语义。
     let flags: 'a' | 'w' = start > 0 ? 'a' : 'w';
@@ -185,6 +186,10 @@ async function fetchRanges(
     }
     return true;
   } catch (err) {
+    // Promise.all 会先 reject，其余几段还在写；先 abort 并等它们真正结束，
+    // 再让 finally 删分片。否则分片会被占住留在磁盘上，进度也会重复累加。
+    inner.abort();
+    await Promise.allSettled(pieces);
     if (signal.aborted) throw err;
     return false;
   } finally {

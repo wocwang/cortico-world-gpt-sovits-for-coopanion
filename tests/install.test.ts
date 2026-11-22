@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -98,7 +99,7 @@ describe('isRuntimeDir 按平台认解释器', () => {
 });
 
 /** 一个本地文件服务：`ranges` 为 false 时无视 Range 直接返回整包（很多 CDN 就是这样）。 */
-async function fileServer(body: Buffer, { ranges = true } = {}) {
+async function fileServer(body: Buffer, { ranges = true, failFrom = -1, slow = false } = {}) {
   const state = { requests: 0, active: 0, maxActive: 0, from: [] as number[] };
   const server = createServer((req, res) => {
     state.requests += 1;
@@ -110,12 +111,32 @@ async function fileServer(body: Buffer, { ranges = true } = {}) {
       const from = Number(match[1]);
       const to = match[2] ? Number(match[2]) : body.length - 1;
       state.from.push(from);
+      if (from === failFrom) {
+        res.writeHead(500);
+        res.end('range failed');
+        return;
+      }
       res.writeHead(206, {
         'content-length': to - from + 1,
         'content-range': `bytes ${from}-${to}/${body.length}`,
         'accept-ranges': 'bytes',
       });
-      res.end(body.subarray(from, to + 1));
+      if (!slow) {
+        res.end(body.subarray(from, to + 1));
+        return;
+      }
+      // 慢慢写，模拟「一段失败时其余几段还在写」的现场。
+      let pos = from;
+      const step = 1024 * 1024;
+      const tick = (): void => {
+        if (res.destroyed) return;
+        if (pos > to) { res.end(); return; }
+        const end = Math.min(to, pos + step - 1);
+        res.write(body.subarray(pos, end + 1));
+        pos = end + 1;
+        setTimeout(tick, 5);
+      };
+      tick();
       return;
     }
     state.from.push(0);
@@ -149,6 +170,24 @@ describe('fetchVerified 多连接下载', () => {
       expect(srv.state.from).toContain(10 * 1024 * 1024);
       expect(reported).toBe(body.length);
       expect(existsSync(`${file}.chunk0`)).toBe(false);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('一段失败时先停其余段，进度不超 100%，分片清理干净', async () => {
+    const srv = await fileServer(body, { failFrom: 5 * 1024 * 1024, slow: true });
+    const file = dest('range-fail.bin');
+    let done = 0;
+    try {
+      await fetchVerified(
+        [srv.url], file, body.length, createHash('sha256').update(body).digest('hex'),
+        (n) => { done += n; }, new AbortController().signal,
+        { connections: 4, onStart: (size) => { done = size; } },
+      );
+      expect(readFileSync(file).equals(body)).toBe(true);
+      expect(done).toBe(body.length);
+      expect(readdirSync(root).filter((name) => name.includes('.chunk'))).toEqual([]);
     } finally {
       await srv.close();
     }
