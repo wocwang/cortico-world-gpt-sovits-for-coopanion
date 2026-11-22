@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { amdProbeFrom, buildFromRelease, detectGpus, detectNvidia, fallbackToCpu, parseHipProbe, pathTooLong, pickHipDevice, pickTier } from '../src/gpu.ts';
+import { amdProbeFrom, buildFromRelease, detectGpus, detectNvidia, fallbackToCpu, gpuInfoFrom, gpuNamesFromRegistry, parseHipProbe, pathTooLong, pickHipDevice, pickTier } from '../src/gpu.ts';
 
 const supported = (name: string) => amdProbeFrom([name]);
 
@@ -140,12 +140,62 @@ describe('ROCm 设备探针', () => {
 
 describe('非 Windows 的显卡探测', () => {
   it('macOS 不去 spawn powershell / nvidia-smi，直接给「没有独显」', async () => {
-    await expect(detectGpus('darwin')).resolves.toEqual({ nvidia: false, amd: { kind: 'none' }, vendor: null });
+    await expect(detectGpus('darwin')).resolves.toEqual({
+      nvidia: false,
+      amd: { kind: 'none' },
+      vendor: null,
+      probe: 'ok',
+      error: null,
+      smiOk: true,
+      smiError: null,
+    });
     await expect(detectNvidia('darwin')).resolves.toBe(false);
   });
 
   it('Linux 同理（运行时包只有 win-x64）', async () => {
-    await expect(detectGpus('linux')).resolves.toMatchObject({ nvidia: false, amd: { kind: 'none' } });
+    await expect(detectGpus('linux')).resolves.toMatchObject({ nvidia: false, amd: { kind: 'none' }, probe: 'ok' });
     await expect(detectNvidia('linux')).resolves.toBe(false);
+  });
+});
+
+describe('显卡探测失败不再当成「没有独显」（#18）', () => {
+  const smiOk = { ok: true, found: false, error: null };
+  const smiBroken = { ok: false, found: false, error: 'ENOENT: nvidia-smi' };
+
+  it('WMI 被拒绝、注册表也读不到时标成 failed，而不是 vendor: null 的正常结果', () => {
+    const info = gpuInfoFrom([], [], smiOk, { ok: false, error: '1: Access denied' });
+    expect(info).toMatchObject({ nvidia: false, vendor: null, probe: 'failed', error: '1: Access denied' });
+  });
+
+  it('nvidia-smi 跑不起来时信显卡名：有 NVIDIA 驱动就判 NVIDIA', () => {
+    const info = gpuInfoFrom(['NVIDIA GeForce RTX 5060 Laptop GPU', 'Intel(R) UHD Graphics'], [null, null], smiBroken, { ok: false, error: 'Access denied' });
+    expect(info).toMatchObject({ nvidia: true, vendor: 'intel', probe: 'failed', smiOk: false });
+    expect(info.smiError).toContain('ENOENT');
+  });
+
+  it('nvidia-smi 成功但没列出显卡时，不会被显卡名反推成 NVIDIA', () => {
+    const info = gpuInfoFrom(['NVIDIA GeForce RTX 4060'], [null], smiOk, { ok: true, error: null });
+    expect(info).toMatchObject({ nvidia: false, probe: 'ok', smiOk: true });
+  });
+
+  it('注册表兜底读到名字时仍算探测成功，AMD 照常识别', () => {
+    const info = gpuInfoFrom(['AMD Radeon RX 9060 XT'], [null], smiOk, { ok: true, error: '1: Access denied' });
+    expect(info).toMatchObject({ nvidia: false, vendor: 'amd', probe: 'ok', error: '1: Access denied' });
+    expect(info.amd).toMatchObject({ kind: 'supported', gpu: { gfx: 'gfx1200' } });
+  });
+
+  it('从 reg query 输出取 DriverDesc，重复项去掉', () => {
+    const out = [
+      '',
+      'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Video\\{1}\\0000',
+      '    DriverDesc    REG_SZ    NVIDIA GeForce RTX 5060 Laptop GPU',
+      '',
+      'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Video\\{2}\\0000',
+      '    DriverDesc    REG_SZ    Intel(R) UHD Graphics',
+      'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Video\\{3}\\0000',
+      '    DriverDesc    REG_SZ    NVIDIA GeForce RTX 5060 Laptop GPU',
+    ].join('\r\n');
+    expect(gpuNamesFromRegistry(out)).toEqual(['NVIDIA GeForce RTX 5060 Laptop GPU', 'Intel(R) UHD Graphics']);
+    expect(gpuNamesFromRegistry('')).toEqual([]);
   });
 });

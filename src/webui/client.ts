@@ -470,13 +470,15 @@ const voicePanel: WebUiPanel = {
           : s.tier === 'rocm' ? t.tierRocmMissing(null)
             : t.tierMac)
         : s.tierSetting === 'auto'
-          ? (s.cudaFound ? t.tierAuto(true)
-            : s.amd.kind === 'supported'
-              ? (s.tier === 'rocm' ? t.tierAutoRocm(s.amd.gpu.gfx) : t.tierRocmUnpublished(s.amd.gpu.gfx))
-              : s.gpu === 'amd'
-                ? (s.amd.kind === 'unsupported' && s.amd.integrated ? t.tierNoDiscrete : t.tierAmdUnsupported(s.amd.kind === 'unsupported' ? s.amd.name : ''))
-                : t.tierAuto(false))
-          : s.tier === 'cuda' && !s.cudaFound ? t.tierCudaMissing(s.gpu)
+          ? (s.gpuProbe.status === 'failed' ? t.tierProbeFailed(s.gpuProbe.error)
+            : s.cudaFound ? t.tierAuto(true)
+              : s.amd.kind === 'supported'
+                ? (s.tier === 'rocm' ? t.tierAutoRocm(s.amd.gpu.gfx) : t.tierRocmUnpublished(s.amd.gpu.gfx))
+                : s.gpu === 'amd'
+                  ? (s.amd.kind === 'unsupported' && s.amd.integrated ? t.tierNoDiscrete : t.tierAmdUnsupported(s.amd.kind === 'unsupported' ? s.amd.name : ''))
+                  : t.tierAuto(false))
+          : s.tier === 'cuda' && !s.cudaFound
+            ? (s.gpuProbe.status === 'failed' ? t.tierCudaProbeFailed(s.gpuProbe.error) : t.tierCudaMissing(s.gpu))
             : s.tier === 'rocm' && s.amd.kind !== 'supported' ? t.tierRocmMissing(s.amd.kind === 'unsupported' ? s.amd.name : null)
               : '';
       tierRow.detail.textContent = [explain, t.modelLine(s.version === 'v5turbo' ? 'V5 turbo' : 'V2 Pro Plus')].filter(Boolean).join(' · ');

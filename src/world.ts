@@ -213,6 +213,9 @@ export class GptSovitsWorld implements World {
   private amd: AmdProbe = { kind: 'none' };
   /** 没检测到 NVIDIA 时的显卡厂商，只用来把「为什么走 CPU / ROCm 档」说清楚。 */
   private gpu: GpuVendor | null = null;
+  /** WMI 显卡探测是否成功；失败时 `gpu: null` 不代表没有独显，面板要提示手动选档。 */
+  private gpuProbe: 'ok' | 'failed' = 'ok';
+  private gpuProbeError: string | null = null;
   /** 「已安装模型」的体积扫描结果；面板不是每秒都量，1 分钟内的重复请求直接复用。 */
   private usageCache: { at: number; data: UsageState } | null = null;
   private stopped = false;
@@ -1251,7 +1254,15 @@ export class GptSovitsWorld implements World {
     this.cuda = gpus.nvidia;
     this.amd = gpus.amd;
     this.gpu = gpus.vendor;
-    if (this.cfg.tier === 'cuda' && !gpus.nvidia) this.log.warn('配置的是显卡档，但没检测到 NVIDIA 显卡', { gpu: this.gpu });
+    this.gpuProbe = gpus.probe;
+    this.gpuProbeError = gpus.error;
+    // 探测失败和「真没独显」是两回事：一定要留日志，否则自动档静默退回 CPU 时查不出原因。
+    if (gpus.probe === 'failed') {
+      this.log.warn('显卡探测失败：WMI 被系统拒绝，无法判断有没有独立显卡；请在面板手动选择推理档', { error: gpus.error, smiError: gpus.smiError });
+    } else if (!gpus.smiOk) {
+      this.log.warn('nvidia-smi 没能执行，NVIDIA 显卡只能按显卡名判断', { error: gpus.smiError, gpu: this.gpu });
+    }
+    if (this.cfg.tier === 'cuda' && !gpus.nvidia && gpus.probe === 'ok') this.log.warn('配置的是显卡档，但没检测到 NVIDIA 显卡', { gpu: this.gpu });
     if (this.cfg.tier === 'rocm' && gpus.amd.kind !== 'supported') this.log.warn('配置的是 ROCm 档，但没检测到官方支持的 AMD 显卡', { gpu: this.gpu, amd: gpus.amd });
     if (voiceModelNeedsNormalizing(this.cfg.voiceModel)) this.log.warn('配置里的模型版本不是有效值，已按 auto 处理', { voiceModel: this.cfg.voiceModel });
     if (normalizeVoiceModel(this.cfg.voiceModel) === 'v5turbo' && this.tier() === 'cpu') this.log.warn('CPU 档跑不动 V5 turbo，已按 V2 Pro Plus 运行', { voiceModel: this.cfg.voiceModel });
@@ -2187,6 +2198,7 @@ export class GptSovitsWorld implements World {
       cudaFound: this.cuda === true,
       amd: this.amd,
       gpu: this.gpu,
+      gpuProbe: { status: this.gpuProbe, error: this.gpuProbeError },
       version: this.version(),
       runtime: { ...this.runtime.status(), dir: b.kind === 'remote' ? b.url : b.dir, published: this.runtime.published(), bytes: this.runtime.bytes(), own: b.kind === 'own' && isRuntimeDir(b.dir) },
       weights: { ...this.weights.status(), dir: this.weights.dir(), bytes: this.weights.bytes() },
@@ -2337,6 +2349,8 @@ export interface PanelState {
   amd: AmdProbe;
   /** 没有 NVIDIA 时的显卡厂商；用来解释为什么用 CPU 档。 */
   gpu: GpuVendor | null;
+  /** WMI 显卡探测状态；`failed` 时 `gpu: null` / `cudaFound: false` 只代表没查到，不能当成没有独显。 */
+  gpuProbe: { status: 'ok' | 'failed'; error: string | null };
   version: ModelVersion;
   runtime: JobState & { dir: string; published: boolean; bytes: number; own: boolean };
   weights: JobState & { dir: string; bytes: number };
