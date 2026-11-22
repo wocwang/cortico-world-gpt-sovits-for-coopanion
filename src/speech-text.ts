@@ -71,3 +71,20 @@ export function promptLanguageOf(text: string): 'zh' | 'en' | 'ja' | 'ko' {
   if (/[\u3400-\u4dbf\u4e00-\u9fff]/.test(text)) return 'zh';
   return /[a-z]/i.test(text) ? 'en' : 'zh';
 }
+
+/**
+ * `auto` 档真正发给合成器的语言。上游的 `auto` 用 fast_langdetect 逐段猜，
+ * 中日共用汉字，「主人，」「五十块」这类片段常被判成日语；这里按整行的字符集定一个语言：
+ * 假名 → 日语，韩文 → 韩语，有汉字（无假名/韩文）→ 中文，纯拉丁 → 英文，判断不了才交回 `auto`。
+ *
+ * 中英混排仍然安全：`zh` 档下运行时会保留英文段按英文读，其余按中文。
+ * 代价是纯汉字写成的日语（如「五十」）会被当中文——桌宠以中文为主，这个取舍更划算。
+ * 显式选了 zh / en / ja / ko 的照旧，不受影响。
+ */
+export function synthLangFor(text: string, setting: SpeechLang): SpeechLang {
+  if (setting !== 'auto') return setting;
+  if (/[\u3041-\u3096\u3099\u309a\u30a1-\u30fa\u30fc]/.test(text)) return 'ja';
+  if (/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/.test(text)) return 'ko';
+  if (/[\u3400-\u4dbf\u4e00-\u9fff]/.test(text)) return 'zh';
+  return /[a-z]/i.test(text) ? 'en' : 'auto';
+}

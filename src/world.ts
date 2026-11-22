@@ -36,7 +36,7 @@ import { Player, applyGain, listOutputDevices, playbackLeadMs } from './player.t
 import { RvcLink, type RvcProbe } from './rvc-link.ts';
 import { SovitsServer, type ServerState } from './server.ts';
 import { customVoiceOptions, registerCustomVoiceOptions } from './voice-options.ts';
-import { promptLanguageOf, spokenReceipt, speechText, ttsPlain, ttsSafe } from './speech-text.ts';
+import { promptLanguageOf, spokenReceipt, speechText, synthLangFor, ttsPlain, ttsSafe } from './speech-text.ts';
 import { isConnectionDrop, parseWavHeader, synthesize, switchWeights, type SpeechLang, type SynthRequest } from './synth.ts';
 import { SOVITS_TOOL_DECLS } from './tools.ts';
 import { TrainerManager } from './trainer.ts';
@@ -1211,7 +1211,8 @@ export class GptSovitsWorld implements World {
     const rocm = this.tier() === 'rocm';
     return {
       text, refAudio: voice.audio, refText: voice.text, speed: this.cfg.speed, seed: this.cfg.seed,
-      textLang, promptLang: promptLanguageOf(voice.text),
+      // `auto` 不交给 api_v2 逐段猜（「主人，」「五十块」会被猜成日语），按这一行自己定语言。
+      textLang: synthLangFor(text, textLang), promptLang: promptLanguageOf(voice.text),
       // ROCm 上「多段 + 流式」会在第二段起被服务端断开（社区 0.6.1 实测 `terminated`，同一句试听却正常）。
       // 这一档改成整句一次算、非流式返回：短句本来就能过，长句也不再分段，代价是首音晚一点。
       ...(rocm ? { splitMethod: 'cut0', streamingMode: 0 } : {}),

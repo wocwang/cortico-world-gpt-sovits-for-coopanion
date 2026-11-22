@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { INLINE_TAG_MAX, promptLanguageOf, spokenReceipt, speechText, ttsPlain, ttsSafe } from '../src/speech-text.ts';
+import { INLINE_TAG_MAX, promptLanguageOf, spokenReceipt, speechText, synthLangFor, ttsPlain, ttsSafe } from '../src/speech-text.ts';
 import { isConnectionDrop, parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth.ts';
 
 describe('切句方法', () => {
@@ -101,6 +101,36 @@ describe('promptLanguageOf', () => {
     expect(promptLanguageOf('こんにちは、いい天気ですね。')).toBe('ja');
     expect(promptLanguageOf('Hello there.')).toBe('en');
     expect(promptLanguageOf('你好 world')).toBe('zh');
+  });
+});
+
+// auto 档不再交给上游逐段猜：「主人，」「五十块」会被 fast_langdetect 判成日语。
+describe('synthLangFor', () => {
+  it('中文行（含年轻人/数字）固定按中文，不再被猜成日语', () => {
+    expect(synthLangFor('主人，五十块。', 'auto')).toBe('zh');
+    expect(synthLangFor('好呀，五十块。', 'auto')).toBe('zh');
+    expect(synthLangFor('主人，我在呢。', 'auto')).toBe('zh');
+    expect(synthLangFor('一共五十块，谢谢。', 'auto')).toBe('zh');
+  });
+
+  it('中英混排按中文，英文单词由运行时保留为英文', () => {
+    expect(synthLangFor('好呀 ok，等我一下。', 'auto')).toBe('zh');
+    expect(synthLangFor('GPT-SoVITS 讲了三句话。', 'auto')).toBe('zh');
+  });
+
+  it('含假名按日语、含韩文按韩语、纯拉丁按英文', () => {
+    expect(synthLangFor('こんにちは、主人。', 'auto')).toBe('ja');
+    expect(synthLangFor('ティード パラパパパ', 'auto')).toBe('ja');
+    expect(synthLangFor('안녕하세요', 'auto')).toBe('ko');
+    expect(synthLangFor('Hello there.', 'auto')).toBe('en');
+  });
+
+  it('判断不了（纯数字/符号）才交回 auto，显式档位一律不动', () => {
+    expect(synthLangFor('12345', 'auto')).toBe('auto');
+    expect(synthLangFor('……', 'auto')).toBe('auto');
+    expect(synthLangFor('主人，五十块。', 'zh')).toBe('zh');
+    expect(synthLangFor('主人，五十块。', 'ja')).toBe('ja');
+    expect(synthLangFor('Hello', 'auto')).toBe('en');
   });
 });
 

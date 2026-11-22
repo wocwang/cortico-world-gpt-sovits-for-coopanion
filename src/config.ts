@@ -267,7 +267,7 @@ const TEXT = {
     speed: { title: '语速', description: '1 为原速。' },
     textLang: {
       title: '语音语言',
-      description: '与界面语言无关。中文：直接照读聊天框里的这句文字；English / 日本語：先把聊天文字翻译成该语言再念（气泡文字不变）。',
+      description: '与界面语言无关。中文：直接照读聊天框里的这句文字；English / 日本語：先把聊天文字翻译成该语言再念（气泡文字不变）；跟随原文：不翻译，按每行的字符判断语言（汉字→中文、假名→日语、韩文→韩语、纯英文→英文），不再交给运行时逐段猜。',
       auto: '跟随原文（不翻译）', zh: '中文（直接照读）', en: 'English（先翻译）', ja: '日本語（先翻译）',
     },
     translateEndpoint: { title: '翻译模型地址', description: 'OpenAI 兼容接口的基址（如 https://api.deepseek.com/v1）。语音语言选「先翻译」时，聊天文字会先译成目标语言再念；留空则按原文念。' },
@@ -330,7 +330,7 @@ const TEXT = {
     speed: { title: 'Speech rate', description: '1 is the original rate.' },
     textLang: {
       title: 'Speech language',
-      description: 'Independent of the UI language. Chinese: reads the chat line as-is; English / Japanese: translates the chat line into that language first (the bubble text stays unchanged).',
+      description: 'Independent of the UI language. Chinese: reads the chat line as-is; English / Japanese: translates the chat line into that language first (the bubble text stays unchanged); Follow the text: no translation, the language is picked from each line (Han → Chinese, kana → Japanese, Hangul → Korean, Latin-only → English) instead of letting the runtime guess fragment by fragment.',
       auto: 'Follow the text (no translation)', zh: 'Chinese (read as-is)', en: 'English (translate first)', ja: '日本語 (translate first)',
     },
     translateEndpoint: { title: 'Translation API URL', description: 'Base URL of an OpenAI-compatible API (e.g. https://api.deepseek.com/v1). Used to translate the chat line before speaking when the speech language asks for translation; empty reads the text as-is.' },
