@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cachedHipIndex, infererYaml, PYTHON_ARGS, runtimeEnv, startFailureHint } from '../src/server.ts';
+import { cachedHipIndex, cudaStartHint, infererYaml, PYTHON_ARGS, runtimeEnv, startFailureHint } from '../src/server.ts';
 
 describe('api_v2 配置', () => {
   it('ROCm 档和显卡档一样写 cuda + fp16', () => {
@@ -67,6 +67,35 @@ describe('启动失败提示', () => {
   it('别的退出原因不加提示', () => {
     expect(startFailureHint(['Address already in use'])).toBe('');
     expect(startFailureHint(['ModuleNotFoundError: No module named "tools"'])).toBe('');
+  });
+});
+
+describe('CUDA 初始化失败翻译（#16）', () => {
+  const oldDriver = 'UserWarning: CUDA initialization: The NVIDIA driver on your system is too old (found version 11040). '
+    + 'Please update your GPU driver by downloading and installing a new version from the URL: http://www.nvidia.com/Download/index.aspx';
+
+  it('驱动太旧：点明当前支持的 CUDA 版本、525 下限和替代档', () => {
+    const hint = cudaStartHint(oldDriver);
+    expect(hint).toContain('驱动太旧');
+    expect(hint).toContain('CUDA 11.4');
+    expect(hint).toContain('525');
+    expect(hint).toContain('CPU');
+  });
+
+  it('CUDA 运行时要求更高、找不到设备也各有提示', () => {
+    expect(cudaStartHint('RuntimeError: CUDA driver version is insufficient for CUDA runtime version')).toContain('驱动版本');
+    expect(cudaStartHint('RuntimeError: Found no NVIDIA driver on your system.')).toContain('设备管理器');
+  });
+
+  it('普通报错不乱加提示', () => {
+    expect(cudaStartHint('Address already in use')).toBeNull();
+    expect(cudaStartHint('ModuleNotFoundError: No module named "gradio"')).toBeNull();
+  });
+
+  it('退出提示里带上翻译后的原因，而不是只留原始警告', () => {
+    const hint = startFailureHint([oldDriver]);
+    expect(hint).toContain('驱动太旧');
+    expect(hint.startsWith('（')).toBe(true);
   });
 });
 

@@ -370,6 +370,10 @@ V5 turbo 在这台机器的 CPU 上首包 3–4 s、实时率 1.2–1.5,
 
 首次启动显卡档要编译 CUDA 内核，本机第一次 74 s,之后约 11 s。服务起来后用中、英、日各一句预热，预热完才算可用。
 
+CUDA 档要求 NVIDIA 驱动 **525 以上**（推荐 550+）。驱动太旧时 `torch` 只会打一段
+`NVIDIA driver on your system is too old` 的 Python 警告，面板现在会直接翻成
+「驱动太旧（当前只支持 CUDA 11.x），请更新驱动或改用 CPU 档」。
+
 ### 预设音色
 
 随包带四个预设音色，音频与台本成对放在 `assets/voices/<id>.wav` / `<id>.txt`：

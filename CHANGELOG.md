@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.8
+
+- **显卡探测失败不再当成「没有独显」（#18）**：WMI 被系统拒绝时，`GpuInfo` 返回
+  `probe: 'failed'` 并保留原因；面板提示「显卡探测失败，请手动选择推理档或修复 WMI」，
+  不再误报「没有检测到 NVIDIA 显卡」。WMI 失败时改用注册表
+  `Control\Video\<GUID>\0000\DriverDesc` 兜底；`nvidia-smi` 失败也会把 `err.code` 写进日志。
+- **NVIDIA 驱动太旧给出人话（#16）**：`torch` 抛
+  `NVIDIA driver on your system is too old (found version 11040)` 时，面板与退出原因
+  直接显示「驱动太旧（当前只支持 CUDA 11.4），显卡档需要 525 以上驱动」，并提示更新
+  驱动或改用 CPU 档；`CUDA driver version is insufficient` / 找不到设备也各有提示。
+- 验证：402 个单测、`tsc --noEmit`、`npm run build`。
+
 ## 0.9.7
 
 - **音色表单报错就地显示**：参考音频时长错误放在「参考音频」输入框下面，台本错误在

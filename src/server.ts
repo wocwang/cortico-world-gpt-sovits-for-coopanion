@@ -216,6 +216,8 @@ export class SovitsServer {
   private child: ChildProcess | null = null;
   private st: ServerState = { phase: 'stopped', url: null, pid: null, detail: null, startMs: null };
   private tail: string[] = [];
+  /** 启动输出里认出「NVIDIA 驱动太旧」后保留下来，面板整个启动期间都显示这句人话。 */
+  private driverHint: string | null = null;
   private starting: Promise<void> | null = null;
   /** 正在收尾的旧进程；闲置停服后马上来一句时，新进程要等它退干净。 */
   private stopping: Promise<void> | null = null;
@@ -273,6 +275,7 @@ export class SovitsServer {
     const missing = missingRuntimePart(spec.runtimeDir);
     if (missing) throw new Error(missing);
     this.tail = [];
+    this.driverHint = null;
     if (spec.patchRuntime) {
       const result = patchRuntime(spec.runtimeDir);
       if (result === 'patched') this.log.info('已给托管运行时打上按需加载补丁', { dir: spec.runtimeDir });
@@ -329,7 +332,8 @@ export class SovitsServer {
         if (!line.trim()) continue;
         this.tail.push(line);
         if (this.tail.length > TAIL_LINES) this.tail.shift();
-        if (this.st.phase === 'starting') this.st.detail = line.slice(0, 200);
+        this.driverHint ??= cudaStartHint(line);
+        if (this.st.phase === 'starting') this.st.detail = this.driverHint ?? line.slice(0, 200);
       }
     };
     child.stdout!.on('data', onLine);
@@ -338,7 +342,8 @@ export class SovitsServer {
       if (this.child !== child) return;
       this.child = null;
       const last = this.tail.slice(-3).join(' | ');
-      this.st = { phase: 'error', url: null, pid: null, detail: `推理服务退出(${code}):${last}${startFailureHint(this.tail)}`, startMs: null };
+      const hint = this.driverHint ? `（${this.driverHint}）` : startFailureHint(this.tail);
+      this.st = { phase: 'error', url: null, pid: null, detail: `推理服务退出(${code}):${last}${hint}`, startMs: null };
       this.log.warn('GPT-SoVITS 推理服务退出', { code, tail: this.tail.slice(-10) });
       this.onExit(this.st.detail ?? '');
     });
@@ -363,11 +368,33 @@ export class SovitsServer {
 }
 
 /**
+ * 把 torch 的 CUDA 初始化错误翻成人话。最常见的是驱动太旧（只能支持 CUDA 11.x），
+ * 面板只显示原始 Python 警告时，用户分不清该升级驱动还是换 CPU 档。
+ */
+export function cudaStartHint(text: string): string | null {
+  const old = /NVIDIA driver on your system is too old \(found version (\d+)\)/i.exec(text);
+  if (old) {
+    const raw = Number(old[1]);
+    const cuda = Number.isFinite(raw) && raw > 0 ? `${Math.floor(raw / 1000)}.${Math.floor((raw % 1000) / 10)}` : null;
+    return `NVIDIA 驱动太旧${cuda ? `（当前驱动只支持 CUDA ${cuda}）` : ''}，显卡档需要 525 以上的驱动；请到 NVIDIA 官网更新显卡驱动，或改用「CPU」档`;
+  }
+  if (/CUDA driver version is insufficient for CUDA runtime version/i.test(text)) {
+    return 'NVIDIA 驱动版本低于 CUDA 运行时要求；请到 NVIDIA 官网更新显卡驱动，或改用「CPU」档';
+  }
+  if (/no CUDA-capable device is detected|found no NVIDIA driver on your system/i.test(text)) {
+    return '没有检测到可用的 NVIDIA 显卡（驱动未装好或被禁用）；请检查设备管理器里的显卡状态，或改用「CPU」档';
+  }
+  return null;
+}
+
+/**
  * 子进程退出时补一句人话：自备运行时最常见的是 pretrained_models 不全（macOS 的 CPU 档要的是
  * V2 Pro Plus 那套，不是 V5 turbo），上游只抛一行 FileNotFoundError，不告诉人缺哪个文件。
  */
 export function startFailureHint(tail: readonly string[]): string {
   const text = tail.join('\n');
+  const cuda = cudaStartHint(text);
+  if (cuda) return `（${cuda}）`;
   if (!/FileNotFoundError/.test(text) || !/pretrained_models/.test(text)) return '';
   const hit = /pretrained_models[\\/]([^'"\r\n]+)/.exec(text)?.[1]?.trim();
   const which = hit ? `「${hit}」` : '一些文件';
