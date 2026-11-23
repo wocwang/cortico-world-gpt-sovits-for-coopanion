@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backendCandidates, LEAD_CAP_MS, listOutputDevices, normalizeAudioBackend, oneFrameBytes, pickDefaultDevice, playbackLeadMs, probeVerdict } from '../src/player.ts';
+import { backendCandidates, findDeviceByName, LEAD_CAP_MS, listOutputDevices, normalizeAudioBackend, normalizeDeviceName, oneFrameBytes, playbackLeadMs, probeVerdict, resolveDefaultDevice } from '../src/player.ts';
 
 describe('音频后端回退', () => {
   it('自动档先 WASAPI，再 DirectSound', () => {
@@ -32,16 +32,28 @@ describe('音频后端回退', () => {
     expect(listOutputDevices('system')).toEqual([]);
   });
 
-  it('RtAudio 报 0（没有默认设备）时从枚举结果里挑第一个', () => {
-    expect(pickDefaultDevice([{ id: 129 }, { id: 130 }], 0)).toBe(129);
-  });
-
   it('默认设备在列表里就用它', () => {
-    expect(pickDefaultDevice([{ id: 129 }, { id: 130 }], 130)).toBe(130);
+    expect(resolveDefaultDevice([{ id: 129, name: '扬声器' }, { id: 130, name: '耳机' }], 130)).toBe(130);
   });
 
-  it('一台设备都没有时返回 0，由调用方报错', () => {
-    expect(pickDefaultDevice([], 0)).toBe(0);
+  it('RtAudio 报 0 时不再拿「列表第一个」凑数，改用 Windows 默认端点名匹配', () => {
+    const devices = [{ id: 129, name: '扬声器 (Senary Audio)' }, { id: 130, name: '耳机 (Senary Audio)' }];
+    expect(resolveDefaultDevice(devices, 0)).toBeNull();
+    expect(resolveDefaultDevice(devices, 0, '耳机 (Senary Audio)')).toBe(130);
+  });
+
+  it('蓝牙重连后名字多了「(2)」也能认出来', () => {
+    expect(normalizeDeviceName('  Headphones  (2) ')).toBe('headphones');
+    expect(normalizeDeviceName('耳机 (Senary Audio)')).toBe('耳机 (senary audio)');
+    const devices = [{ id: 130, name: 'Headphones (2)' }];
+    expect(findDeviceByName(devices, 'Headphones')?.id).toBe(130);
+    expect(resolveDefaultDevice(devices, 0, 'Headphones (2)')).toBe(130);
+  });
+
+  it('配置里写简称也能匹配到完整设备名', () => {
+    const devices = [{ id: 130, name: '耳机 (Senary Audio)' }, { id: 131, name: '扬声器 (Senary Audio)' }];
+    expect(findDeviceByName(devices, '耳机')?.id).toBe(130);
+    expect(findDeviceByName(devices, '不存在的设备')).toBeUndefined();
   });
 });
 

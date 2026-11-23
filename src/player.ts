@@ -7,7 +7,7 @@
  * macOS 上没有随包的 audify 预编译件：改成「每次 `flush()` 把这段 PCM 落成临时 WAV，交给系统自带的 `afplay` 依次播」，
  * `cut()` 把正在播的和队列一起停掉。增益与软限幅仍在 Player 里做，afplay 只负责出声。
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -61,6 +61,15 @@ const FRAME_MS = 40;
 
 /** 软限幅的拐点：绝对值超过它的样本按 tanh 压到满幅以内。 */
 const KNEE = 24000;
+
+/** 设备变化检查间隔：每秒最多枚举一次。 */
+const DEVICE_CHECK_MS = 1000;
+
+/** 蓝牙刚连上时 A2DP 还没就绪，开流失败后短暂重试。 */
+const OPEN_RETRY_MS = 300;
+
+/** Windows 默认端点名的后台刷新间隔；只在 RtAudio 报不出默认 id 的机器上才会用到。 */
+const WIN_DEFAULT_REFRESH_MS = 5000;
 
 /** 预缓冲门槛的上限：低于「第一次写声卡」的 3 秒回执等待，气泡不会早于声音太多。 */
 export const LEAD_CAP_MS = 2400;
@@ -160,9 +169,103 @@ export function backendCandidates(setting: string): Array<{ api: number | undefi
   return [wasapi, ds];
 }
 
-/** 没有默认设备（RtAudio 返回 0）时，从枚举结果里挑第一个可用设备。 */
-export function pickDefaultDevice(devices: Array<{ id: number }>, defaultId: number): number {
-  return devices.some((device) => device.id === defaultId) ? defaultId : devices[0]?.id ?? 0;
+/**
+ * 设备名归一化：大小写、多余空白，以及 Windows 重名时追加的「(2)」。
+ * 蓝牙耳机断联重连后名字常从「XX」变成「XX (2)」，不归一化会匹配不上。
+ */
+export function normalizeDeviceName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').replace(/\s*\(\d+\)$/, '').toLowerCase();
+}
+
+/** 按名字在设备表里找：先精确，再互相包含（配置里常写简称）。 */
+export function findDeviceByName<T extends { name: string }>(devices: readonly T[], name: string): T | undefined {
+  const want = normalizeDeviceName(name);
+  if (!want) return undefined;
+  const exact = devices.find((device) => normalizeDeviceName(device.name) === want);
+  if (exact) return exact;
+  return devices.find((device) => {
+    const have = normalizeDeviceName(device.name);
+    return have.length > 0 && (have.includes(want) || want.includes(have));
+  });
+}
+
+/**
+ * 解析系统默认输出设备：RtAudio 的默认 id 在列表里就用它；否则用 Windows Core Audio
+ * 拿到的默认端点名去匹配。**解析不出返回 null**，绝不拿「列表第一个」凑数——
+ * 有线 + 蓝牙同时存在时，第一个设备往往不是 Windows 当前默认。
+ */
+export function resolveDefaultDevice(
+  devices: ReadonlyArray<{ id: number; name: string }>,
+  defaultId: number,
+  windowsName: string | null = null,
+): number | null {
+  if (devices.some((device) => device.id === defaultId)) return defaultId;
+  const byName = windowsName ? findDeviceByName(devices, windowsName) : undefined;
+  return byName?.id ?? null;
+}
+
+/**
+ * Windows 的真实默认输出端点名（Core Audio 的 `MMDeviceEnumerator`）。
+ * 只在 RtAudio 的 `getDefaultOutputDevice()` 给不出有效 id 时才调用；PowerShell 编译 C# 约 0.3–0.8 秒，
+ * 所以调用方会缓存结果，播放过程中绝不阻塞等它。
+ */
+const WIN_DEFAULT_CS = `
+using System;
+using System.Runtime.InteropServices;
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumeratorComObject { }
+[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IMMDeviceEnumerator {
+  int EnumAudioEndpoints(int dataFlow, int stateMask, out IntPtr devices);
+  int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice device);
+}
+[Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IMMDevice {
+  int Activate(ref Guid iid, int clsCtx, IntPtr activationParams, [MarshalAs(UnmanagedType.IUnknown)] out object interfacePointer);
+  int OpenPropertyStore(int stgmAccess, out IPropertyStore properties);
+  int GetId([MarshalAs(UnmanagedType.LPWStr)] out string id);
+}
+[Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IPropertyStore {
+  int GetCount(out int count);
+  int GetAt(int index, out PROPERTYKEY key);
+  int GetValue(ref PROPERTYKEY key, out PROPVARIANT value);
+}
+[StructLayout(LayoutKind.Sequential)] struct PROPERTYKEY { public Guid fmtid; public int pid; }
+[StructLayout(LayoutKind.Explicit)] struct PROPVARIANT { [FieldOffset(0)] public short vt; [FieldOffset(8)] public IntPtr pointer; }
+public class CorticoAudioDefault {
+  public static string Get() {
+    var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+    IMMDevice device; enumerator.GetDefaultAudioEndpoint(0, 0, out device);
+    string id; device.GetId(out id);
+    IPropertyStore store; device.OpenPropertyStore(0, out store);
+    var key = new PROPERTYKEY { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 };
+    PROPVARIANT value; store.GetValue(ref key, out value);
+    return id + "|" + Marshal.PtrToStringUni(value.pointer);
+  }
+}
+`;
+
+function windowsDefaultOutputName(): Promise<string | null> {
+  if (process.platform !== 'win32') return Promise.resolve(null);
+  const script = `$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+${WIN_DEFAULT_CS}
+'@
+[CorticoAudioDefault]::Get()`;
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  return new Promise((done) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+      { windowsHide: true, timeout: 8000 },
+      (err, stdout) => {
+        if (err) { done(null); return; }
+        const line = stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).pop() ?? '';
+        const at = line.indexOf('|');
+        done((at >= 0 ? line.slice(at + 1) : line).trim() || null);
+      },
+    );
+  });
 }
 
 /**
@@ -196,8 +299,9 @@ export function listOutputDevices(backend: AudioBackend = 'auto'): OutputDevice[
       const rt = candidate.api === undefined ? new audify.RtAudio() : new audify.RtAudio(candidate.api);
       const devices = rt.getDevices().filter((d) => d.outputChannels > 0);
       if (!devices.length) continue;
-      const def = pickDefaultDevice(devices, rt.getDefaultOutputDevice());
-      return devices.map((d) => ({ id: d.id, name: d.name, isDefault: d.id === def }));
+      // 解析不出默认设备时不标任何一个，别把「列表第一个」当成系统默认。
+      const def = resolveDefaultDevice(devices, rt.getDefaultOutputDevice());
+      return devices.map((d) => ({ id: d.id, name: d.name, isDefault: def !== null && d.id === def }));
     } catch { /* 换下一个后端 */ }
   }
   return [];
@@ -223,6 +327,12 @@ export class Player {
   /** 默认设备模式下，流实际打开的设备 id；用来发现系统默认设备被切换。 */
   private defaultId = 0;
   private defaultCheckedAt = 0;
+  /** 配置的设备断联后已退回系统默认；设备回来后优先切回去。 */
+  private fellBackToDefault = false;
+  /** Windows 真实默认端点名（RtAudio 报不出默认 id 时才有值）；播放路径只用缓存，不阻塞。 */
+  private windowsDefault: string | null = null;
+  private windowsProbeAt = 0;
+  private windowsProbing = false;
   /** 一帧单声道的字节数;写入时再按声道数展开。 */
   private frameBytes = 0;
   private channels = 1;
@@ -267,19 +377,27 @@ export class Player {
       return;
     }
     const device = this.opts.device();
-    if (this.rt && (sampleRate !== this.rate || device !== this.openedDevice || this.defaultMoved())) {
+    // 耳机拔掉 / 蓝牙断联后旧流会自己停掉：立刻关流重开，别等「队列播完」。
+    if (this.rt && this.streamDead()) this.close();
+    if (this.rt && (sampleRate !== this.rate || device !== this.openedDevice || this.deviceMoved())) {
       await this.drain();
       this.close();
     }
     if (!this.rt) await this.open(sampleRate, device);
     const rt = this.rt!;
-    rt.outputVolume = Math.max(0, Math.min(1, this.opts.volume()));
-    let buf = this.carry.length ? Buffer.concat([this.carry, pcm]) : pcm;
-    const whole = buf.length - (buf.length % this.frameBytes);
-    for (let at = 0; at < whole; at += this.frameBytes) rt.write(upmix(buf.subarray(at, at + this.frameBytes), this.channels));
-    this.carry = Buffer.from(buf.subarray(whole));
-    const now = Date.now();
-    this.endsAt = Math.max(this.endsAt, now) + (whole / 2 / sampleRate) * 1000;
+    try {
+      rt.outputVolume = Math.max(0, Math.min(1, this.opts.volume()));
+      const buf = this.carry.length ? Buffer.concat([this.carry, pcm]) : pcm;
+      const whole = buf.length - (buf.length % this.frameBytes);
+      for (let at = 0; at < whole; at += this.frameBytes) rt.write(upmix(buf.subarray(at, at + this.frameBytes), this.channels));
+      this.carry = Buffer.from(buf.subarray(whole));
+      const now = Date.now();
+      this.endsAt = Math.max(this.endsAt, now) + (whole / 2 / sampleRate) * 1000;
+    } catch (err) {
+      // 原生写失败 JS 层接不住流的状态；关掉让下一句重新开，别让一个坏流拖死后面所有句子。
+      this.close();
+      throw new Error(`写入音频输出失败：${err instanceof Error ? err.message : String(err)}。已关闭输出流，下一句会重新打开。`);
+    }
   }
 
   /** 一句写完：把不足一帧的尾巴补静音写出去。 */
@@ -293,7 +411,12 @@ export class Player {
     if (!this.rt || !this.carry.length) return;
     const frame = Buffer.alloc(this.frameBytes);
     this.carry.copy(frame);
-    this.rt.write(upmix(frame, this.channels));
+    try {
+      this.rt.write(upmix(frame, this.channels));
+    } catch (err) {
+      this.close();
+      throw new Error(`写入音频输出失败：${err instanceof Error ? err.message : String(err)}。已关闭输出流，下一句会重新打开。`);
+    }
     this.endsAt = Math.max(this.endsAt, Date.now()) + FRAME_MS;
     this.carry = Buffer.alloc(0);
   }
@@ -401,24 +524,72 @@ export class Player {
     return left > 0 ? new Promise((done) => setTimeout(done, left)) : Promise.resolve();
   }
 
+  /** 当前流是不是已经停了（蓝牙断联/拔耳机后 audify 不会主动告诉我们）。 */
+  private streamDead(): boolean {
+    if (!this.rt || typeof this.rt.isStreamRunning !== 'function') return false;
+    try {
+      return !this.rt.isStreamRunning();
+    } catch {
+      return true;
+    }
+  }
+
   /**
-   * 默认设备模式下，系统默认输出是否已经换了（1 秒最多查一次，别每个 20 ms 帧都枚举）。
-   * 指定设备时不跟踪：配置里写死哪台就一直用它。
+   * 每秒最多查一次：配置的设备还在不在、系统默认有没有换。
+   * - 指定设备且还在：不跟随系统默认；
+   * - 指定设备不见了：退回系统默认，并在它回来后切回去；
+   * - 留空：跟随系统默认。
+   * 全程同步枚举，RtAudio 报不出默认 id 时只读缓存；真正的 Windows 查询在后台刷新，不阻塞播放。
    */
-  private defaultMoved(): boolean {
-    if (this.openedDevice) return false;
+  private deviceMoved(): boolean {
+    if (!this.rt) return false;
     const now = Date.now();
-    if (now - this.defaultCheckedAt < 1000) return false;
+    if (now - this.defaultCheckedAt < DEVICE_CHECK_MS) return false;
     this.defaultCheckedAt = now;
     try {
       const audify = this.audify ??= loadAudify();
       const rt = this.api === undefined ? new audify.RtAudio() : new audify.RtAudio(this.api);
       const devices = rt.getDevices().filter((d) => d.outputChannels > 0);
       if (!devices.length) return false;
-      return pickDefaultDevice(devices, rt.getDefaultOutputDevice()) !== this.defaultId;
+      if (this.openedDevice) {
+        const pinned = findDeviceByName(devices, this.openedDevice);
+        if (this.fellBackToDefault) {
+          if (!pinned) return false;
+          // 配置的设备回来了，切回去。
+          this.fellBackToDefault = false;
+          return true;
+        }
+        if (!pinned) {
+          this.fellBackToDefault = true;
+          this.opts.log.warn('配置的输出设备不在了，改用系统默认', { device: this.openedDevice });
+          return true;
+        }
+        // 蓝牙重连后端点可能换了一个 id，旧流不一定还会报错，这里主动切到新端点。
+        return pinned.id !== this.defaultId;
+      }
+      const defaultId = rt.getDefaultOutputDevice();
+      const target = resolveDefaultDevice(devices, defaultId, this.windowsDefault);
+      if (target === null) {
+        // 先别打断播放；后台问一次 Windows，下一轮再用新名字比对。
+        this.refreshWindowsDefault();
+        return false;
+      }
+      return target !== this.defaultId;
     } catch {
       return false;
     }
+  }
+
+  /** RtAudio 报不出默认 id 时，后台刷新 Windows 默认端点名；播放路径不等它。 */
+  private refreshWindowsDefault(): void {
+    if (process.platform !== 'win32' || this.windowsProbing) return;
+    const now = Date.now();
+    if (now - this.windowsProbeAt < WIN_DEFAULT_REFRESH_MS) return;
+    this.windowsProbeAt = now;
+    this.windowsProbing = true;
+    void windowsDefaultOutputName()
+      .then((name) => { this.windowsDefault = name; })
+      .finally(() => { this.windowsProbing = false; });
   }
 
   /**
@@ -438,37 +609,74 @@ export class Player {
       this.warnedBackend = true;
       this.opts.log.warn('音频后端配置无法识别，按 auto 处理', { value: String(requested) });
     }
+    this.fellBackToDefault = false;
     for (const candidate of backendCandidates(requested)) {
-      let rt: RtAudioLike;
-      try {
-        rt = candidate.api === undefined ? new audify.RtAudio() : new audify.RtAudio(candidate.api);
-      } catch (err) {
-        reasons.push(`${candidate.label}：${String(err)}`);
+      let lastReason = '';
+      let opened: {
+        rt: RtAudioLike;
+        devices: Array<{ id: number; name: string; outputChannels: number }>;
+        deviceId: number;
+        channels: number;
+        fellBack: boolean;
+      } | null = null;
+      // 蓝牙刚连上时设备可能还没就绪：枚举为空 / 开流失败都等 300 ms 再试一次。
+      for (let attempt = 0; attempt < 2 && !opened; attempt++) {
+        let rt: RtAudioLike;
+        try {
+          rt = candidate.api === undefined ? new audify.RtAudio() : new audify.RtAudio(candidate.api);
+        } catch (err) {
+          lastReason = `${candidate.label}：${String(err)}`;
+          break;
+        }
+        let devices: Array<{ id: number; name: string; outputChannels: number }>;
+        try {
+          devices = rt.getDevices().filter((d) => d.outputChannels > 0);
+        } catch (err) {
+          lastReason = `${candidate.label}：枚举设备失败（${String(err)}）`;
+          if (attempt === 0) await new Promise((done) => setTimeout(done, OPEN_RETRY_MS));
+          continue;
+        }
+        if (!devices.length) {
+          lastReason = `${candidate.label}：没有枚举到播放设备`;
+          if (attempt === 0) await new Promise((done) => setTimeout(done, OPEN_RETRY_MS));
+          continue;
+        }
+        const wanted = device ? findDeviceByName(devices, device) : undefined;
+        let deviceId: number;
+        if (wanted) {
+          deviceId = wanted.id;
+        } else {
+          const defaultId = rt.getDefaultOutputDevice();
+          let windowsName: string | null = null;
+          if (resolveDefaultDevice(devices, defaultId) === null) {
+            // RtAudio 的默认 id 不可信：问一次 Windows Core Audio。只在开流时发生，不阻塞已经开始的播放。
+            windowsName = await windowsDefaultOutputName();
+            this.windowsDefault = windowsName;
+            this.windowsProbeAt = Date.now();
+          }
+          const resolved = resolveDefaultDevice(devices, defaultId, windowsName);
+          if (resolved === null) {
+            lastReason = `${candidate.label}：无法确定系统默认输出设备${device ? `（配置的「${device}」不在列表里）` : ''}`;
+            break;
+          }
+          deviceId = resolved;
+        }
+        const channels = Math.min(2, Math.max(1, devices.find((d) => d.id === deviceId)?.outputChannels ?? 2));
+        try {
+          rt.openStream({ deviceId, nChannels: channels, firstChannel: 0 }, null, audify.RtAudioFormat.RTAUDIO_SINT16, sampleRate, frameSize, 'cortico-gpt-sovits', null, null);
+          rt.start();
+          opened = { rt, devices, deviceId, channels, fellBack: Boolean(device) && !wanted };
+        } catch (err) {
+          lastReason = `${candidate.label}：打不开「${devices.find((d) => d.id === deviceId)?.name ?? deviceId}」（${String(err)}）`;
+          try { if (rt.isStreamOpen()) rt.closeStream(); } catch { /* 已断开 */ }
+          if (attempt === 0) await new Promise((done) => setTimeout(done, OPEN_RETRY_MS));
+        }
+      }
+      if (!opened) {
+        reasons.push(lastReason || `${candidate.label}：打不开输出设备`);
         continue;
       }
-      let devices: Array<{ id: number; name: string; outputChannels: number }>;
-      try {
-        devices = rt.getDevices().filter((d) => d.outputChannels > 0);
-      } catch (err) {
-        reasons.push(`${candidate.label}：枚举设备失败（${String(err)}）`);
-        continue;
-      }
-      if (!devices.length) {
-        reasons.push(`${candidate.label}：没有枚举到播放设备`);
-        continue;
-      }
-      const wanted = device ? devices.find((d) => d.name === device) ?? devices.find((d) => d.name.includes(device)) : undefined;
-      const deviceId = wanted?.id ?? pickDefaultDevice(devices, rt.getDefaultOutputDevice());
-      const channels = Math.min(2, Math.max(1, devices.find((d) => d.id === deviceId)?.outputChannels ?? 2));
-      const frameBytes = frameSize * 2;
-      try {
-        rt.openStream({ deviceId, nChannels: channels, firstChannel: 0 }, null, audify.RtAudioFormat.RTAUDIO_SINT16, sampleRate, frameSize, 'cortico-gpt-sovits', null, null);
-        rt.start();
-      } catch (err) {
-        reasons.push(`${candidate.label}：打不开「${devices.find((d) => d.id === deviceId)?.name ?? deviceId}」（${String(err)}）`);
-        try { if (rt.isStreamOpen()) rt.closeStream(); } catch { /* 已断开 */ }
-        continue;
-      }
+      const { rt, devices, deviceId, channels, fellBack } = opened;
       // 开流 + start 都成功也可能是「假成功」：issue #8 的机器上 WASAPI 约 100 ms 内自己停掉，
       // 看起来一切正常但没有声音。写**正好一帧**静音等 120 ms 再查 isStreamRunning，就能把这类机器挑出来。
       if (typeof rt.isStreamRunning === 'function') {
@@ -496,9 +704,11 @@ export class Player {
       this.openedDevice = device;
       this.defaultId = deviceId;
       this.defaultCheckedAt = Date.now();
-      this.frameBytes = frameBytes;
+      this.fellBackToDefault = fellBack;
+      this.frameBytes = frameSize * 2;
       this.channels = channels;
       this.endsAt = 0;
+      if (fellBack) this.opts.log.warn('配置的输出设备不在列表里，改用系统默认', { device });
       this.opts.log.info(`音频输出已打开：${candidate.label}`, { devices: devices.length, device: devices.find((d) => d.id === deviceId)?.name ?? deviceId });
       return;
     }
