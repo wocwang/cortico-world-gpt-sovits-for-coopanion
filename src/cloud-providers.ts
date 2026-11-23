@@ -22,6 +22,7 @@ export type CloudProviderId =
   | 'volcengine'
   | 'mimo'
   | 'fish'
+  | 'kitta'
   | 'gemini'
   | 'dashscope'
   | 'gsv'
@@ -47,7 +48,9 @@ export type CloudProviderNote =
   /** 是「本机/局域网 GPT-SoVITS」，请走本地引擎或本机语音接口。 */
   | 'local'
   /** 只回一个下载地址，是否 WAV 无法保证。 */
-  | 'url';
+  | 'url'
+  /** Kitta Audio：OpenAI 兼容接口，文档可查但还没用真实密钥实测。 */
+  | 'kitta';
 
 export interface CloudProviderSpec {
   id: CloudProviderId;
@@ -198,6 +201,21 @@ export const CLOUD_PROVIDERS: readonly CloudProviderSpec[] = [
     note: 'beta',
   },
   {
+    id: 'kitta',
+    name: 'Kitta Audio',
+    // OpenAI 兼容端点：POST {base}/audio/speech，response_format 支持 wav。
+    baseUrl: 'https://kittaaudio.com/v1',
+    model: 'fishaudio-s21pro-flash',
+    // 文档里的公开系统测试音色，用户可在「拉取音色」后换掉。
+    voice: '00a1b221-6137-4b73-ad62-b0cbce134167',
+    extras: [],
+    voiceList: true,
+    showBaseUrl: true,
+    showModel: true,
+    status: 'beta',
+    note: 'kitta',
+  },
+  {
     id: 'gemini',
     name: 'Gemini TTS',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
@@ -302,6 +320,7 @@ export function detectCloudProvider(baseUrl: string): CloudProviderId {
     if (host === 'openspeech.bytedance.com') return 'volcengine';
     if (host === 'api.xiaomimimo.com') return 'mimo';
     if (host === 'api.fish.audio' || host === 'api.fish-audio.cn') return 'fish';
+    if (host === 'kittaaudio.com' || host.endsWith('.kittaaudio.com') || host === 'kittaai.com' || host.endsWith('.kittaai.com')) return 'kitta';
     if (host === 'generativelanguage.googleapis.com') return 'gemini';
     if (host === 'dashscope.aliyuncs.com' || host.endsWith('.dashscope.aliyuncs.com')) return 'dashscope';
   } catch {

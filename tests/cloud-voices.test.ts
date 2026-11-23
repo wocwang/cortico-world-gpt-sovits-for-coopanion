@@ -66,6 +66,7 @@ describe('清单端点与解析', () => {
     expect(voicesUrl('https://x.test/v1', 'custom')).toBe('https://x.test/v1/audio/voices');
     expect(voicesUrl('https://x.test/v1/audio/speech', 'custom')).toBe('https://x.test/v1/audio/voices');
     expect(voicesUrl('https://x.test/v1/audio/voices', 'custom')).toBe('https://x.test/v1/audio/voices');
+    expect(voicesUrl('https://kittaaudio.com/v1', 'kitta')).toBe('https://kittaaudio.com/v1/audio/voices');
     expect(() => voicesUrl('')).toThrow(/地址没填/);
   });
 
@@ -145,6 +146,16 @@ describe('从服务商拉取', () => {
     expect(voices).toEqual([{ id: 'alloy', name: 'Alloy' }]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${KEY}`);
+  });
+
+  it('Kitta Audio 从 /audio/voices 拉取，Bearer 鉴权，解析 voices[]', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ voices: [{ id: 'v1', name: '知夏' }] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const voices = await fetchCloudVoices('https://kittaaudio.com/v1', KEY, 10_000, 'kitta');
+    expect(voices).toEqual([{ id: 'v1', name: '知夏' }]);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://kittaaudio.com/v1/audio/voices');
     expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${KEY}`);
   });
 

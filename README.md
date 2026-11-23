@@ -204,8 +204,12 @@ runtime/bin/python3 -m pip install -r requirements.txt
 9880 本地语音接口与 QQ 语音条也照样能用这份音频。云端模式不下载运行时与权重，也不会拉起本地推理服务。
 
 **支持的厂商**（面板「服务商」下拉）：自定义（OpenAI 兼容）、OpenAI、Breeze Blue、Azure、MiniMax、
-ElevenLabs、火山引擎、小米 MiMo、Fish Audio（实验）。每家的地址、默认模型 / 音色、鉴权头和返回格式
-都由插件适配，切厂商会带出该家的默认值，面板里也有对应小字说明。
+ElevenLabs、火山引擎、小米 MiMo、Fish Audio（实验）、Kitta Audio（实验）。每家的地址、默认模型 / 音色、
+鉴权头和返回格式都由插件适配，切厂商会带出该家的默认值，面板里也有对应小字说明。
+
+**Kitta Audio** 走它的 OpenAI 兼容端点 `https://kittaaudio.com/v1/audio/speech`（`kittaai.com` 同样可用），
+默认模型 `fishaudio-s21pro-flash`；内置了文档里的公开测试音色，换成自己的音色请点「从服务商拉取清单」。
+接口文档已核对，但还没用真实密钥实测，所以标为实验。
 
 **配置**：控制台「GPTSovits 语音」：
 
@@ -229,7 +233,7 @@ ElevenLabs、火山引擎、小米 MiMo、Fish Audio（实验）。每家的地�
 - 「音色 id」填文档里的 **voice_type**（如 `zh_female_qingxin`），不是音色显示名；
 - `/api/v1/tts` 不支持豆包语音合成 2.0 的音色（例如 `zh_female_vv_uranus_bigtts`）。如果控制台标的是 2.0，请换标准音色；遇到 403 先查这一条。
 
-**音色清单**：有清单端点的服务商（自定义 OpenAI 兼容、Breeze Blue、Azure、ElevenLabs）可以点
+**音色清单**：有清单端点的服务商（自定义 OpenAI 兼容、Breeze Blue、Azure、ElevenLabs、Kitta Audio）可以点
 「从服务商拉取清单」，清单按当前语种过滤（台词语种是「自动识别」时按当前台词推断），还可以加关键词
 优先显示匹配项。每页 7 条，可上一页 / 下一页，也可以把整块清单收起；点某一行的「使用」会立刻写入配置并选中，
 不用再保存。选中的音色在别的页时，页脚会提示它在第几页并可一键跳过去。

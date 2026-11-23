@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.11
+
+- **云端语音新增 Kitta Audio（实验）**：走 OpenAI 兼容端点
+  `https://kittaaudio.com/v1/audio/speech`（`kittaai.com` 同样可用），默认模型
+  `fishaudio-s21pro-flash`，内置文档里的公开测试音色；支持从 `/audio/voices`
+  拉取音色清单，语速按文档夹到 0.5–2，`response_format` 固定请求 `wav`。
+- 接口文档已核对，但还没用真实密钥实测，面板标为实验；401/402/429 沿用现有的
+  鉴权 / 额度 / 限流错误分类。
+- 验证：410 个单测、`tsc --noEmit`、`npm run build`。
+
 ## 0.9.10
 
 - **本机播放真正跟随系统默认设备**：留空「输出设备」时，每秒检查一次默认端点；

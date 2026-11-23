@@ -119,6 +119,45 @@ describe('Breeze Blue', () => {
   });
 });
 
+describe('Kitta Audio', () => {
+  const voice = '00a1b221-6137-4b73-ad62-b0cbce134167';
+
+  it('走 OpenAI 兼容端点：Bearer、response_format=wav，语速夹到 0.5–2', async () => {
+    const spy = stubFetch(async () => new Response(new Uint8Array(okWav()), { status: 200 }));
+    const audio = await synthCloud('你好', opts({
+      provider: 'kitta',
+      baseUrl: 'https://kittaaudio.com/v1',
+      model: '',
+      voice,
+      speed: 0.2,
+    }));
+    expect(audio.wav.subarray(0, 4).toString()).toBe('RIFF');
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://kittaaudio.com/v1/audio/speech');
+    expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${KEY}`);
+    expect(JSON.parse(String(init.body))).toEqual({
+      model: 'fishaudio-s21pro-flash',
+      voice,
+      input: '你好',
+      response_format: 'wav',
+      speed: 0.5,
+    });
+  });
+
+  it('用户填了模型就原样送，语速超上限压到 2', async () => {
+    const spy = stubFetch(async () => new Response(new Uint8Array(okWav())));
+    await synthCloud('hi', opts({
+      provider: 'kitta',
+      baseUrl: 'https://kittaai.com/v1',
+      model: 'fishaudio-s21pro',
+      voice,
+      speed: 3,
+    }));
+    const [, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'fishaudio-s21pro', speed: 2 });
+  });
+});
+
 describe('密钥脱敏', () => {
   it('把文本里出现的密钥全部抹掉', () => {
     expect(redact(`bad key ${KEY}; again ${KEY}`, KEY)).toBe('bad key [redacted]; again [redacted]');

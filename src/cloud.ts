@@ -283,6 +283,18 @@ function buildRequest(spec: CloudProviderSpec, text: string, opts: CloudOptions)
         body: msgpackMap({ text, reference_id: opts.voice.trim(), format: 'wav' }),
       };
     }
+    case 'kitta': {
+      // Kitta Audio 的 OpenAI 兼容端点：POST {base}/audio/speech，WAV 由 response_format 指定。
+      headers['content-type'] = 'application/json';
+      headers.authorization = `Bearer ${opts.key}`;
+      body.model = opts.model.trim() || 'fishaudio-s21pro-flash';
+      body.voice = opts.voice.trim();
+      body.input = text;
+      body.response_format = 'wav';
+      // 文档语速范围是 0.5–2，超出直接 400；这里先夹住。
+      if (Number.isFinite(opts.speed) && opts.speed > 0) body.speed = Math.min(2, Math.max(0.5, opts.speed));
+      return { url: speechUrl(opts.baseUrl), headers, body: JSON.stringify(body) };
+    }
     default: {
       headers['content-type'] = 'application/json';
       headers.authorization = `Bearer ${opts.key}`;

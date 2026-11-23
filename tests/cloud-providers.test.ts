@@ -37,9 +37,17 @@ describe('厂商目录', () => {
     expect(minimax.voiceList).toBe(false);
   });
 
-  it('火山引擎要 appId + 集群；Fish 是实验；拿不到 WAV 的都标未支持并带原因', () => {
+  it('火山引擎要 appId + 集群；Fish / Kitta 是实验；拿不到 WAV 的都标未支持并带原因', () => {
     expect(cloudProvider('volcengine').extras).toEqual(['appId', 'cluster']);
     expect(cloudProvider('fish').status).toBe('beta');
+    const kitta = cloudProvider('kitta');
+    expect(kitta).toMatchObject({
+      baseUrl: 'https://kittaaudio.com/v1',
+      model: 'fishaudio-s21pro-flash',
+      voiceList: true,
+      status: 'beta',
+      note: 'kitta',
+    });
     for (const id of ['gemini', 'dashscope', 'gsv', 'gsvi', 'genie', 'edge']) {
       const p = cloudProvider(id);
       expect(p.status).toBe('unsupported');
@@ -49,7 +57,7 @@ describe('厂商目录', () => {
 
   it('未开放的厂商不出现在下拉里，但目录与实现保留', () => {
     expect(listedCloudProviders().map((p) => p.id)).toEqual([
-      'custom', 'openai', 'breeze', 'azure', 'minimax', 'elevenlabs', 'volcengine', 'mimo', 'fish',
+      'custom', 'openai', 'breeze', 'azure', 'minimax', 'elevenlabs', 'volcengine', 'mimo', 'fish', 'kitta',
     ]);
     for (const id of ['gemini', 'dashscope', 'gsv', 'gsvi', 'genie', 'edge']) {
       expect(CLOUD_PROVIDERS.map((p) => p.id)).toContain(id);
@@ -73,6 +81,8 @@ describe('回退与推断', () => {
     expect(detectCloudProvider('https://openspeech.bytedance.com/api/v1/tts')).toBe('volcengine');
     expect(detectCloudProvider('https://api.xiaomimimo.com/v1')).toBe('mimo');
     expect(detectCloudProvider('https://api.fish.audio/v1')).toBe('fish');
+    expect(detectCloudProvider('https://kittaaudio.com/v1')).toBe('kitta');
+    expect(detectCloudProvider('https://www.kittaai.com/v1')).toBe('kitta');
     expect(detectCloudProvider('https://generativelanguage.googleapis.com/v1beta')).toBe('gemini');
     expect(detectCloudProvider('https://dashscope.aliyuncs.com/api/v1')).toBe('dashscope');
     expect(detectCloudProvider('https://tts.example.com/v1')).toBe(CUSTOM_PROVIDER_ID);
