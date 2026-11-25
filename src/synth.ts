@@ -3,8 +3,8 @@
  * 这里只读头里的采样率，按到达顺序吐出偶数字节对齐的 PCM 块。
  */
 
-/** api_v2 支持的合成语言；`auto` 逐段识别，短句容易把中文认成日语。 */
-export type SpeechLang = 'auto' | 'zh' | 'en' | 'ja' | 'ko';
+/** api_v2 支持的合成语言；`auto` 由插件按行判断，`yue` 是粤语（直接照读，不翻译）。 */
+export type SpeechLang = 'auto' | 'zh' | 'yue' | 'en' | 'ja' | 'ko';
 
 /** 参考音频台本的语言（不支持 `auto`，由调用方先判断好）。 */
 export type PromptLang = Exclude<SpeechLang, 'auto'>;

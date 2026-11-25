@@ -77,7 +77,7 @@ const presetFiles = (id: VoicePreset, textLang: SpeechLang): { audio: string; te
  * 日语/英语用户白占;现在按需加载,切到中文后的第一句会多等一会儿。
  */
 const WARMUP_TEXT: Record<SpeechLang, string> = {
-  zh: '你好。', en: 'Hello.', ja: 'こんにちは。', ko: '안녕하세요.', auto: '你好，Hello。',
+  zh: '你好。', yue: '你好，唔該晒。', en: 'Hello.', ja: 'こんにちは。', ko: '안녕하세요.', auto: '你好，Hello。',
 };
 
 /** `sovits_speak` 等第一块音频的上限;超时照常返回，声音晚到。 */

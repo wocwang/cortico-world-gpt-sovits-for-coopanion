@@ -47,11 +47,21 @@ export function ttsPlain(text: string): string {
   return text.replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
 }
 
+/** 粤语口语独有的字/词：用来把粤语行从普通话里分出来，宁可漏判也不误判普通话。 */
+const CANTONESE = /[唔咗嘅冇佢哋喺嚟睇嗰乜嘢畀搵瞓攰攞噉咁咩㗎嘥冧氹掟揸喐]|唔该|唔該|点解|點解|边度|邊度|点样|點樣|钟意|鍾意|而家|屋企|咁样|咁樣|嗰阵|嗰陣|呢个|呢個|边个|邊個|呢度|几钱|幾錢|几多|幾多/;
+
+/** 是不是粤语口语写法（汉字与普通话共用，只看独有字词，不交给上游猜）。 */
+export function isCantonese(text: string): boolean {
+  return CANTONESE.test(text);
+}
+
 /**
  * 参考音频台本的语言。api_v2 的 `auto` 用 fast_langdetect 逐段识别，短句（如「主人，」）
  * 常被认成日语，参考端的音素就跟着变成日语；这里按字符集直接判断，避免这个误判。
  */
-const SPEECH_LANG_NAME: Record<Exclude<SpeechLang, 'auto' | 'zh'>, string> = { en: 'English', ja: 'Japanese', ko: 'Korean' };
+const SPEECH_LANG_NAME: Record<Exclude<SpeechLang, 'auto' | 'zh'>, string> = {
+  en: 'English', ja: 'Japanese', ko: 'Korean', yue: 'Cantonese',
+};
 
 /**
  * `sovits_speak` 的回执开头。模型看不到自己念了什么的时候，气泡和语音对不上它也不会察觉；
@@ -65,9 +75,10 @@ export function spokenReceipt(spoken: string, opts: { ahead: number; lang: Speec
   return `${head} Said${how}: "${spoken}"`;
 }
 
-export function promptLanguageOf(text: string): 'zh' | 'en' | 'ja' | 'ko' {
+export function promptLanguageOf(text: string): Exclude<SpeechLang, 'auto'> {
   if (/[\u3041-\u3096\u3099\u309a\u30a1-\u30fa\u30fc]/.test(text)) return 'ja';
   if (/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/.test(text)) return 'ko';
+  if (isCantonese(text)) return 'yue';
   if (/[\u3400-\u4dbf\u4e00-\u9fff]/.test(text)) return 'zh';
   return /[a-z]/i.test(text) ? 'en' : 'zh';
 }
@@ -85,6 +96,7 @@ export function synthLangFor(text: string, setting: SpeechLang): SpeechLang {
   if (setting !== 'auto') return setting;
   if (/[\u3041-\u3096\u3099\u309a\u30a1-\u30fa\u30fc]/.test(text)) return 'ja';
   if (/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/.test(text)) return 'ko';
+  if (isCantonese(text)) return 'yue';
   if (/[\u3400-\u4dbf\u4e00-\u9fff]/.test(text)) return 'zh';
   return /[a-z]/i.test(text) ? 'en' : 'auto';
 }

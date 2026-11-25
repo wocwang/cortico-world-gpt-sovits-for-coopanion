@@ -562,7 +562,9 @@ const voicesPanel: WebUiPanel = {
     const t = panelText(ctx.language);
     /** 语种代码 → 展示名；认不出就原样显示。 */
     const langLabel = (code: string): string => {
-      const key = code.trim().toLowerCase().slice(0, 2);
+      const lower = code.trim().toLowerCase();
+      if (lower.startsWith('yue')) return t.langYue;
+      const key = lower.slice(0, 2);
       if (key === 'zh') return t.langZh;
       if (key === 'en') return t.langEn;
       if (key === 'ja') return t.langJa;

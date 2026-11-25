@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AUDIO_BACKEND_OPTIONS, configGroups, GPT_SOVITS_DEFAULTS, MODEL_VERSION_OPTIONS, PLAYBACK_LEAD_MAX, TIER_OPTIONS, VOICE_OPTIONS } from '../src/config.ts';
+import { AUDIO_BACKEND_OPTIONS, configGroups, GPT_SOVITS_DEFAULTS, MODEL_VERSION_OPTIONS, PLAYBACK_LEAD_MAX, TEXT_LANGUAGE_OPTIONS, TIER_OPTIONS, VOICE_OPTIONS } from '../src/config.ts';
 import { panelOptionsFor } from '../src/world.ts';
 
 describe('配置页的 x-options（下拉选项）', () => {
@@ -14,6 +14,12 @@ describe('配置页的 x-options（下拉选项）', () => {
     expect(options?.map((option) => option.value)).toEqual(
       process.platform === 'win32' ? ['auto', 'wasapi', 'directsound', 'system'] : ['auto'],
     );
+  });
+
+  it('语音语言有粤语（直接照读）选项', () => {
+    const options = panelOptionsFor(TEXT_LANGUAGE_OPTIONS, 'zh');
+    expect(options?.map((option) => option.value)).toEqual(['auto', 'zh', 'yue', 'en', 'ja']);
+    expect(options?.some((option) => option.label.includes('粤语'))).toBe(true);
   });
 
   it('推理档与音色也都有选项，不再退化成输入框', () => {

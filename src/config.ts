@@ -267,8 +267,8 @@ const TEXT = {
     speed: { title: '语速', description: '1 为原速。' },
     textLang: {
       title: '语音语言',
-      description: '与界面语言无关。中文：直接照读聊天框里的这句文字；English / 日本語：先把聊天文字翻译成该语言再念（气泡文字不变）；跟随原文：不翻译，按每行的字符判断语言（汉字→中文、假名→日语、韩文→韩语、纯英文→英文），不再交给运行时逐段猜。',
-      auto: '跟随原文（不翻译）', zh: '中文（直接照读）', en: 'English（先翻译）', ja: '日本語（先翻译）',
+      description: '与界面语言无关。中文 / 粤语：直接照读聊天框里的这句文字（粤语需要模型在台词里写粤语口语）；English / 日本語：先把聊天文字翻译成该语言再念（气泡文字不变）；跟随原文：不翻译，按每行的字符判断语言（粤语特征字→粤语、其余汉字→中文、假名→日语、韩文→韩语、纯英文→英文），不再交给运行时逐段猜。',
+      auto: '跟随原文（不翻译）', zh: '中文（直接照读）', yue: '粤语（直接照读）', en: 'English（先翻译）', ja: '日本語（先翻译）',
     },
     translateEndpoint: { title: '翻译模型地址', description: 'OpenAI 兼容接口的基址（如 https://api.deepseek.com/v1）。语音语言选「先翻译」时，聊天文字会先译成目标语言再念；留空则按原文念。' },
     translateApiKeySecret: { title: '翻译模型密钥变量名', description: '部署 .env 里的变量名（如 DEEPSEEK_API_KEY），不是密钥本身；留空表示接口不需要鉴权。' },
@@ -330,8 +330,8 @@ const TEXT = {
     speed: { title: 'Speech rate', description: '1 is the original rate.' },
     textLang: {
       title: 'Speech language',
-      description: 'Independent of the UI language. Chinese: reads the chat line as-is; English / Japanese: translates the chat line into that language first (the bubble text stays unchanged); Follow the text: no translation, the language is picked from each line (Han → Chinese, kana → Japanese, Hangul → Korean, Latin-only → English) instead of letting the runtime guess fragment by fragment.',
-      auto: 'Follow the text (no translation)', zh: 'Chinese (read as-is)', en: 'English (translate first)', ja: '日本語 (translate first)',
+      description: 'Independent of the UI language. Chinese / Cantonese: reads the chat line as-is (the model must write colloquial Cantonese for the Cantonese option); English / Japanese: translates the chat line into that language first (the bubble text stays unchanged); Follow the text: no translation, the language is picked from each line (Cantonese markers → Cantonese, other Han → Chinese, kana → Japanese, Hangul → Korean, Latin-only → English) instead of letting the runtime guess fragment by fragment.',
+      auto: 'Follow the text (no translation)', zh: 'Chinese (read as-is)', yue: 'Cantonese (read as-is)', en: 'English (translate first)', ja: '日本語 (translate first)',
     },
     translateEndpoint: { title: 'Translation API URL', description: 'Base URL of an OpenAI-compatible API (e.g. https://api.deepseek.com/v1). Used to translate the chat line before speaking when the speech language asks for translation; empty reads the text as-is.' },
     translateApiKeySecret: { title: 'Translation key variable', description: 'Name of the variable in the deployment .env (e.g. DEEPSEEK_API_KEY), not the key itself; empty sends no auth header.' },
@@ -396,7 +396,13 @@ export const promptLanguageOptions = (): Array<{ value: string; label: string }>
 
 export function textLanguageOptions(language: Language): Array<{ value: string; label: string }> {
   const t = pick(language, TEXT).textLang;
-  return [{ value: 'auto', label: t.auto }, { value: 'zh', label: t.zh }, { value: 'en', label: t.en }, { value: 'ja', label: t.ja }];
+  return [
+    { value: 'auto', label: t.auto },
+    { value: 'zh', label: t.zh },
+    { value: 'yue', label: t.yue },
+    { value: 'en', label: t.en },
+    { value: 'ja', label: t.ja },
+  ];
 }
 
 export const systemDeviceLabel = (language: Language): string => pick(language, TEXT).outputDevice.system;

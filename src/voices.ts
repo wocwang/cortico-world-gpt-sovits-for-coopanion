@@ -33,10 +33,11 @@ export const presetFileLabel = (id: VoicePreset): string => PRESET_FILE_LABEL[id
 
 /** 每种预设在各语言下的参考文件基准名；没有对应语言的参考时回退到该预设的默认语言。 */
 const PRESET_LANG_FILES: Record<VoicePreset, Partial<Record<Exclude<SpeechLang, 'auto'>, string>>> = {
-  xll: { zh: 'xll.zh', en: 'xll.en' },
-  dfy: { ja: 'dfy', zh: 'dfy.zh', en: 'dfy.en' },
-  female: { zh: 'female' },
-  male: { zh: 'male' },
+  xll: { zh: 'xll.zh', yue: 'xll.zh', en: 'xll.en' },
+  // 没有粤语参考：用中文参考，音素语言仍由 text_lang=yue 决定。
+  dfy: { ja: 'dfy', zh: 'dfy.zh', yue: 'dfy.zh', en: 'dfy.en' },
+  female: { zh: 'female', yue: 'female' },
+  male: { zh: 'male', yue: 'male' },
 };
 
 const PRESET_DEFAULT_LANG: Record<VoicePreset, Exclude<SpeechLang, 'auto'>> = {

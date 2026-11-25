@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { INLINE_TAG_MAX, promptLanguageOf, spokenReceipt, speechText, synthLangFor, ttsPlain, ttsSafe } from '../src/speech-text.ts';
+import { INLINE_TAG_MAX, isCantonese, promptLanguageOf, spokenReceipt, speechText, synthLangFor, ttsPlain, ttsSafe } from '../src/speech-text.ts';
 import { isConnectionDrop, parseWavHeader, pcmChunks, STREAMING_MODE, ttsBody } from '../src/synth.ts';
 
 describe('切句方法', () => {
@@ -102,6 +102,20 @@ describe('promptLanguageOf', () => {
     expect(promptLanguageOf('Hello there.')).toBe('en');
     expect(promptLanguageOf('你好 world')).toBe('zh');
   });
+
+  it('粤语口语按粤语，普通话/繁体书面语不误判', () => {
+    expect(promptLanguageOf('唔該晒，今日天氣好好。')).toBe('yue');
+    expect(promptLanguageOf('我哋而家去食飯啦。')).toBe('yue');
+    expect(promptLanguageOf('你食咗飯未呀？')).toBe('yue');
+    expect(promptLanguageOf('呢個幾錢？')).toBe('yue');
+    expect(promptLanguageOf('今天天气很好。')).toBe('zh');
+    expect(promptLanguageOf('關係系統的設定')).toBe('zh');
+  });
+
+  it('isCantonese 只看粤语独有字词，普通汉字不算', () => {
+    expect(isCantonese('冇問題')).toBe(true);
+    expect(isCantonese('没关系')).toBe(false);
+  });
 });
 
 // auto 档不再交给上游逐段猜：「主人，」「五十块」会被 fast_langdetect 判成日语。
@@ -125,6 +139,15 @@ describe('synthLangFor', () => {
     expect(synthLangFor('Hello there.', 'auto')).toBe('en');
   });
 
+  it('粤语口语行按粤语，显式档位不被 auto 改写', () => {
+    expect(synthLangFor('唔該晒，今日天氣好好。', 'auto')).toBe('yue');
+    expect(synthLangFor('我哋而家去食飯啦。', 'auto')).toBe('yue');
+    expect(synthLangFor('你食咗飯未呀？', 'auto')).toBe('yue');
+    expect(synthLangFor('今天天气很好。', 'auto')).toBe('zh');
+    expect(synthLangFor('唔該晒。', 'zh')).toBe('zh');
+    expect(synthLangFor('今天天气很好。', 'yue')).toBe('yue');
+  });
+
   it('判断不了（纯数字/符号）才交回 auto，显式档位一律不动', () => {
     expect(synthLangFor('12345', 'auto')).toBe('auto');
     expect(synthLangFor('……', 'auto')).toBe('auto');
@@ -141,6 +164,13 @@ describe('languageWords', () => {
     expect(w.name).toBe('中文');
     expect(w.rule).toContain('逐字相同');
     expect(w.rule).toContain('不要先用日语或英语');
+  });
+
+  it('粤语档要求逐字照读，并写成粤语口语', () => {
+    const w = languageWords('zh', 'yue');
+    expect(w.name).toBe('粤语');
+    expect(w.rule).toContain('逐字相同');
+    expect(w.rule).toContain('粤语口语');
   });
 
   it('tells the bot to translate the chat line in Japanese and English modes', () => {
@@ -164,6 +194,10 @@ describe('presetRefId', () => {
     expect(presetRefId('female', 'zh')).toBe('female');
     expect(presetRefId('female', 'ja')).toBe('female');
     expect(presetRefId('male', 'en')).toBe('male');
+    // 没有粤语参考：退回中文参考，音素语言仍由 text_lang=yue 决定。
+    expect(presetRefId('dfy', 'yue')).toBe('dfy.zh');
+    expect(presetRefId('xll', 'yue')).toBe('xll.zh');
+    expect(presetRefId('female', 'yue')).toBe('female');
   });
 
   it('ships the official xll preset in Chinese and English only', () => {

@@ -209,6 +209,7 @@ const PANEL = {
     cloudLanguageNow: (name: string, auto: boolean): string => `当前语种：${name}${auto ? '（自动识别，按当前台本推断）' : ''}`,
     cloudLanguageHint: '优先根据语音语言选择音色：先确认朗读语言、再选对应语种的音色，语种不匹配容易读得奇怪；拉取清单也按这个语种过滤，语种本身在「台词与翻译」卡里改。',
     langZh: '中文',
+    langYue: '粤语',
     langEn: '英文',
     langJa: '日文',
     langKo: '韩文',
@@ -562,6 +563,7 @@ const PANEL = {
     cloudLanguageNow: (name: string, auto: boolean): string => `Current language: ${name}${auto ? ' (auto-detected from the current script)' : ''}`,
     cloudLanguageHint: 'Prefer voices that match the speech language: confirm the language first, then pick a voice for it — a mismatched voice can sound odd. Pulling the list also filters by this language; the language itself is changed in the "Lines & translation" card.',
     langZh: 'Chinese',
+    langYue: 'Cantonese',
     langEn: 'English',
     langJa: 'Japanese',
     langKo: 'Korean',
@@ -773,6 +775,7 @@ const LANGUAGE = {
   zh: {
     auto: { name: '自动识别', rule: '`sovits_speak` 的 text 与这次 `pet_say` 的 script 逐字相同。' },
     zh: { name: '中文', rule: '`sovits_speak` 的 text 与这次 `pet_say` 的 script 逐字相同；直接用中文想这句台词，不要先用日语或英语组织再翻译。' },
+    yue: { name: '粤语', rule: '`sovits_speak` 的 text 与这次 `pet_say` 的 script 逐字相同；直接用粤语口语写这句台词，不要先用普通话写好再逐字改字。' },
     en: { name: '英语', rule: '`pet_say` 的 script 保持聊天语言（通常是中文）；`sovits_speak` 的 text 是这句台词自然、口语化的英语翻译（标记照抄），不要夹中文，也不要把翻译过程念出来。' },
     ja: { name: '日语', rule: '`pet_say` 的 script 保持聊天语言（通常是中文）；`sovits_speak` 的 text 是这句台词自然、口语化的日语翻译（标记照抄），不要夹中文，也不要把翻译过程念出来。' },
     ko: { name: '韩语', rule: '`pet_say` 的 script 保持聊天语言（通常是中文）；`sovits_speak` 的 text 是这句台词自然、口语化的韩语翻译（标记照抄），不要夹中文，也不要把翻译过程念出来。' },
@@ -780,6 +783,7 @@ const LANGUAGE = {
   en: {
     auto: { name: 'auto', rule: 'the `sovits_speak` text is identical to this `pet_say` script.' },
     zh: { name: 'Chinese', rule: 'the `sovits_speak` text is identical to this `pet_say` script; write the line directly in Chinese instead of composing it in Japanese or English first.' },
+    yue: { name: 'Cantonese', rule: 'the `sovits_speak` text is identical to this `pet_say` script; write the line in colloquial Cantonese instead of standard Mandarin.' },
     en: { name: 'English', rule: '`pet_say` stays in the chat language (usually Chinese); the `sovits_speak` text is a natural, spoken English translation of that line (copy the markup), with no Chinese left in it and no translation notes read aloud.' },
     ja: { name: 'Japanese', rule: '`pet_say` stays in the chat language (usually Chinese); the `sovits_speak` text is a natural, spoken Japanese translation of that line (copy the markup), with no Chinese left in it and no translation notes read aloud.' },
     ko: { name: 'Korean', rule: '`pet_say` stays in the chat language (usually Chinese); the `sovits_speak` text is a natural, spoken Korean translation of that line (copy the markup), with no Chinese left in it and no translation notes read aloud.' },
