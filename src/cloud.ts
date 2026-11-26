@@ -435,10 +435,19 @@ export async function synthCloud(text: string, opts: CloudOptions, signal?: Abor
         ? (res.status === 401
           ? '；火山引擎：密钥要填控制台的 Access Token（不是 AccessKey / Secret Key / API Key），请求头必须是 Bearer; <token>'
           : '；火山引擎：Token 有效但无权限。系统音色 cluster 用 volcano_tts，自己复刻的音色用 volcano_icl；再检查 voice_type 是否属于该集群、语音合成服务是否开通；豆包语音合成 2.0 的 *_bigtts 音色不支持 V1 接口')
-        : '';
+        : spec.id === 'breeze'
+          ? (res.status === 401
+            ? '；Breeze Blue：401 表示密钥缺失、格式不对、被删除或被禁用（浏览器登录会话也会 401）。到 https://breezeblue.ai/app/developer/api-keys 重新启用或新建，确认是 brz_ 开头的开发者 API Key；可用 GET https://api.breeze.blue/v1/api-keys/current 自查状态，禁用/过期就换一个 key'
+            : '；Breeze Blue：密钥有效但无该资源的权限，检查账户套餐、音色归属和 API Key 的访问范围')
+          : '';
       throw new CloudError(`云端拒绝鉴权（HTTP ${res.status}）：${detail || '密钥无效'}${hint}`, 'auth');
     }
-    if (res.status === 402) throw new CloudError(`云端额度不足（HTTP 402）：${detail}`, 'quota');
+    if (res.status === 402) {
+      const hint = spec.id === 'breeze'
+        ? '；Breeze Blue：这是这个 API Key 的额度上限用完（不是账户余额），到 API Keys 页面提高/重置额度，或换一个 key'
+        : '';
+      throw new CloudError(`云端额度不足（HTTP 402）：${detail}${hint}`, 'quota');
+    }
     if (res.status === 429) throw new CloudError(`云端限流（HTTP 429）：${detail || '稍后再试'}`, 'rate');
     // 火山引擎把 voice_type / cluster 不匹配报成 500 + Init Engine Instance failed，
     // 不是服务端故障；直接把正确的集群写出来。

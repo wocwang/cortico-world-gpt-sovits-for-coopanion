@@ -117,6 +117,22 @@ describe('Breeze Blue', () => {
     expect((err as CloudError).message).toContain('proxy tunnel closed');
     expect((err as CloudError).message).toContain('已自动重试一次');
   });
+
+  it('401 带 Breeze 专属排查提示（brz_ key、current 自查）', async () => {
+    stubFetch(async () => new Response(
+      JSON.stringify({ code: 'AUTH_REQUIRED', detail: 'Authentication required' }),
+      { status: 401, headers: { 'content-type': 'application/json' } },
+    ));
+    const err = await synthCloud('hi', opts({
+      provider: 'breeze',
+      baseUrl: 'https://api.breeze.blue/v1',
+      voice: 'voc_1',
+    })).catch((e: unknown) => e);
+    expect((err as CloudError).kind).toBe('auth');
+    expect((err as CloudError).message).toContain('Breeze Blue');
+    expect((err as CloudError).message).toContain('brz_');
+    expect((err as CloudError).message).toContain('api-keys/current');
+  });
 });
 
 describe('Kitta Audio', () => {
